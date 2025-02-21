@@ -1,3 +1,6 @@
 [workspace]
 members = ["blackbird", "blackbird-subsonic"]
 resolver = "2"
+
+[workspace.dependencies]
+serde = { version = "1.0.218", features = ["derive"] }

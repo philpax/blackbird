@@ -2,17 +2,34 @@
 //! A barebones client for the Subsonic API.
 
 use rand::seq::IndexedRandom;
-
+use serde::{Deserialize, Serialize};
 #[derive(Debug)]
 /// An error that can occur when interacting with the client.
 pub enum ClientError {
     /// An error that occurred when making a request.
     ReqwestError(reqwest::Error),
+    /// An error that occurred when deserializing a response.
+    DeserializationError(serde_json::Error),
+    /// The server returned an error.
+    SubsonicError {
+        /// The error code.
+        code: i32,
+        /// The error message.
+        message: Option<String>,
+    },
 }
 impl std::fmt::Display for ClientError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ClientError::ReqwestError(e) => write!(f, "Reqwest error: {e}"),
+            ClientError::DeserializationError(e) => write!(f, "Deserialization error: {e}"),
+            ClientError::SubsonicError { code, message } => {
+                write!(f, "Subsonic error: {code}")?;
+                if let Some(message) = message {
+                    write!(f, ": {message}")?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -20,6 +37,11 @@ impl std::error::Error for ClientError {}
 impl From<reqwest::Error> for ClientError {
     fn from(e: reqwest::Error) -> Self {
         ClientError::ReqwestError(e)
+    }
+}
+impl From<serde_json::Error> for ClientError {
+    fn from(e: serde_json::Error) -> Self {
+        ClientError::DeserializationError(e)
     }
 }
 /// A result type for the client.
@@ -32,6 +54,37 @@ pub struct Client {
     password: String,
     client_id: String,
     client: reqwest::Client,
+}
+#[derive(Debug, Clone, Copy)]
+/// The type of album list to get.
+pub enum AlbumListType {
+    /// A random list of albums.
+    Random,
+    /// The newest albums.
+    Newest,
+    /// The most frequently played albums.
+    Frequent,
+    /// The most recently played albums.
+    Recent,
+    /// The starred albums.
+    Starred,
+    /// The albums sorted alphabetically by name.
+    AlphabeticalByName,
+    /// The albums sorted alphabetically by artist.
+    AlphabeticalByArtist,
+}
+impl AlbumListType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            AlbumListType::Random => "random",
+            AlbumListType::Newest => "newest",
+            AlbumListType::Frequent => "frequent",
+            AlbumListType::Recent => "recent",
+            AlbumListType::Starred => "starred",
+            AlbumListType::AlphabeticalByName => "alphabeticalByName",
+            AlbumListType::AlphabeticalByArtist => "alphabeticalByArtist",
+        }
+    }
 }
 impl Client {
     /// The API version of the client.
@@ -54,12 +107,42 @@ impl Client {
     }
 
     /// Ping the server and verify the connection.
-    pub async fn ping(&self) -> ClientResult<String> {
-        self.request("ping", &[]).await
+    pub async fn ping(&self) -> ClientResult<()> {
+        self.request("ping", &[]).await?;
+        Ok(())
+    }
+
+    /// Get a list of albums, organised by ID3 tags.
+    ///
+    /// Size has a maximum of 500.
+    pub async fn get_album_list_2(
+        &self,
+        ty: AlbumListType,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> ClientResult<Vec<AlbumID3>> {
+        let mut parameters = vec![("type", ty.as_str().to_string())];
+        if let Some(size) = size {
+            parameters.push(("size", size.to_string()));
+        }
+        if let Some(offset) = offset {
+            parameters.push(("offset", offset.to_string()));
+        }
+        Ok(self
+            .request("getAlbumList2", &parameters)
+            .await?
+            .subsonic_response
+            .album_list_2
+            .unwrap()
+            .album)
     }
 }
 impl Client {
-    async fn request(&self, endpoint: &str, parameters: &[(&str, &str)]) -> ClientResult<String> {
+    async fn request(
+        &self,
+        endpoint: &str,
+        parameters: &[(&str, String)],
+    ) -> ClientResult<Response> {
         let (salt, token) = self.generate_salt_and_token();
         let request = self
             .client
@@ -68,12 +151,21 @@ impl Client {
                 ("u", self.username.clone()),
                 ("v", Self::API_VERSION.to_string()),
                 ("c", self.client_id.clone()),
+                ("f", "json".to_string()),
                 ("t", token),
                 ("s", salt),
             ])
             .query(parameters);
 
-        Ok(request.send().await?.text().await?)
+        let response: Response = serde_json::from_str(&request.send().await?.text().await?)?;
+        if response.subsonic_response.status == ResponseStatus::Failed {
+            let error = response.subsonic_response.error.unwrap();
+            return Err(ClientError::SubsonicError {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        Ok(response)
     }
 
     fn generate_salt_and_token(&self) -> (String, String) {
@@ -89,4 +181,80 @@ impl Client {
 
         (salt, token)
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+struct Response {
+    subsonic_response: SubsonicResponse,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubsonicResponse {
+    status: ResponseStatus,
+    version: String,
+    error: Option<ResponseError>,
+    album_list_2: Option<AlbumList2>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+/// The status of a response.
+enum ResponseStatus {
+    /// The request was successful.
+    Ok,
+    /// The request failed.
+    Failed,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// An error that occurred when making a request.
+struct ResponseError {
+    /// The error code.
+    code: i32,
+    /// The error message.
+    message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AlbumList2 {
+    album: Vec<AlbumID3>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+/// Represents an album with ID3 metadata
+#[serde(rename_all = "camelCase")]
+pub struct AlbumID3 {
+    /// The album ID
+    pub id: String,
+    /// The album name
+    pub name: String,
+    /// The album artist name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    /// The album artist ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
+    /// The album cover art ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cover_art: Option<String>,
+    /// The number of songs in the album
+    pub song_count: u32,
+    /// The total duration of the album in seconds
+    pub duration: u32,
+    /// The number of times the album has been played
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub play_count: Option<u64>,
+    /// The creation date of the album
+    pub created: String,
+    /// The date the album was starred by the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starred: Option<String>,
+    /// The release year of the album
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub year: Option<i32>,
+    /// The genre of the album
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub genre: Option<String>,
 }
