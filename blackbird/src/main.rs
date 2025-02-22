@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 
@@ -139,34 +139,42 @@ impl ClientThread {
     fn new(client: bs::Client) -> Self {
         let (request_tx, request_rx) = std::sync::mpsc::channel();
         let (response_tx, response_rx) = std::sync::mpsc::channel();
+        let client = Arc::new(client);
         let thread = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_current_thread()
+            let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()
                 .unwrap();
-            loop {
-                fn handle_result<T, E, F>(result: Result<T, E>, f: F) -> ClientThreadResponse
-                where
-                    E: std::fmt::Display,
-                    F: FnOnce(T) -> ClientThreadResponse,
-                {
-                    match result {
-                        Ok(value) => f(value),
-                        Err(e) => ClientThreadResponse::Error(e.to_string()),
-                    }
-                }
 
-                let request = request_rx.recv().unwrap();
-                match request {
-                    ClientThreadRequest::FetchAlbums => {
-                        let albums = runtime.block_on(fetch_all_albums(&client));
-                        response_tx
-                            .send(handle_result(albums, ClientThreadResponse::Albums))
-                            .unwrap();
-                    }
+            fn handle_result<T, E, F>(result: Result<T, E>, f: F) -> ClientThreadResponse
+            where
+                E: std::fmt::Display,
+                F: FnOnce(T) -> ClientThreadResponse,
+            {
+                match result {
+                    Ok(value) => f(value),
+                    Err(e) => ClientThreadResponse::Error(e.to_string()),
                 }
             }
+
+            loop {
+                let request = request_rx.recv().unwrap();
+                let response_tx = response_tx.clone();
+                let client = client.clone();
+
+                runtime.spawn(async move {
+                    match request {
+                        ClientThreadRequest::FetchAlbums => {
+                            let albums = fetch_all_albums(&client).await;
+                            response_tx
+                                .send(handle_result(albums, ClientThreadResponse::Albums))
+                                .unwrap();
+                        }
+                    }
+                });
+            }
         });
+
         ClientThread {
             _thread: thread,
             request_tx,
