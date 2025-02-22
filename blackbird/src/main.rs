@@ -282,6 +282,7 @@ enum ClientThreadRequest {
     FetchAlbums,
     FetchAlbum(AlbumId),
 }
+#[allow(clippy::large_enum_variant /* this is not that important */)]
 enum ClientThreadResponse {
     Ping,
     Albums(Vec<bs::AlbumID3>),
