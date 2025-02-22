@@ -30,6 +30,7 @@ style_fields![
     (background_hsv, background, [0.65, 0.40, 0.01]),
     (text_hsv, text, [0.0, 0.0, 1.0]),
     (album_hsv, album, [0.58, 0.90, 0.60]),
+    (album_length_hsv, album_length, [0.0, 0.0, 0.75]),
     (album_year_hsv, album_year, [0.0, 0.0, 0.40]),
     (track_number_hsv, track_number, [0.60, 0.5, 0.90]),
     (track_length_hsv, track_length, [0.60, 0.90, 0.70]),

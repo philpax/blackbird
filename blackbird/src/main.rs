@@ -454,28 +454,40 @@ impl Album {
                 egui::RichText::new(&self.artist).color(style::string_to_colour(&self.artist)),
             );
         }
-        // If the second row is visible, draw the album title (including release year if available).
+        // If the second row is visible, draw the album title (including release year if available), as well as
+        // the total duration.
         if row_range.contains(&1) {
-            let mut layout_job = egui::text::LayoutJob::default();
-            layout_job.append(
-                self.name.as_str(),
-                0.0,
-                egui::TextFormat {
-                    color: style.album(),
-                    ..Default::default()
-                },
-            );
-            if let Some(year) = self.year {
-                layout_job.append(
-                    format!(" ({})", year).as_str(),
-                    0.0,
-                    egui::TextFormat {
-                        color: style.album_year(),
-                        ..Default::default()
-                    },
-                );
-            }
-            ui.label(layout_job);
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    let mut layout_job = egui::text::LayoutJob::default();
+                    layout_job.append(
+                        self.name.as_str(),
+                        0.0,
+                        egui::TextFormat {
+                            color: style.album(),
+                            ..Default::default()
+                        },
+                    );
+                    if let Some(year) = self.year {
+                        layout_job.append(
+                            format!(" ({})", year).as_str(),
+                            0.0,
+                            egui::TextFormat {
+                                color: style.album_year(),
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    ui.label(layout_job);
+                });
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(util::seconds_to_hms_string(self.duration))
+                            .color(style.album_length()),
+                    );
+                });
+            });
         }
 
         // The first two rows are for headers, so adjust the song row indices by subtracting 2.
