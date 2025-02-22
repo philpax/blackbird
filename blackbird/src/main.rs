@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use blackbird_subsonic as bs;
@@ -21,7 +23,8 @@ fn main() {
 
 struct App {
     client_thread: ClientThread,
-    albums: Vec<bs::AlbumID3>,
+    albums: Vec<Album>,
+    album_id_to_idx: HashMap<String, usize>,
 
     error: Option<String>,
 }
@@ -43,6 +46,7 @@ impl App {
         App {
             client_thread,
             albums: vec![],
+            album_id_to_idx: HashMap::new(),
 
             error: None,
         }
@@ -52,7 +56,16 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         for response in self.client_thread.recv_iter() {
             match response {
-                ClientThreadResponse::Albums(albums) => self.albums = albums,
+                ClientThreadResponse::Albums(albums) => {
+                    self.albums = albums.into_iter().map(|a| a.into()).collect();
+                    self.albums.sort();
+                    self.album_id_to_idx = self
+                        .albums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (a.id.clone(), i))
+                        .collect();
+                }
                 ClientThreadResponse::Error(error) => self.error = Some(error),
             }
         }
@@ -163,4 +176,63 @@ async fn fetch_all_albums(client: &bs::Client) -> anyhow::Result<Vec<bs::AlbumID
         }
     }
     Ok(all_albums)
+}
+
+#[derive(Debug)]
+/// An album, as `blackbird` cares about it
+pub struct Album {
+    /// The album ID
+    pub id: String,
+    /// The album name
+    pub name: String,
+    /// The album artist name
+    pub artist: Option<String>,
+    /// The album artist ID
+    pub artist_id: Option<String>,
+    /// The album cover art ID
+    pub cover_art: Option<String>,
+    /// The number of songs in the album
+    pub song_count: u32,
+    /// The total duration of the album in seconds
+    pub duration: u32,
+    /// The release year of the album
+    pub year: Option<i32>,
+    /// The genre of the album
+    pub genre: Option<String>,
+}
+impl From<bs::AlbumID3> for Album {
+    fn from(album: bs::AlbumID3) -> Self {
+        Album {
+            id: album.id,
+            name: album.name,
+            artist: album.artist,
+            artist_id: album.artist_id,
+            cover_art: album.cover_art,
+            song_count: album.song_count,
+            duration: album.duration,
+            year: album.year,
+            genre: album.genre,
+        }
+    }
+}
+impl PartialEq for Album {
+    fn eq(&self, other: &Self) -> bool {
+        (self.artist.as_ref(), self.year, &self.name)
+            == (other.artist.as_ref(), other.year, &other.name)
+    }
+}
+impl Eq for Album {}
+impl PartialOrd for Album {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Album {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.artist.as_ref(), self.year, &self.name).cmp(&(
+            other.artist.as_ref(),
+            other.year,
+            &other.name,
+        ))
+    }
 }
