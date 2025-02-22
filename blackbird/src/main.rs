@@ -1,8 +1,14 @@
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 use serde::{Deserialize, Serialize};
 
 use blackbird_subsonic as bs;
+
+mod util;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Config {
@@ -23,8 +29,10 @@ fn main() {
 
 struct App {
     client_thread: ClientThread,
+
     albums: Vec<Album>,
-    album_id_to_idx: HashMap<String, usize>,
+    album_id_to_idx: HashMap<AlbumId, usize>,
+    pending_album_request_ids: HashSet<AlbumId>,
 
     error: Option<String>,
 }
@@ -45,8 +53,11 @@ impl App {
         client_thread.request(ClientThreadRequest::FetchAlbums);
         App {
             client_thread,
+
             albums: vec![],
             album_id_to_idx: HashMap::new(),
+
+            pending_album_request_ids: HashSet::new(),
 
             error: None,
         }
@@ -65,6 +76,16 @@ impl eframe::App for App {
                         .enumerate()
                         .map(|(i, a)| (a.id.clone(), i))
                         .collect();
+                }
+                ClientThreadResponse::Album(album) => {
+                    let id = AlbumId(album.album.id.clone());
+                    let idx = self
+                        .album_id_to_idx
+                        .get(&id)
+                        .unwrap_or_else(|| panic!("Album ID `{id}` not found in album list"));
+                    self.albums[*idx].songs =
+                        Some(album.song.into_iter().map(|s| s.into()).collect());
+                    self.pending_album_request_ids.remove(&id);
                 }
                 ClientThreadResponse::Error(error) => self.error = Some(error),
             }
@@ -106,6 +127,14 @@ impl eframe::App for App {
                             continue;
                         }
 
+                        if !self.pending_album_request_ids.contains(&album.id)
+                            && album.songs.is_none()
+                        {
+                            self.client_thread
+                                .request(ClientThreadRequest::FetchAlbum(album.id.clone()));
+                            self.pending_album_request_ids.insert(album.id.clone());
+                        }
+
                         // Compute the visible portion of the album's rows, rebased to the album.
                         let local_start = visible_row_range.start.saturating_sub(current_row);
                         let local_end = (visible_row_range.end - current_row).min(album_lines);
@@ -130,9 +159,11 @@ struct ClientThread {
 }
 enum ClientThreadRequest {
     FetchAlbums,
+    FetchAlbum(AlbumId),
 }
 enum ClientThreadResponse {
     Albums(Vec<bs::AlbumID3>),
+    Album(bs::AlbumWithSongsID3),
     Error(String),
 }
 impl ClientThread {
@@ -146,15 +177,19 @@ impl ClientThread {
                 .build()
                 .unwrap();
 
-            fn handle_result<T, E, F>(result: Result<T, E>, f: F) -> ClientThreadResponse
-            where
+            fn send_result<T, E, F>(
+                response_tx: std::sync::mpsc::Sender<ClientThreadResponse>,
+                result: Result<T, E>,
+                f: F,
+            ) where
                 E: std::fmt::Display,
                 F: FnOnce(T) -> ClientThreadResponse,
             {
-                match result {
+                let response = match result {
                     Ok(value) => f(value),
                     Err(e) => ClientThreadResponse::Error(e.to_string()),
-                }
+                };
+                response_tx.send(response).unwrap();
             }
 
             loop {
@@ -166,9 +201,11 @@ impl ClientThread {
                     match request {
                         ClientThreadRequest::FetchAlbums => {
                             let albums = fetch_all_albums(&client).await;
-                            response_tx
-                                .send(handle_result(albums, ClientThreadResponse::Albums))
-                                .unwrap();
+                            send_result(response_tx, albums, ClientThreadResponse::Albums);
+                        }
+                        ClientThreadRequest::FetchAlbum(album_id) => {
+                            let album = client.get_album_with_songs(album_id.0).await;
+                            send_result(response_tx, album, ClientThreadResponse::Album);
                         }
                     }
                 });
@@ -213,11 +250,19 @@ async fn fetch_all_albums(client: &bs::Client) -> anyhow::Result<Vec<bs::AlbumID
     Ok(all_albums)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct AlbumId(pub String);
+impl std::fmt::Display for AlbumId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug)]
 /// An album, as `blackbird` cares about it
 pub struct Album {
     /// The album ID
-    pub id: String,
+    pub id: AlbumId,
     /// The album name
     pub name: String,
     /// The album artist name
@@ -229,7 +274,7 @@ pub struct Album {
     /// The number of songs in the album
     pub song_count: u32,
     /// The songs in the album
-    pub songs: Option<Vec<String>>,
+    pub songs: Option<Vec<Song>>,
     /// The total duration of the album in seconds
     pub duration: u32,
     /// The release year of the album
@@ -240,7 +285,7 @@ pub struct Album {
 impl From<bs::AlbumID3> for Album {
     fn from(album: bs::AlbumID3) -> Self {
         Album {
-            id: album.id,
+            id: AlbumId(album.id),
             name: album.name,
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
             artist_id: album.artist_id,
@@ -307,7 +352,7 @@ impl Album {
                     // Clamp the song slice to the actual number of songs.
                     let end = song_end.min(songs.len());
                     for song in &songs[song_start..end] {
-                        ui.label(song);
+                        song.ui(ui, &self.artist);
                     }
                 } else {
                     for _ in song_start..song_end {
@@ -324,5 +369,97 @@ impl Album {
             .as_ref()
             .map_or(self.song_count as usize, |songs| songs.len());
         artist + album + songs
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SongId(pub String);
+impl std::fmt::Display for SongId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug)]
+/// A song, as `blackbird` cares about it
+pub struct Song {
+    /// The song ID
+    pub id: SongId,
+    /// The song title
+    pub title: String,
+    /// The song artist
+    pub artist: Option<String>,
+    /// The track number
+    pub track: Option<u32>,
+    /// The release year
+    pub year: Option<i32>,
+    /// The genre
+    pub genre: Option<String>,
+    /// The duration in seconds
+    pub duration: Option<u32>,
+    /// The disc number
+    pub disc_number: Option<u32>,
+    /// The album ID
+    pub album_id: Option<AlbumId>,
+}
+impl From<bs::Child> for Song {
+    fn from(child: bs::Child) -> Self {
+        Song {
+            id: SongId(child.id),
+            title: child.title,
+            artist: child.artist,
+            track: child.track,
+            year: child.year,
+            genre: child.genre,
+            duration: child.duration,
+            disc_number: child.disc_number,
+            album_id: child.album_id.map(AlbumId),
+        }
+    }
+}
+impl PartialEq for Song {
+    fn eq(&self, other: &Self) -> bool {
+        (self.year, self.disc_number, self.track) == (other.year, other.disc_number, other.track)
+    }
+}
+impl Eq for Song {}
+impl PartialOrd for Song {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for Song {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        (self.year, self.disc_number, self.track).cmp(&(other.year, other.disc_number, other.track))
+    }
+}
+impl Song {
+    pub fn ui(&self, ui: &mut egui::Ui, album_artist: &str) {
+        let track = self.track.unwrap_or(0);
+        let track_str = if let Some(disc_number) = self.disc_number {
+            format!("{disc_number}.{track}")
+        } else {
+            track.to_string()
+        };
+        ui.horizontal(|ui| {
+            // column 1 left aligned
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.label(&track_str);
+                ui.add_space(4.0);
+                ui.label(&self.title);
+            });
+
+            // column 2 right-aligned
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(util::seconds_to_hms_string(self.duration.unwrap_or(0)));
+                if let Some(artist) = self
+                    .artist
+                    .as_ref()
+                    .filter(|artist| *artist != album_artist)
+                {
+                    ui.label(artist);
+                }
+            });
+        });
     }
 }
