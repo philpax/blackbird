@@ -1,8 +1,8 @@
 #![deny(missing_docs)]
 //! A barebones client for the Subsonic API.
-
 use rand::seq::IndexedRandom;
 use serde::{Deserialize, Serialize};
+
 #[derive(Debug)]
 /// An error that can occur when interacting with the client.
 pub enum ClientError {

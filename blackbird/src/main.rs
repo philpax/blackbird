@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use blackbird_subsonic as bs;
 
+mod style;
 mod util;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -382,7 +383,9 @@ impl Album {
     fn ui(&self, ui: &mut egui::Ui, row_range: Range<usize>) {
         // If the first row is visible, draw the artist.
         if row_range.contains(&0) {
-            ui.label(&self.artist);
+            ui.label(
+                egui::RichText::new(&self.artist).color(style::string_to_colour(&self.artist)),
+            );
         }
         // If the second row is visible, draw the album title (including release year if available).
         if row_range.contains(&1) {
@@ -520,7 +523,7 @@ impl Song {
                     .as_ref()
                     .filter(|artist| *artist != album_artist)
                 {
-                    ui.label(artist);
+                    ui.label(egui::RichText::new(artist).color(style::string_to_colour(artist)));
                 }
             });
         });
