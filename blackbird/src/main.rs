@@ -503,7 +503,11 @@ impl Song {
         ui.horizontal(|ui| {
             // column 1 left aligned
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.label(&track_str);
+                let text_height = ui.text_style_height(&egui::TextStyle::Body);
+                ui.add_sized(
+                    egui::vec2(32.0, text_height),
+                    util::RightAlignedWidget(egui::Label::new(track_str)),
+                );
                 ui.add_space(4.0);
                 ui.label(&self.title);
             });
