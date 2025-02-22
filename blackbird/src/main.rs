@@ -18,6 +18,9 @@ struct Config {
 }
 
 fn main() {
+    let subscriber = tracing_subscriber::FmtSubscriber::new();
+    tracing::subscriber::set_global_default(subscriber).unwrap();
+
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "blackbird",
@@ -50,6 +53,7 @@ impl App {
         );
 
         let client_thread = ClientThread::new(client);
+        client_thread.request(ClientThreadRequest::Ping);
         client_thread.request(ClientThreadRequest::FetchAlbums);
         App {
             client_thread,
@@ -67,7 +71,11 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         for response in self.client_thread.recv_iter() {
             match response {
+                ClientThreadResponse::Ping => {
+                    tracing::info!("successfully pinged Subsonic server");
+                }
                 ClientThreadResponse::Albums(albums) => {
+                    tracing::info!("fetched {} albums", albums.len());
                     self.albums = albums.into_iter().map(|a| a.into()).collect();
                     self.albums.sort();
                     self.album_id_to_idx = self
@@ -78,6 +86,12 @@ impl eframe::App for App {
                         .collect();
                 }
                 ClientThreadResponse::Album(album) => {
+                    tracing::info!(
+                        "fetched album {} - {} ({})",
+                        album.album.artist.as_deref().unwrap_or("Unknown Artist"),
+                        album.album.name,
+                        album.album.id
+                    );
                     let id = AlbumId(album.album.id.clone());
                     let idx = self
                         .album_id_to_idx
@@ -87,7 +101,10 @@ impl eframe::App for App {
                         Some(album.song.into_iter().map(|s| s.into()).collect());
                     self.pending_album_request_ids.remove(&id);
                 }
-                ClientThreadResponse::Error(error) => self.error = Some(error),
+                ClientThreadResponse::Error(error) => {
+                    tracing::error!("client thread error: {error}");
+                    self.error = Some(error)
+                }
             }
         }
 
@@ -158,10 +175,12 @@ struct ClientThread {
     response_rx: std::sync::mpsc::Receiver<ClientThreadResponse>,
 }
 enum ClientThreadRequest {
+    Ping,
     FetchAlbums,
     FetchAlbum(AlbumId),
 }
 enum ClientThreadResponse {
+    Ping,
     Albums(Vec<bs::AlbumID3>),
     Album(bs::AlbumWithSongsID3),
     Error(String),
@@ -199,6 +218,11 @@ impl ClientThread {
 
                 runtime.spawn(async move {
                     match request {
+                        ClientThreadRequest::Ping => {
+                            send_result(response_tx, client.ping().await, |_| {
+                                ClientThreadResponse::Ping
+                            });
+                        }
                         ClientThreadRequest::FetchAlbums => {
                             let albums = fetch_all_albums(&client).await;
                             send_result(response_tx, albums, ClientThreadResponse::Albums);

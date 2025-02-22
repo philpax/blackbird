@@ -13,3 +13,5 @@ blackbird-subsonic = { path = "../blackbird-subsonic" }
 serde = { workspace = true }
 egui = "0.31.0"
 eframe = "0.31.0"
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
