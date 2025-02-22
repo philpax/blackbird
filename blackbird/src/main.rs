@@ -82,7 +82,9 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let row_height = ui.text_style_height(&egui::TextStyle::Body);
+            let album_margin_bottom_row_count = 1;
             let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
+
             egui::ScrollArea::vertical().auto_shrink(false).show_rows(
                 ui,
                 row_height,
@@ -111,7 +113,9 @@ impl eframe::App for App {
 
                         album.ui(ui, local_visible_range);
 
-                        current_row += album_lines;
+                        ui.add_space(row_height * album_margin_bottom_row_count as f32);
+
+                        current_row += album_lines + album_margin_bottom_row_count;
                     }
                 },
             );
