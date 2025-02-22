@@ -82,9 +82,8 @@ impl App {
         !self.pending_album_request_ids.contains(album_id)
             && self.albums[self.album_id_to_idx[album_id]].songs.is_none()
     }
-}
-impl eframe::App for App {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+
+    fn process_responses(&mut self) {
         for response in self.client_thread.recv_iter() {
             match response {
                 ClientThreadResponse::Ping => {
@@ -123,6 +122,13 @@ impl eframe::App for App {
                 }
             }
         }
+    }
+}
+impl eframe::App for App {
+    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
+        self.process_responses();
+
+        let mut fetch_set = HashSet::new();
 
         if let Some(error) = &self.error {
             let mut open = true;
@@ -133,8 +139,6 @@ impl eframe::App for App {
                 self.error = None;
             }
         }
-
-        let mut fetch_set = HashSet::new();
 
         egui::CentralPanel::default().show(ctx, |ui| {
             let row_height = ui.text_style_height(&egui::TextStyle::Body);
