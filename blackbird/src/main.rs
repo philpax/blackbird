@@ -43,7 +43,7 @@ struct App {
 impl App {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
 
-    fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config = toml::from_str::<Config>(
             &std::fs::read_to_string("config.toml").expect("Failed to read config.toml"),
         )
@@ -54,6 +54,12 @@ impl App {
             config.password,
             "blackbird".to_string(),
         );
+
+        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        cc.egui_ctx.style_mut(|style| {
+            style.visuals.panel_fill = style::BACKGROUND_COLOUR.into();
+            style.visuals.override_text_color = Some(style::TEXT_COLOUR.into());
+        });
 
         let client_thread = ClientThread::new(client);
         client_thread.request(ClientThreadRequest::Ping);
@@ -389,12 +395,26 @@ impl Album {
         }
         // If the second row is visible, draw the album title (including release year if available).
         if row_range.contains(&1) {
-            let album_title = if let Some(year) = self.year {
-                format!("{} ({})", self.name, year)
-            } else {
-                self.name.clone()
-            };
-            ui.label(album_title);
+            let mut layout_job = egui::text::LayoutJob::default();
+            layout_job.append(
+                self.name.as_str(),
+                0.0,
+                egui::TextFormat {
+                    color: style::ALBUM_COLOUR.into(),
+                    ..Default::default()
+                },
+            );
+            if let Some(year) = self.year {
+                layout_job.append(
+                    format!(" ({})", year).as_str(),
+                    0.0,
+                    egui::TextFormat {
+                        color: style::ALBUM_YEAR_COLOUR.into(),
+                        ..Default::default()
+                    },
+                );
+            }
+            ui.label(layout_job);
         }
 
         // The first two rows are for headers, so adjust the song row indices by subtracting 2.
@@ -509,7 +529,9 @@ impl Song {
                 let text_height = ui.text_style_height(&egui::TextStyle::Body);
                 ui.add_sized(
                     egui::vec2(32.0, text_height),
-                    util::RightAlignedWidget(egui::Label::new(track_str)),
+                    util::RightAlignedWidget(egui::Label::new(
+                        egui::RichText::new(track_str).color(style::TRACK_NUMBER_COLOUR),
+                    )),
                 );
                 ui.add_space(4.0);
                 ui.label(&self.title);
@@ -517,7 +539,10 @@ impl Song {
 
             // column 2 right-aligned
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(util::seconds_to_hms_string(self.duration.unwrap_or(0)));
+                ui.label(
+                    egui::RichText::new(util::seconds_to_hms_string(self.duration.unwrap_or(0)))
+                        .color(style::TRACK_LENGTH_COLOUR),
+                );
                 if let Some(artist) = self
                     .artist
                     .as_ref()
