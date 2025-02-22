@@ -113,6 +113,7 @@ impl App {
         !self.pending_cover_art_requests.contains(cover_art_id)
             && !self.cover_art_cache.contains_key(cover_art_id)
     }
+
     fn process_responses(&mut self) {
         for response in self.client_thread.recv_iter() {
             match response {
@@ -240,9 +241,11 @@ impl eframe::App for App {
                             fetch_set.insert(album.id.clone());
                         }
 
-                        if let Some(cover_art_id) = &album.cover_art_id {
-                            if self.does_cover_art_need_fetching(cover_art_id) {
-                                cover_art_fetch_set.insert(cover_art_id.clone());
+                        if self.config.general.album_art_enabled {
+                            if let Some(cover_art_id) = &album.cover_art_id {
+                                if self.does_cover_art_need_fetching(cover_art_id) {
+                                    cover_art_fetch_set.insert(cover_art_id.clone());
+                                }
                             }
                         }
 
@@ -258,6 +261,7 @@ impl eframe::App for App {
                             album.cover_art_id.as_deref().and_then(|id| {
                                 self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
                             }),
+                            self.config.general.album_art_enabled,
                         );
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);

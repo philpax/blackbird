@@ -78,12 +78,13 @@ impl Album {
         style: &style::Style,
         row_range: Range<usize>,
         album_art: Option<egui::ImageSource>,
+        album_art_enabled: bool,
     ) {
         ui.horizontal(|ui| {
             let artist_visible = row_range.contains(&0);
             let album_visible = row_range.contains(&1);
 
-            if artist_visible || album_visible {
+            if album_art_enabled && (artist_visible || album_visible) {
                 let album_art_size = ui.text_style_height(&egui::TextStyle::Body) * 2.0;
                 ui.add_sized(
                     [album_art_size, album_art_size],

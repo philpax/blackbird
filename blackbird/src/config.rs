@@ -44,6 +44,7 @@ pub struct General {
     pub base_url: String,
     pub username: String,
     pub password: String,
+    pub album_art_enabled: bool,
 }
 impl Default for General {
     fn default() -> Self {
@@ -51,6 +52,7 @@ impl Default for General {
             base_url: "http://localhost:4533".to_string(),
             username: "YOUR_USERNAME".to_string(),
             password: "YOUR_PASSWORD".to_string(),
+            album_art_enabled: true,
         }
     }
 }
