@@ -40,6 +40,8 @@ struct App {
     error: Option<String>,
 }
 impl App {
+    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
+
     fn new(_cc: &eframe::CreationContext<'_>) -> Self {
         let config = toml::from_str::<Config>(
             &std::fs::read_to_string("config.toml").expect("Failed to read config.toml"),
@@ -65,6 +67,20 @@ impl App {
 
             error: None,
         }
+    }
+
+    fn fetch_album(&mut self, album_id: AlbumId) {
+        if self.pending_album_request_ids.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
+            return;
+        }
+        self.client_thread
+            .request(ClientThreadRequest::FetchAlbum(album_id.clone()));
+        self.pending_album_request_ids.insert(album_id);
+    }
+
+    fn does_album_need_fetching(&self, album_id: &AlbumId) -> bool {
+        !self.pending_album_request_ids.contains(album_id)
+            && self.albums[self.album_id_to_idx[album_id]].songs.is_none()
     }
 }
 impl eframe::App for App {
@@ -118,6 +134,8 @@ impl eframe::App for App {
             }
         }
 
+        let mut fetch_set = HashSet::new();
+
         egui::CentralPanel::default().show(ctx, |ui| {
             let row_height = ui.text_style_height(&egui::TextStyle::Body);
             let album_margin_bottom_row_count = 1;
@@ -144,12 +162,8 @@ impl eframe::App for App {
                             continue;
                         }
 
-                        if !self.pending_album_request_ids.contains(&album.id)
-                            && album.songs.is_none()
-                        {
-                            self.client_thread
-                                .request(ClientThreadRequest::FetchAlbum(album.id.clone()));
-                            self.pending_album_request_ids.insert(album.id.clone());
+                        if self.does_album_need_fetching(&album.id) {
+                            fetch_set.insert(album.id.clone());
                         }
 
                         // Compute the visible portion of the album's rows, rebased to the album.
@@ -166,6 +180,23 @@ impl eframe::App for App {
                 },
             );
         });
+
+        // pad fetch_set up to MAX_CONCURRENT_ALBUM_REQUESTS
+        // by adding album IDs in order until we have enough
+        for album in &self.albums {
+            if fetch_set.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
+                break;
+            }
+            if self.does_album_need_fetching(&album.id) {
+                fetch_set.insert(album.id.clone());
+            }
+        }
+
+        for album_id in fetch_set {
+            self.fetch_album(album_id);
+        }
+
+        ctx.request_repaint_after_secs(0.05);
     }
 }
 
