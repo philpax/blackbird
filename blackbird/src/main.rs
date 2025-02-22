@@ -101,7 +101,7 @@ impl App {
                         .collect();
                 }
                 ClientThreadResponse::Album(album) => {
-                    tracing::info!(
+                    tracing::trace!(
                         "fetched album {} - {} ({})",
                         album.album.artist.as_deref().unwrap_or("Unknown Artist"),
                         album.album.name,
