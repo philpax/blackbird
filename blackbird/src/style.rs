@@ -1,26 +1,68 @@
-use egui::ecolor::Hsva;
+use egui::{ecolor::Hsva, Color32};
+use serde::{Deserialize, Serialize};
 
-const fn hsv(h: f32, s: f32, v: f32) -> Hsva {
-    Hsva { h, s, v, a: 1.0 }
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct Style {
+    /// Background colour for the main window.
+    pub background_hsv: [f32; 3],
+
+    /// Default text colour.
+    pub text_hsv: [f32; 3],
+
+    /// Colour for albums.
+    pub album_hsv: [f32; 3],
+
+    /// Colour for album years.
+    pub album_year_hsv: [f32; 3],
+
+    /// Colour for track numbers.
+    pub track_number_hsv: [f32; 3],
+
+    /// Colour for track lengths.
+    pub track_length_hsv: [f32; 3],
+}
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            background_hsv: [0.65, 0.40, 0.01],
+            text_hsv: [0.0, 0.0, 1.0],
+            album_hsv: [0.58, 0.90, 0.60],
+            album_year_hsv: [0.0, 0.0, 0.40],
+            track_number_hsv: [0.60, 0.5, 0.90],
+            track_length_hsv: [0.60, 0.90, 0.70],
+        }
+    }
+}
+impl Style {
+    pub fn background(&self) -> Color32 {
+        hsv_to_color32(self.background_hsv)
+    }
+    pub fn text(&self) -> Color32 {
+        hsv_to_color32(self.text_hsv)
+    }
+    pub fn album(&self) -> Color32 {
+        hsv_to_color32(self.album_hsv)
+    }
+    pub fn album_year(&self) -> Color32 {
+        hsv_to_color32(self.album_year_hsv)
+    }
+    pub fn track_number(&self) -> Color32 {
+        hsv_to_color32(self.track_number_hsv)
+    }
+    pub fn track_length(&self) -> Color32 {
+        hsv_to_color32(self.track_length_hsv)
+    }
 }
 
-/// Background colour for the main window.
-pub const BACKGROUND_COLOUR: Hsva = hsv(0.65, 0.4, 0.01);
-
-/// Default text colour.
-pub const TEXT_COLOUR: Hsva = hsv(0.0, 0.0, 1.0);
-
-/// Colour for albums.
-pub const ALBUM_COLOUR: Hsva = hsv(0.6, 0.7, 0.4);
-
-/// Colour for album years.
-pub const ALBUM_YEAR_COLOUR: Hsva = hsv(0.0, 0.0, 0.4);
-
-/// Colour for track numbers.
-pub const TRACK_NUMBER_COLOUR: Hsva = hsv(0.65, 0.8, 0.7);
-
-/// Colour for track lengths.
-pub const TRACK_LENGTH_COLOUR: Hsva = hsv(0.6, 0.7, 0.4);
+fn hsv_to_color32(hsv: [f32; 3]) -> Color32 {
+    Hsva {
+        h: hsv[0],
+        s: hsv[1],
+        v: hsv[2],
+        a: 1.0,
+    }
+    .into()
+}
 
 /// Hashes a string and produces a pleasing colour from that hash.
 pub fn string_to_colour(s: &str) -> Hsva {

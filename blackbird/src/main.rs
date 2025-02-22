@@ -11,11 +11,57 @@ use blackbird_subsonic as bs;
 mod style;
 mod util;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 struct Config {
+    #[serde(default)]
+    general: General,
+    #[serde(default)]
+    style: style::Style,
+}
+impl Config {
+    pub const FILENAME: &str = "config.toml";
+
+    pub fn load() -> Self {
+        match std::fs::read_to_string(Self::FILENAME) {
+            Ok(contents) => {
+                // Config exists, try to parse it
+                match toml::from_str(&contents) {
+                    Ok(config) => config,
+                    Err(e) => panic!("Failed to parse {}: {e}", Self::FILENAME),
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // No config exists, create default
+                tracing::info!("No config file found, creating default config");
+                Config::default()
+            }
+            Err(e) => {
+                // Some other IO error occurred while reading
+                panic!("Failed to read {}: {e}", Self::FILENAME)
+            }
+        }
+    }
+
+    pub fn save(&self) {
+        std::fs::write(Self::FILENAME, toml::to_string(self).unwrap()).unwrap();
+        tracing::info!("Saved config to {}", Self::FILENAME);
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+struct General {
     base_url: String,
     username: String,
     password: String,
+}
+impl Default for General {
+    fn default() -> Self {
+        Self {
+            base_url: "http://localhost:4533".to_string(),
+            username: "YOUR_USERNAME".to_string(),
+            password: "YOUR_PASSWORD".to_string(),
+        }
+    }
 }
 
 fn main() {
@@ -32,6 +78,8 @@ fn main() {
 }
 
 struct App {
+    config: Config,
+    last_config_update: std::time::Instant,
     client_thread: ClientThread,
 
     albums: Vec<Album>,
@@ -44,27 +92,28 @@ impl App {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
 
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let config = toml::from_str::<Config>(
-            &std::fs::read_to_string("config.toml").expect("Failed to read config.toml"),
-        )
-        .expect("Failed to parse config.toml");
+        let config = Config::load();
+        config.save();
+
         let client = bs::Client::new(
-            config.base_url,
-            config.username,
-            config.password,
+            config.general.base_url.clone(),
+            config.general.username.clone(),
+            config.general.password.clone(),
             "blackbird".to_string(),
         );
 
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.style_mut(|style| {
-            style.visuals.panel_fill = style::BACKGROUND_COLOUR.into();
-            style.visuals.override_text_color = Some(style::TEXT_COLOUR.into());
+            style.visuals.panel_fill = config.style.background();
+            style.visuals.override_text_color = Some(config.style.text());
         });
 
         let client_thread = ClientThread::new(client);
         client_thread.request(ClientThreadRequest::Ping);
         client_thread.request(ClientThreadRequest::FetchAlbums);
         App {
+            config,
+            last_config_update: std::time::Instant::now(),
             client_thread,
 
             albums: vec![],
@@ -130,10 +179,22 @@ impl App {
             }
         }
     }
+
+    fn poll_for_config_updates(&mut self) {
+        if self.last_config_update.elapsed() > std::time::Duration::from_secs(1) {
+            let new_config = Config::load();
+            if new_config != self.config {
+                self.config = new_config;
+                self.config.save();
+            }
+            self.last_config_update = std::time::Instant::now();
+        }
+    }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
         self.process_responses();
+        self.poll_for_config_updates();
 
         let mut fetch_set = HashSet::new();
 
@@ -182,7 +243,7 @@ impl eframe::App for App {
                         let local_end = (visible_row_range.end - current_row).min(album_lines);
                         let local_visible_range = local_start..local_end;
 
-                        album.ui(ui, local_visible_range);
+                        album.ui(ui, &self.config.style, local_visible_range);
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);
 
@@ -386,7 +447,7 @@ impl Ord for Album {
     }
 }
 impl Album {
-    fn ui(&self, ui: &mut egui::Ui, row_range: Range<usize>) {
+    fn ui(&self, ui: &mut egui::Ui, style: &style::Style, row_range: Range<usize>) {
         // If the first row is visible, draw the artist.
         if row_range.contains(&0) {
             ui.label(
@@ -400,7 +461,7 @@ impl Album {
                 self.name.as_str(),
                 0.0,
                 egui::TextFormat {
-                    color: style::ALBUM_COLOUR.into(),
+                    color: style.album(),
                     ..Default::default()
                 },
             );
@@ -409,7 +470,7 @@ impl Album {
                     format!(" ({})", year).as_str(),
                     0.0,
                     egui::TextFormat {
-                        color: style::ALBUM_YEAR_COLOUR.into(),
+                        color: style.album_year(),
                         ..Default::default()
                     },
                 );
@@ -434,7 +495,7 @@ impl Album {
                     // Clamp the song slice to the actual number of songs.
                     let end = song_end.min(songs.len());
                     for song in &songs[song_start..end] {
-                        song.ui(ui, &self.artist);
+                        song.ui(ui, style, &self.artist);
                     }
                 } else {
                     for _ in song_start..song_end {
@@ -516,7 +577,7 @@ impl Ord for Song {
     }
 }
 impl Song {
-    pub fn ui(&self, ui: &mut egui::Ui, album_artist: &str) {
+    pub fn ui(&self, ui: &mut egui::Ui, style: &style::Style, album_artist: &str) {
         let track = self.track.unwrap_or(0);
         let track_str = if let Some(disc_number) = self.disc_number {
             format!("{disc_number}.{track}")
@@ -530,7 +591,7 @@ impl Song {
                 ui.add_sized(
                     egui::vec2(32.0, text_height),
                     util::RightAlignedWidget(egui::Label::new(
-                        egui::RichText::new(track_str).color(style::TRACK_NUMBER_COLOUR),
+                        egui::RichText::new(track_str).color(style.track_number()),
                     )),
                 );
                 ui.add_space(4.0);
@@ -541,7 +602,7 @@ impl Song {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(util::seconds_to_hms_string(self.duration.unwrap_or(0)))
-                        .color(style::TRACK_LENGTH_COLOUR),
+                        .color(style.track_length()),
                 );
                 if let Some(artist) = self
                     .artist
