@@ -38,10 +38,15 @@ struct App {
     album_id_to_idx: HashMap<AlbumId, usize>,
     pending_album_request_ids: HashSet<AlbumId>,
 
+    cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
+    pending_cover_art_requests: HashSet<String>,
+
     error: Option<String>,
 }
 impl App {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
+    const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
+    const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config = Config::load();
@@ -60,6 +65,8 @@ impl App {
             style.visuals.override_text_color = Some(config.style.text());
         });
 
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+
         let client_thread = ClientThread::new(client);
         client_thread.request(ClientThreadRequest::Ping);
         client_thread.request(ClientThreadRequest::FetchAlbums);
@@ -70,8 +77,10 @@ impl App {
 
             albums: vec![],
             album_id_to_idx: HashMap::new(),
-
             pending_album_request_ids: HashSet::new(),
+
+            cover_art_cache: HashMap::new(),
+            pending_cover_art_requests: HashSet::new(),
 
             error: None,
         }
@@ -91,6 +100,19 @@ impl App {
             && self.albums[self.album_id_to_idx[album_id]].songs.is_none()
     }
 
+    fn fetch_cover_art(&mut self, cover_art_id: String) {
+        if self.pending_cover_art_requests.len() >= Self::MAX_CONCURRENT_COVER_ART_REQUESTS {
+            return;
+        }
+        self.client_thread
+            .request(ClientThreadRequest::FetchCoverArt(cover_art_id.clone()));
+        self.pending_cover_art_requests.insert(cover_art_id);
+    }
+
+    fn does_cover_art_need_fetching(&self, cover_art_id: &String) -> bool {
+        !self.pending_cover_art_requests.contains(cover_art_id)
+            && !self.cover_art_cache.contains_key(cover_art_id)
+    }
     fn process_responses(&mut self) {
         for response in self.client_thread.recv_iter() {
             match response {
@@ -128,6 +150,33 @@ impl App {
                     tracing::error!("client thread error: {error}");
                     self.error = Some(error)
                 }
+                ClientThreadResponse::CoverArt(cover_art_id, cover_art) => {
+                    tracing::info!("fetched cover art {cover_art_id}");
+                    if self.cover_art_cache.len() == Self::MAX_COVER_ART_CACHE_SIZE {
+                        let oldest_id = self
+                            .cover_art_cache
+                            .iter()
+                            .min_by_key(|(_, (_, time))| *time)
+                            .map(|(id, _)| id.clone())
+                            .expect("cover art cache not empty");
+
+                        self.cover_art_cache.remove(&oldest_id);
+                        tracing::info!("evicted cover art {oldest_id}");
+                    }
+
+                    let uri = format!("bytes://{cover_art_id}");
+                    self.pending_cover_art_requests.remove(&cover_art_id);
+                    self.cover_art_cache.insert(
+                        cover_art_id,
+                        (
+                            egui::ImageSource::Bytes {
+                                uri: uri.into(),
+                                bytes: cover_art.into(),
+                            },
+                            std::time::Instant::now(),
+                        ),
+                    );
+                }
             }
         }
     }
@@ -149,6 +198,7 @@ impl eframe::App for App {
         self.poll_for_config_updates();
 
         let mut fetch_set = HashSet::new();
+        let mut cover_art_fetch_set = HashSet::new();
 
         if let Some(error) = &self.error {
             let mut open = true;
@@ -190,12 +240,25 @@ impl eframe::App for App {
                             fetch_set.insert(album.id.clone());
                         }
 
+                        if let Some(cover_art_id) = &album.cover_art_id {
+                            if self.does_cover_art_need_fetching(cover_art_id) {
+                                cover_art_fetch_set.insert(cover_art_id.clone());
+                            }
+                        }
+
                         // Compute the visible portion of the album's rows, rebased to the album.
                         let local_start = visible_row_range.start.saturating_sub(current_row);
                         let local_end = (visible_row_range.end - current_row).min(album_lines);
                         let local_visible_range = local_start..local_end;
 
-                        album.ui(ui, &self.config.style, local_visible_range);
+                        album.ui(
+                            ui,
+                            &self.config.style,
+                            local_visible_range,
+                            album.cover_art_id.as_deref().and_then(|id| {
+                                self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
+                            }),
+                        );
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);
 
@@ -220,6 +283,10 @@ impl eframe::App for App {
             self.fetch_album(album_id);
         }
 
+        for cover_art_id in cover_art_fetch_set {
+            self.fetch_cover_art(cover_art_id);
+        }
+
         ctx.request_repaint_after_secs(0.05);
     }
 }
@@ -233,12 +300,14 @@ enum ClientThreadRequest {
     Ping,
     FetchAlbums,
     FetchAlbum(AlbumId),
+    FetchCoverArt(String),
 }
 #[allow(clippy::large_enum_variant /* this is not that important */)]
 enum ClientThreadResponse {
     Ping,
     Albums(Vec<bs::AlbumID3>),
     Album(bs::AlbumWithSongsID3),
+    CoverArt(String, Vec<u8>),
     Error(String),
 }
 impl ClientThread {
@@ -286,6 +355,12 @@ impl ClientThread {
                         ClientThreadRequest::FetchAlbum(album_id) => {
                             let album = client.get_album_with_songs(album_id.0).await;
                             send_result(response_tx, album, ClientThreadResponse::Album);
+                        }
+                        ClientThreadRequest::FetchCoverArt(cover_art_id) => {
+                            let cover_art = client.get_cover_art(&cover_art_id).await;
+                            send_result(response_tx, cover_art, |cover_art| {
+                                ClientThreadResponse::CoverArt(cover_art_id, cover_art)
+                            });
                         }
                     }
                 });

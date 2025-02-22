@@ -10,8 +10,8 @@ impl std::fmt::Display for AlbumId {
     }
 }
 
-#[derive(Debug)]
 /// An album, as `blackbird` cares about it
+#[derive(Debug)]
 pub struct Album {
     /// The album ID
     pub id: AlbumId,
@@ -22,7 +22,7 @@ pub struct Album {
     /// The album artist ID
     pub _artist_id: Option<String>,
     /// The album cover art ID
-    pub _cover_art: Option<String>,
+    pub cover_art_id: Option<String>,
     /// The number of songs in the album
     pub song_count: u32,
     /// The songs in the album
@@ -41,7 +41,7 @@ impl From<bs::AlbumID3> for Album {
             name: album.name,
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
             _artist_id: album.artist_id,
-            _cover_art: album.cover_art,
+            cover_art_id: album.cover_art,
             song_count: album.song_count,
             songs: None,
             duration: album.duration,
@@ -72,56 +72,81 @@ impl Ord for Album {
     }
 }
 impl Album {
-    pub fn ui(&self, ui: &mut egui::Ui, style: &style::Style, row_range: Range<usize>) {
-        // If the first row is visible, draw the artist.
-        if row_range.contains(&0) {
-            ui.label(
-                egui::RichText::new(&self.artist).color(style::string_to_colour(&self.artist)),
-            );
-        }
-        // If the second row is visible, draw the album title (including release year if available), as well as
-        // the total duration.
-        if row_range.contains(&1) {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    let mut layout_job = egui::text::LayoutJob::default();
-                    layout_job.append(
-                        self.name.as_str(),
-                        0.0,
-                        egui::TextFormat {
-                            color: style.album(),
-                            ..Default::default()
-                        },
-                    );
-                    if let Some(year) = self.year {
-                        layout_job.append(
-                            format!(" ({})", year).as_str(),
-                            0.0,
-                            egui::TextFormat {
-                                color: style.album_year(),
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    ui.label(layout_job);
-                });
+    pub fn ui(
+        &self,
+        ui: &mut egui::Ui,
+        style: &style::Style,
+        row_range: Range<usize>,
+        album_art: Option<egui::ImageSource>,
+    ) {
+        ui.horizontal(|ui| {
+            let artist_visible = row_range.contains(&0);
+            let album_visible = row_range.contains(&1);
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if artist_visible || album_visible {
+                let album_art_size = ui.text_style_height(&egui::TextStyle::Body) * 2.0;
+                ui.add_sized(
+                    [album_art_size, album_art_size],
+                    egui::Image::new(
+                        album_art
+                            .unwrap_or(egui::include_image!("../assets/blackbird-female-bird.jpg")),
+                    ),
+                );
+            }
+
+            ui.vertical(|ui| {
+                // If the first row is visible, draw the artist.
+                if artist_visible {
                     ui.label(
-                        egui::RichText::new(util::seconds_to_hms_string(self.duration))
-                            .color(style.album_length()),
+                        egui::RichText::new(&self.artist)
+                            .color(style::string_to_colour(&self.artist)),
                     );
-                });
+                }
+                // If the second row is visible, draw the album title (including release year if available), as well as
+                // the total duration.
+                if album_visible {
+                    ui.horizontal(|ui| {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            let mut layout_job = egui::text::LayoutJob::default();
+                            layout_job.append(
+                                self.name.as_str(),
+                                0.0,
+                                egui::TextFormat {
+                                    color: style.album(),
+                                    ..Default::default()
+                                },
+                            );
+                            if let Some(year) = self.year {
+                                layout_job.append(
+                                    format!(" ({})", year).as_str(),
+                                    0.0,
+                                    egui::TextFormat {
+                                        color: style.album_year(),
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                            ui.label(layout_job);
+                        });
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.label(
+                                egui::RichText::new(util::seconds_to_hms_string(self.duration))
+                                    .color(style.album_length()),
+                            );
+                        });
+                    });
+                }
             });
-        }
+        });
 
         // The first two rows are for headers, so adjust the song row indices by subtracting 2.
         let song_start = row_range.start.saturating_sub(2);
         let song_end = row_range.end.saturating_sub(2);
-
         if song_start >= song_end {
             return;
         }
+
         egui::Frame::NONE
             .inner_margin(egui::Margin {
                 left: 10,
@@ -149,6 +174,7 @@ impl Album {
             .songs
             .as_ref()
             .map_or(self.song_count as usize, |songs| songs.len());
+
         artist + album + songs
     }
 }

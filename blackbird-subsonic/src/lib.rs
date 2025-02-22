@@ -149,6 +149,19 @@ impl Client {
             .album
             .unwrap())
     }
+
+    /// Get cover art for a given ID.
+    pub async fn get_cover_art(&self, id: impl Into<String>) -> ClientResult<Vec<u8>> {
+        let response = self
+            .request_raw("getCoverArt", &[("id", id.into())])
+            .await?;
+
+        if let Err(err @ ClientError::SubsonicError { .. }) = Self::parse_response(&response) {
+            return Err(err);
+        }
+
+        Ok(response)
+    }
 }
 impl Client {
     async fn request(
@@ -156,6 +169,15 @@ impl Client {
         endpoint: &str,
         parameters: &[(&str, String)],
     ) -> ClientResult<Response> {
+        let bytes = self.request_raw(endpoint, parameters).await?;
+        Self::parse_response(&bytes)
+    }
+
+    async fn request_raw(
+        &self,
+        endpoint: &str,
+        parameters: &[(&str, String)],
+    ) -> ClientResult<Vec<u8>> {
         let (salt, token) = self.generate_salt_and_token();
         let request = self
             .client
@@ -170,7 +192,12 @@ impl Client {
             ])
             .query(parameters);
 
-        let response: Response = serde_json::from_str(&request.send().await?.text().await?)?;
+        Ok(request.send().await?.bytes().await?.into())
+    }
+
+    fn parse_response(bytes: &[u8]) -> ClientResult<Response> {
+        let response: Response = serde_json::from_slice(&bytes)?;
+
         if response.subsonic_response.status == ResponseStatus::Failed {
             let error = response.subsonic_response.error.unwrap();
             return Err(ClientError::SubsonicError {
@@ -178,6 +205,7 @@ impl Client {
                 message: error.message,
             });
         }
+
         Ok(response)
     }
 

@@ -4,3 +4,9 @@ resolver = "2"
 
 [workspace.dependencies]
 serde = { version = "1.0.218", features = ["derive"] }
+
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.release.package.image]
+opt-level = 3
