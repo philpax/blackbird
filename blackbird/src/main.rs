@@ -32,7 +32,7 @@ impl Config {
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 // No config exists, create default
-                tracing::info!("No config file found, creating default config");
+                tracing::info!("no config file found, creating default config");
                 Config::default()
             }
             Err(e) => {
@@ -44,7 +44,7 @@ impl Config {
 
     pub fn save(&self) {
         std::fs::write(Self::FILENAME, toml::to_string(self).unwrap()).unwrap();
-        tracing::info!("Saved config to {}", Self::FILENAME);
+        tracing::info!("saved config to {}", Self::FILENAME);
     }
 }
 
@@ -594,7 +594,6 @@ impl Song {
                         egui::RichText::new(track_str).color(style.track_number()),
                     )),
                 );
-                ui.add_space(4.0);
                 ui.label(&self.title);
             });
 
