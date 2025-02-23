@@ -79,21 +79,31 @@ impl Song {
                         egui::RichText::new(track_str).color(style.track_number()),
                     )),
                 );
-                ui.label(&self.title);
+                ui.add(egui::Label::new(&self.title).selectable(false));
             });
 
             // column 2 right-aligned
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(util::seconds_to_hms_string(self.duration.unwrap_or(0)))
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(util::seconds_to_hms_string(
+                            self.duration.unwrap_or(0),
+                        ))
                         .color(style.track_length()),
+                    )
+                    .selectable(false),
                 );
                 if let Some(artist) = self
                     .artist
                     .as_ref()
                     .filter(|artist| *artist != album_artist)
                 {
-                    ui.label(egui::RichText::new(artist).color(style::string_to_colour(artist)));
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(artist).color(style::string_to_colour(artist)),
+                        )
+                        .selectable(false),
+                    );
                 }
             });
         });

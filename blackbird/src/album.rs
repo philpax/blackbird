@@ -98,9 +98,12 @@ impl Album {
             ui.vertical(|ui| {
                 // If the first row is visible, draw the artist.
                 if artist_visible {
-                    ui.label(
-                        egui::RichText::new(&self.artist)
-                            .color(style::string_to_colour(&self.artist)),
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.artist)
+                                .color(style::string_to_colour(&self.artist)),
+                        )
+                        .selectable(false),
                     );
                 }
                 // If the second row is visible, draw the album title (including release year if available), as well as
@@ -127,13 +130,16 @@ impl Album {
                                     },
                                 );
                             }
-                            ui.label(layout_job);
+                            ui.add(egui::Label::new(layout_job).selectable(false));
                         });
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.label(
-                                egui::RichText::new(util::seconds_to_hms_string(self.duration))
-                                    .color(style.album_length()),
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(util::seconds_to_hms_string(self.duration))
+                                        .color(style.album_length()),
+                                )
+                                .selectable(false),
                             );
                         });
                     });
@@ -162,7 +168,7 @@ impl Album {
                     }
                 } else {
                     for _ in song_start..song_end {
-                        ui.label("[loading...]");
+                        ui.add(egui::Label::new("[loading...]").selectable(false));
                     }
                 }
             });
