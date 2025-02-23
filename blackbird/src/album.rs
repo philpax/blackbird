@@ -64,11 +64,16 @@ impl PartialOrd for Album {
 }
 impl Ord for Album {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.artist.as_str(), self.year, &self.name).cmp(&(
-            other.artist.as_str(),
-            other.year,
-            &other.name,
-        ))
+        (
+            self.artist.to_lowercase(),
+            self.year,
+            self.name.to_lowercase(),
+        )
+            .cmp(&(
+                other.artist.to_lowercase(),
+                other.year,
+                other.name.to_lowercase(),
+            ))
     }
 }
 impl Album {
