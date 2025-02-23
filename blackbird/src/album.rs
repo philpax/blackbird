@@ -1,6 +1,10 @@
 use std::ops::Range;
 
-use crate::{bs, song::Song, style, util};
+use crate::{
+    bs,
+    song::{Song, SongId},
+    style, util,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AlbumId(pub String);
@@ -84,7 +88,7 @@ impl Album {
         row_range: Range<usize>,
         album_art: Option<egui::ImageSource>,
         album_art_enabled: bool,
-    ) {
+    ) -> Option<&SongId> {
         ui.horizontal(|ui| {
             let artist_visible = row_range.contains(&0);
             let album_visible = row_range.contains(&1);
@@ -156,8 +160,10 @@ impl Album {
         let song_start = row_range.start.saturating_sub(2);
         let song_end = row_range.end.saturating_sub(2);
         if song_start >= song_end {
-            return;
+            return None;
         }
+
+        let mut output = None;
 
         egui::Frame::NONE
             .inner_margin(egui::Margin {
@@ -169,7 +175,9 @@ impl Album {
                     // Clamp the song slice to the actual number of songs.
                     let end = song_end.min(songs.len());
                     for song in &songs[song_start..end] {
-                        song.ui(ui, style, &self.artist);
+                        if song.ui(ui, style, &self.artist) {
+                            output = Some(&song.id);
+                        }
                     }
                 } else {
                     for _ in song_start..song_end {
@@ -177,6 +185,8 @@ impl Album {
                     }
                 }
             });
+
+        output
     }
 
     pub fn line_count(&self) -> usize {

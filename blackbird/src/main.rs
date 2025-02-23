@@ -254,7 +254,7 @@ impl eframe::App for App {
                         let local_end = (visible_row_range.end - current_row).min(album_lines);
                         let local_visible_range = local_start..local_end;
 
-                        album.ui(
+                        let clicked_song_id = album.ui(
                             ui,
                             &self.config.style,
                             local_visible_range,
@@ -263,6 +263,20 @@ impl eframe::App for App {
                             }),
                             self.config.general.album_art_enabled,
                         );
+
+                        if let Some(song_id) = clicked_song_id {
+                            let song = album
+                                .songs
+                                .as_ref()
+                                .unwrap()
+                                .iter()
+                                .find(|s| s.id == *song_id)
+                                .unwrap();
+                            println!(
+                                "{} - {} - {} ({song_id})",
+                                album.artist, album.name, song.title
+                            );
+                        }
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);
 
