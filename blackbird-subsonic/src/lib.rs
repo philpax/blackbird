@@ -152,15 +152,10 @@ impl Client {
 
     /// Get cover art for a given ID.
     pub async fn get_cover_art(&self, id: impl Into<String>) -> ClientResult<Vec<u8>> {
-        let response = self
-            .request_raw("getCoverArt", &[("id", id.into())])
-            .await?;
-
-        if let Err(err @ ClientError::SubsonicError { .. }) = Self::parse_response(&response) {
-            return Err(err);
-        }
-
-        Ok(response)
+        Self::check_for_subsonic_error_in_bytes(
+            self.request_raw("getCoverArt", &[("id", id.into())])
+                .await?,
+        )
     }
 }
 impl Client {
@@ -193,6 +188,13 @@ impl Client {
             .query(parameters);
 
         Ok(request.send().await?.bytes().await?.into())
+    }
+
+    fn check_for_subsonic_error_in_bytes(bytes: Vec<u8>) -> Result<Vec<u8>, ClientError> {
+        match Self::parse_response(&bytes) {
+            Err(err @ ClientError::SubsonicError { .. }) => return Err(err),
+            _ => Ok(bytes),
+        }
     }
 
     fn parse_response(bytes: &[u8]) -> ClientResult<Response> {
