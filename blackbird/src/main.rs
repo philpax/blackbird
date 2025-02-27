@@ -13,6 +13,7 @@ use config::*;
 
 mod album;
 use album::*;
+use song::SongId;
 
 mod song;
 
@@ -40,6 +41,8 @@ struct App {
 
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
+
+    current_song: Option<Vec<u8>>,
 
     error: Option<String>,
 }
@@ -81,6 +84,8 @@ impl App {
 
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
+
+            current_song: None,
 
             error: None,
         }
@@ -177,6 +182,10 @@ impl App {
                             std::time::Instant::now(),
                         ),
                     );
+                }
+                ClientThreadResponse::Song(song_id, song) => {
+                    tracing::info!("fetched song {song_id}");
+                    self.current_song = Some(song);
                 }
             }
         }
@@ -277,6 +286,8 @@ impl eframe::App for App {
                                 "{} - {} - {} ({song_id})",
                                 album.artist, album.name, song.title
                             );
+                            self.client_thread
+                                .request(ClientThreadRequest::FetchSong(song_id.clone()));
                         }
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);
@@ -320,12 +331,14 @@ enum ClientThreadRequest {
     FetchAlbums,
     FetchAlbum(AlbumId),
     FetchCoverArt(String),
+    FetchSong(SongId),
 }
 enum ClientThreadResponse {
     Ping,
     Albums(Vec<bs::AlbumID3>),
     Album(Box<bs::AlbumWithSongsID3>),
     CoverArt(String, Vec<u8>),
+    Song(SongId, Vec<u8>),
     Error(String),
 }
 impl ClientThread {
@@ -378,6 +391,12 @@ impl ClientThread {
                             let cover_art = client.get_cover_art(&cover_art_id).await;
                             send_result(response_tx, cover_art, |cover_art| {
                                 ClientThreadResponse::CoverArt(cover_art_id, cover_art)
+                            });
+                        }
+                        ClientThreadRequest::FetchSong(song_id) => {
+                            let song = client.download(&song_id.0).await;
+                            send_result(response_tx, song, |song| {
+                                ClientThreadResponse::Song(song_id, song)
                             });
                         }
                     }

@@ -157,6 +157,13 @@ impl Client {
                 .await?,
         )
     }
+
+    /// Download a file from the server.
+    pub async fn download(&self, id: impl Into<String>) -> ClientResult<Vec<u8>> {
+        Self::check_for_subsonic_error_in_bytes(
+            self.request_raw("download", &[("id", id.into())]).await?,
+        )
+    }
 }
 impl Client {
     async fn request(
