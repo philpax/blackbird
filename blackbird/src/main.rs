@@ -321,11 +321,10 @@ enum ClientThreadRequest {
     FetchAlbum(AlbumId),
     FetchCoverArt(String),
 }
-#[allow(clippy::large_enum_variant /* this is not that important */)]
 enum ClientThreadResponse {
     Ping,
     Albums(Vec<bs::AlbumID3>),
-    Album(bs::AlbumWithSongsID3),
+    Album(Box<bs::AlbumWithSongsID3>),
     CoverArt(String, Vec<u8>),
     Error(String),
 }
@@ -372,7 +371,7 @@ impl ClientThread {
                             send_result(response_tx, albums, ClientThreadResponse::Albums);
                         }
                         ClientThreadRequest::FetchAlbum(album_id) => {
-                            let album = client.get_album_with_songs(album_id.0).await;
+                            let album = client.get_album_with_songs(album_id.0).await.map(Box::new);
                             send_result(response_tx, album, ClientThreadResponse::Album);
                         }
                         ClientThreadRequest::FetchCoverArt(cover_art_id) => {
