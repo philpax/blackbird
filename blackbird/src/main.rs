@@ -120,6 +120,10 @@ impl App {
                 ClientThreadResponse::Ping => {
                     tracing::info!("successfully pinged Subsonic server");
                 }
+                ClientThreadResponse::Error(error) => {
+                    tracing::error!("client thread error: {error}");
+                    self.error = Some(error)
+                }
                 ClientThreadResponse::Albums(albums) => {
                     tracing::info!("fetched {} albums", albums.len());
                     self.albums = albums.into_iter().map(|a| a.into()).collect();
@@ -146,10 +150,6 @@ impl App {
                     self.albums[*idx].songs =
                         Some(album.song.into_iter().map(|s| s.into()).collect());
                     self.pending_album_request_ids.remove(&id);
-                }
-                ClientThreadResponse::Error(error) => {
-                    tracing::error!("client thread error: {error}");
-                    self.error = Some(error)
                 }
                 ClientThreadResponse::CoverArt(cover_art_id, cover_art) => {
                     tracing::info!("fetched cover art {cover_art_id}");
@@ -223,7 +223,7 @@ impl eframe::App for App {
                 |ui, visible_row_range| {
                     let mut current_row = 0;
                     for album in &self.albums {
-                        let album_lines = album.line_count();
+                        let album_lines = album.line_count() + album_margin_bottom_row_count;
                         let album_range = current_row..(current_row + album_lines);
 
                         // If this album starts after the visible range, we can break out.
@@ -251,7 +251,8 @@ impl eframe::App for App {
 
                         // Compute the visible portion of the album's rows, rebased to the album.
                         let local_start = visible_row_range.start.saturating_sub(current_row);
-                        let local_end = (visible_row_range.end - current_row).min(album_lines);
+                        let local_end = (visible_row_range.end - current_row)
+                            .min(album_lines - album_margin_bottom_row_count);
                         let local_visible_range = local_start..local_end;
 
                         let clicked_song_id = album.ui(
@@ -280,7 +281,7 @@ impl eframe::App for App {
 
                         ui.add_space(row_height * album_margin_bottom_row_count as f32);
 
-                        current_row += album_lines + album_margin_bottom_row_count;
+                        current_row += album_lines;
                     }
                 },
             );
