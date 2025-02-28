@@ -108,14 +108,17 @@ impl Song {
 
                 // column 2 right-aligned
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(util::seconds_to_hms_string(
-                                self.duration.unwrap_or(0),
-                            ))
-                            .color(style.track_length()),
-                        )
-                        .selectable(false),
+                    ui.add_sized(
+                        egui::vec2(64.0, text_height),
+                        util::RightAlignedWidget(
+                            egui::Label::new(
+                                egui::RichText::new(util::seconds_to_hms_string(
+                                    self.duration.unwrap_or(0),
+                                ))
+                                .color(style.track_length()),
+                            )
+                            .selectable(false),
+                        ),
                     );
                     if let Some(artist) = self
                         .artist
