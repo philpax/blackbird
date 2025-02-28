@@ -174,8 +174,15 @@ impl Album {
                 if let Some(songs) = &self.songs {
                     // Clamp the song slice to the actual number of songs.
                     let end = song_end.min(songs.len());
+
+                    // Do a pre-pass to calculate the maximum track length width.
+                    let max_track_length_width = songs[song_start..end]
+                        .iter()
+                        .map(|song| song.track_length_str_width(ui))
+                        .fold(0.0, f32::max);
+
                     for song in &songs[song_start..end] {
-                        if song.ui(ui, style, &self.artist) {
+                        if song.ui(ui, style, &self.artist, max_track_length_width) {
                             output = Some(&song.id);
                         }
                     }

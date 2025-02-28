@@ -67,7 +67,20 @@ impl Ord for Song {
     }
 }
 impl Song {
-    pub fn ui(&self, ui: &mut egui::Ui, style: &style::Style, album_artist: &str) -> bool {
+    pub fn track_length_str_width(&self, ui: &egui::Ui) -> f32 {
+        egui::WidgetText::from(self.track_length_str())
+            .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body)
+            .size()
+            .x
+    }
+
+    pub fn ui(
+        &self,
+        ui: &mut egui::Ui,
+        style: &style::Style,
+        album_artist: &str,
+        max_track_length_width: f32,
+    ) -> bool {
         let r = ui
             .horizontal(|ui| {
                 let track = self.track.unwrap_or(0);
@@ -109,14 +122,18 @@ impl Song {
                 // column 2 right-aligned
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_sized(
-                        egui::vec2(64.0, text_height),
+                        egui::vec2(
+                            // fudge number that includes margin.
+                            // for some reason, the text width we get back is not enough to clear the label entirely
+                            max_track_length_width + 32.0,
+                            text_height,
+                        ),
                         util::RightAlignedWidget(
                             egui::Label::new(
-                                egui::RichText::new(util::seconds_to_hms_string(
-                                    self.duration.unwrap_or(0),
-                                ))
-                                .color(style.track_length()),
+                                egui::RichText::new(self.track_length_str())
+                                    .color(style.track_length()),
                             )
+                            .truncate()
                             .selectable(false),
                         ),
                     );
@@ -141,5 +158,10 @@ impl Song {
             .store(r.hovered(), std::sync::atomic::Ordering::Relaxed);
 
         r.double_clicked()
+    }
+}
+impl Song {
+    fn track_length_str(&self) -> String {
+        util::seconds_to_hms_string(self.duration.unwrap_or(0))
     }
 }
