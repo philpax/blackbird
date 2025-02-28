@@ -203,7 +203,7 @@ impl App {
                     self.playing_song = Some(PlayingSong { album_id, song_id });
                     self.sink.clear();
                     self.sink
-                        .append(rodio::Decoder::new(std::io::Cursor::new(data)).unwrap());
+                        .append(rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap());
                     self.sink.play();
                 }
             }
