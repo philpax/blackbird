@@ -6,7 +6,7 @@ macro_rules! style_fields {
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
         pub struct Style {
             $(
-                /// Colour for $field.
+                #[doc = concat!("Colour for ", stringify!($field))]
                 $field: [f32; 3],
             )*
         }
@@ -19,6 +19,7 @@ macro_rules! style_fields {
         }
         impl Style {
             $(
+                #[doc = concat!("Colour for ", stringify!($fn_name))]
                 pub fn $fn_name(&self) -> Color32 {
                     hsv_to_color32(self.$field)
                 }
@@ -34,6 +35,8 @@ style_fields![
     (album_year_hsv, album_year, [0.0, 0.0, 0.40]),
     (track_number_hsv, track_number, [0.60, 0.5, 0.90]),
     (track_length_hsv, track_length, [0.60, 0.90, 0.70]),
+    (track_name_hsv, track_name, [0.0, 0.0, 0.65]),
+    (track_name_hovered_hsv, track_name_hovered, [0.0, 0.0, 1.0]),
 ];
 
 fn hsv_to_color32(hsv: [f32; 3]) -> Color32 {

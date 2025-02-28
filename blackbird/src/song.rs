@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use crate::{album::AlbumId, bs, style, util};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -29,6 +31,8 @@ pub struct Song {
     pub disc_number: Option<u32>,
     /// The album ID
     pub _album_id: Option<AlbumId>,
+
+    was_hovered: AtomicBool,
 }
 impl From<bs::Child> for Song {
     fn from(child: bs::Child) -> Self {
@@ -42,6 +46,7 @@ impl From<bs::Child> for Song {
             duration: child.duration,
             disc_number: child.disc_number,
             _album_id: child.album_id.map(AlbumId),
+            was_hovered: AtomicBool::new(false),
         }
     }
 }
@@ -81,7 +86,21 @@ impl Song {
                             egui::RichText::new(track_str).color(style.track_number()),
                         )),
                     );
-                    ui.add(egui::Label::new(&self.title).selectable(false));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&self.title).color(
+                            // This adds a one-frame delay to hovering, but I can't be bothered
+                            // figuring out how to do this properly in egui.
+                            //
+                            // Interactive labels can have hover colours, but this requires giving
+                            // the label a sense, which breaks propagation of sense upwards.
+                            if self.was_hovered.load(std::sync::atomic::Ordering::Relaxed) {
+                                style.track_name_hovered()
+                            } else {
+                                style.track_name()
+                            },
+                        ))
+                        .selectable(false),
+                    );
                 });
 
                 // column 2 right-aligned
@@ -111,6 +130,9 @@ impl Song {
             })
             .response
             .interact(egui::Sense::click());
+
+        self.was_hovered
+            .store(r.hovered(), std::sync::atomic::Ordering::Relaxed);
 
         r.double_clicked()
     }
