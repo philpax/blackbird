@@ -199,13 +199,13 @@ impl Client {
 
     fn check_for_subsonic_error_in_bytes(bytes: Vec<u8>) -> Result<Vec<u8>, ClientError> {
         match Self::parse_response(&bytes) {
-            Err(err @ ClientError::SubsonicError { .. }) => return Err(err),
+            Err(err @ ClientError::SubsonicError { .. }) => Err(err),
             _ => Ok(bytes),
         }
     }
 
     fn parse_response(bytes: &[u8]) -> ClientResult<Response> {
-        let response: Response = serde_json::from_slice(&bytes)?;
+        let response: Response = serde_json::from_slice(bytes)?;
 
         if response.subsonic_response.status == ResponseStatus::Failed {
             let error = response.subsonic_response.error.unwrap();
