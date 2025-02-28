@@ -68,23 +68,26 @@ impl Ord for Song {
 }
 impl Song {
     pub fn ui(&self, ui: &mut egui::Ui, style: &style::Style, album_artist: &str) -> bool {
-        let track = self.track.unwrap_or(0);
-        let track_str = if let Some(disc_number) = self.disc_number {
-            format!("{disc_number}.{track}")
-        } else {
-            track.to_string()
-        };
-
         let r = ui
             .horizontal(|ui| {
+                let track = self.track.unwrap_or(0);
+                let track_str = if let Some(disc_number) = self.disc_number {
+                    format!("{disc_number}.{track}")
+                } else {
+                    track.to_string()
+                };
+                let text_height = ui.text_style_height(&egui::TextStyle::Body);
+
                 // column 1 left aligned
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    let text_height = ui.text_style_height(&egui::TextStyle::Body);
                     ui.add_sized(
                         egui::vec2(32.0, text_height),
-                        util::RightAlignedWidget(egui::Label::new(
-                            egui::RichText::new(track_str).color(style.track_number()),
-                        )),
+                        util::RightAlignedWidget(
+                            egui::Label::new(
+                                egui::RichText::new(track_str).color(style.track_number()),
+                            )
+                            .selectable(false),
+                        ),
                     );
                     ui.add(
                         egui::Label::new(egui::RichText::new(&self.title).color(
