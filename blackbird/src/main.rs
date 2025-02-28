@@ -42,8 +42,8 @@ struct App {
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
 
-    output_stream: rodio::OutputStream,
-    output_stream_handle: rodio::OutputStreamHandle,
+    _output_stream: rodio::OutputStream,
+    _output_stream_handle: rodio::OutputStreamHandle,
     sink: rodio::Sink,
     playing_song: Option<PlayingSong>,
 
@@ -97,8 +97,8 @@ impl App {
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
 
-            output_stream,
-            output_stream_handle,
+            _output_stream: output_stream,
+            _output_stream_handle: output_stream_handle,
             sink,
             playing_song: None,
 
@@ -253,9 +253,74 @@ impl eframe::App for App {
                     .fill(self.config.style.background()),
             )
             .show(ctx, |ui| {
-                let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                let album_margin_bottom_row_count = 1;
-                let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
+                ui.vertical(|ui| {
+                    ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+                    if let Some(playing_song) = &self.playing_song {
+                        let album = self
+                            .album_id_to_idx
+                            .get(&playing_song.album_id)
+                            .and_then(|id| self.albums.get(*id));
+                        if let Some(album) = album {
+                            ui.horizontal(|ui| {
+                                if let Some(song) = album.songs.as_ref().and_then(|songs| {
+                                    songs.iter().find(|s| s.id == playing_song.song_id)
+                                }) {
+                                    if let Some(artist) =
+                                        song.artist.as_ref().filter(|a| **a != album.artist)
+                                    {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(artist)
+                                                    .color(style::string_to_colour(artist)),
+                                            )
+                                            .selectable(false),
+                                        );
+                                        ui.add(egui::Label::new(" - ").selectable(false));
+                                    }
+                                    ui.add(egui::Label::new(&song.title).selectable(false));
+                                } else {
+                                    ui.add(egui::Label::new("Song not found").selectable(false));
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&album.name)
+                                            .color(self.config.style.album()),
+                                    )
+                                    .selectable(false),
+                                );
+                                ui.add(egui::Label::new(" by ").selectable(false));
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&album.artist)
+                                            .color(style::string_to_colour(&album.artist)),
+                                    )
+                                    .selectable(false),
+                                );
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("Album not found").selectable(false));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Label::new("That's a bug!").selectable(false));
+                            });
+                        }
+                    } else {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new("Nothing playing").selectable(false));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::Label::new("Double-click a song to play it!")
+                                    .selectable(false),
+                            );
+                        });
+                    }
+                });
+
+                ui.separator();
 
                 ui.scope(|ui| {
                     // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
@@ -265,6 +330,10 @@ impl eframe::App for App {
                         ..egui::style::ScrollStyle::solid()
                     };
                     ui.style_mut().visuals.extreme_bg_color = self.config.style.background();
+
+                    let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                    let album_margin_bottom_row_count = 1;
+                    let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
                     egui::ScrollArea::vertical().auto_shrink(false).show_rows(
                         ui,
                         row_height,
