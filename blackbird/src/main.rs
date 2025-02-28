@@ -383,6 +383,7 @@ impl eframe::App for App {
                                         self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
                                     }),
                                     self.config.general.album_art_enabled,
+                                    self.playing_song.as_ref().map(|s| &s.song_id),
                                 );
 
                                 if let Some(song_id) = clicked_song_id {

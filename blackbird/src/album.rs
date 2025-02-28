@@ -88,6 +88,7 @@ impl Album {
         row_range: Range<usize>,
         album_art: Option<egui::ImageSource>,
         album_art_enabled: bool,
+        playing_song: Option<&SongId>,
     ) -> Option<&SongId> {
         ui.horizontal(|ui| {
             let artist_visible = row_range.contains(&0);
@@ -182,7 +183,13 @@ impl Album {
                         .fold(0.0, f32::max);
 
                     for song in &songs[song_start..end] {
-                        if song.ui(ui, style, &self.artist, max_track_length_width) {
+                        if song.ui(
+                            ui,
+                            style,
+                            &self.artist,
+                            max_track_length_width,
+                            playing_song == Some(&song.id),
+                        ) {
                             output = Some(&song.id);
                         }
                     }

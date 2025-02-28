@@ -80,6 +80,7 @@ impl Song {
         style: &style::Style,
         album_artist: &str,
         max_track_length_width: f32,
+        playing: bool,
     ) -> bool {
         let r = ui
             .horizontal(|ui| {
@@ -111,6 +112,8 @@ impl Song {
                             // the label a sense, which breaks propagation of sense upwards.
                             if self.was_hovered.load(std::sync::atomic::Ordering::Relaxed) {
                                 style.track_name_hovered()
+                            } else if playing {
+                                style.track_name_playing()
                             } else {
                                 style.track_name()
                             },
