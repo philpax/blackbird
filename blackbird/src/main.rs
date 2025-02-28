@@ -42,9 +42,16 @@ struct App {
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
 
-    current_song: Option<Vec<u8>>,
+    output_stream: rodio::OutputStream,
+    output_stream_handle: rodio::OutputStreamHandle,
+    sink: rodio::Sink,
+    playing_song: Option<PlayingSong>,
 
     error: Option<String>,
+}
+struct PlayingSong {
+    album_id: AlbumId,
+    song_id: SongId,
 }
 impl App {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
@@ -70,9 +77,14 @@ impl App {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
+        let (output_stream, output_stream_handle) = rodio::OutputStream::try_default().unwrap();
+        let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+        sink.set_volume(1.0);
+
         let client_thread = ClientThread::new(client);
         client_thread.request(ClientThreadRequest::Ping);
         client_thread.request(ClientThreadRequest::FetchAlbums);
+
         App {
             config,
             last_config_update: std::time::Instant::now(),
@@ -85,7 +97,10 @@ impl App {
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
 
-            current_song: None,
+            output_stream,
+            output_stream_handle,
+            sink,
+            playing_song: None,
 
             error: None,
         }
@@ -183,9 +198,13 @@ impl App {
                         ),
                     );
                 }
-                ClientThreadResponse::Song(song_id, song) => {
+                ClientThreadResponse::Song(album_id, song_id, data) => {
                     tracing::info!("fetched song {song_id}");
-                    self.current_song = Some(song);
+                    self.playing_song = Some(PlayingSong { album_id, song_id });
+                    self.sink.clear();
+                    self.sink
+                        .append(rodio::Decoder::new(std::io::Cursor::new(data)).unwrap());
+                    self.sink.play();
                 }
             }
         }
@@ -309,8 +328,10 @@ impl eframe::App for App {
                                         "{} - {} - {} ({song_id})",
                                         album.artist, album.name, song.title
                                     );
-                                    self.client_thread
-                                        .request(ClientThreadRequest::FetchSong(song_id.clone()));
+                                    self.client_thread.request(ClientThreadRequest::FetchSong(
+                                        album.id.clone(),
+                                        song_id.clone(),
+                                    ));
                                 }
 
                                 ui.add_space(row_height * album_margin_bottom_row_count as f32);
@@ -355,14 +376,14 @@ enum ClientThreadRequest {
     FetchAlbums,
     FetchAlbum(AlbumId),
     FetchCoverArt(String),
-    FetchSong(SongId),
+    FetchSong(AlbumId, SongId),
 }
 enum ClientThreadResponse {
     Ping,
     Albums(Vec<bs::AlbumID3>),
     Album(Box<bs::AlbumWithSongsID3>),
     CoverArt(String, Vec<u8>),
-    Song(SongId, Vec<u8>),
+    Song(AlbumId, SongId, Vec<u8>),
     Error(String),
 }
 impl ClientThread {
@@ -417,10 +438,10 @@ impl ClientThread {
                                 ClientThreadResponse::CoverArt(cover_art_id, cover_art)
                             });
                         }
-                        ClientThreadRequest::FetchSong(song_id) => {
+                        ClientThreadRequest::FetchSong(album_id, song_id) => {
                             let song = client.download(&song_id.0).await;
                             send_result(response_tx, song, |song| {
-                                ClientThreadResponse::Song(song_id, song)
+                                ClientThreadResponse::Song(album_id, song_id, song)
                             });
                         }
                     }
