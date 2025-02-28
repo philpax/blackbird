@@ -220,83 +220,107 @@ impl eframe::App for App {
             }
         }
 
-        egui::CentralPanel::default().show(ctx, |ui| {
-            let row_height = ui.text_style_height(&egui::TextStyle::Body);
-            let album_margin_bottom_row_count = 1;
-            let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
+        let margin = 8;
+        let scroll_margin = 4;
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .inner_margin(egui::Margin {
+                        left: margin,
+                        right: scroll_margin,
+                        top: margin,
+                        bottom: margin,
+                    })
+                    .fill(self.config.style.background()),
+            )
+            .show(ctx, |ui| {
+                let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                let album_margin_bottom_row_count = 1;
+                let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
 
-            egui::ScrollArea::vertical().auto_shrink(false).show_rows(
-                ui,
-                row_height,
-                num_rows,
-                |ui, visible_row_range| {
-                    let mut current_row = 0;
-                    for album in &self.albums {
-                        let album_lines = album.line_count() + album_margin_bottom_row_count;
-                        let album_range = current_row..(current_row + album_lines);
+                ui.scope(|ui| {
+                    // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
+                    // to 0, but egui doesn't allow that for solid scroll bars.
+                    ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
+                        bar_inner_margin: scroll_margin.into(),
+                        ..egui::style::ScrollStyle::solid()
+                    };
+                    ui.style_mut().visuals.extreme_bg_color = self.config.style.background();
+                    egui::ScrollArea::vertical().auto_shrink(false).show_rows(
+                        ui,
+                        row_height,
+                        num_rows,
+                        |ui, visible_row_range| {
+                            let mut current_row = 0;
+                            for album in &self.albums {
+                                let album_lines =
+                                    album.line_count() + album_margin_bottom_row_count;
+                                let album_range = current_row..(current_row + album_lines);
 
-                        // If this album starts after the visible range, we can break out.
-                        if album_range.start >= visible_row_range.end {
-                            break;
-                        }
-
-                        // If this album is completely above the visible range, skip it.
-                        if album_range.end <= visible_row_range.start {
-                            current_row += album_lines;
-                            continue;
-                        }
-
-                        if self.does_album_need_fetching(&album.id) {
-                            fetch_set.insert(album.id.clone());
-                        }
-
-                        if self.config.general.album_art_enabled {
-                            if let Some(cover_art_id) = &album.cover_art_id {
-                                if self.does_cover_art_need_fetching(cover_art_id) {
-                                    cover_art_fetch_set.insert(cover_art_id.clone());
+                                // If this album starts after the visible range, we can break out.
+                                if album_range.start >= visible_row_range.end {
+                                    break;
                                 }
+
+                                // If this album is completely above the visible range, skip it.
+                                if album_range.end <= visible_row_range.start {
+                                    current_row += album_lines;
+                                    continue;
+                                }
+
+                                if self.does_album_need_fetching(&album.id) {
+                                    fetch_set.insert(album.id.clone());
+                                }
+
+                                if self.config.general.album_art_enabled {
+                                    if let Some(cover_art_id) = &album.cover_art_id {
+                                        if self.does_cover_art_need_fetching(cover_art_id) {
+                                            cover_art_fetch_set.insert(cover_art_id.clone());
+                                        }
+                                    }
+                                }
+
+                                // Compute the visible portion of the album's rows, rebased to the album.
+                                let local_start =
+                                    visible_row_range.start.saturating_sub(current_row);
+                                let local_end = (visible_row_range.end - current_row)
+                                    .min(album_lines - album_margin_bottom_row_count);
+                                let local_visible_range = local_start..local_end;
+
+                                let clicked_song_id = album.ui(
+                                    ui,
+                                    &self.config.style,
+                                    local_visible_range,
+                                    album.cover_art_id.as_deref().and_then(|id| {
+                                        self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
+                                    }),
+                                    self.config.general.album_art_enabled,
+                                );
+
+                                if let Some(song_id) = clicked_song_id {
+                                    let song = album
+                                        .songs
+                                        .as_ref()
+                                        .unwrap()
+                                        .iter()
+                                        .find(|s| s.id == *song_id)
+                                        .unwrap();
+                                    println!(
+                                        "{} - {} - {} ({song_id})",
+                                        album.artist, album.name, song.title
+                                    );
+                                    self.client_thread
+                                        .request(ClientThreadRequest::FetchSong(song_id.clone()));
+                                }
+
+                                ui.add_space(row_height * album_margin_bottom_row_count as f32);
+
+                                current_row += album_lines;
                             }
-                        }
-
-                        // Compute the visible portion of the album's rows, rebased to the album.
-                        let local_start = visible_row_range.start.saturating_sub(current_row);
-                        let local_end = (visible_row_range.end - current_row)
-                            .min(album_lines - album_margin_bottom_row_count);
-                        let local_visible_range = local_start..local_end;
-
-                        let clicked_song_id = album.ui(
-                            ui,
-                            &self.config.style,
-                            local_visible_range,
-                            album.cover_art_id.as_deref().and_then(|id| {
-                                self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
-                            }),
-                            self.config.general.album_art_enabled,
-                        );
-
-                        if let Some(song_id) = clicked_song_id {
-                            let song = album
-                                .songs
-                                .as_ref()
-                                .unwrap()
-                                .iter()
-                                .find(|s| s.id == *song_id)
-                                .unwrap();
-                            println!(
-                                "{} - {} - {} ({song_id})",
-                                album.artist, album.name, song.title
-                            );
-                            self.client_thread
-                                .request(ClientThreadRequest::FetchSong(song_id.clone()));
-                        }
-
-                        ui.add_space(row_height * album_margin_bottom_row_count as f32);
-
-                        current_row += album_lines;
-                    }
-                },
-            );
-        });
+                        },
+                    );
+                });
+            });
 
         // pad fetch_set up to MAX_CONCURRENT_ALBUM_REQUESTS
         // by adding album IDs in order until we have enough
