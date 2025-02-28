@@ -39,7 +39,7 @@ impl From<bs::Child> for Song {
         Song {
             id: SongId(child.id),
             title: child.title,
-            artist: child.artist,
+            artist: child.artist.filter(|a| a != "[Unknown Artist]"),
             track: child.track,
             year: child.year,
             _genre: child.genre,
