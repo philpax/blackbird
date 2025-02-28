@@ -45,6 +45,7 @@ pub struct General {
     pub username: String,
     pub password: String,
     pub album_art_enabled: bool,
+    pub repaint_secs: f32,
 }
 impl Default for General {
     fn default() -> Self {
@@ -53,6 +54,7 @@ impl Default for General {
             username: "YOUR_USERNAME".to_string(),
             password: "YOUR_PASSWORD".to_string(),
             album_art_enabled: true,
+            repaint_secs: 1.0,
         }
     }
 }

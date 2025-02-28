@@ -432,7 +432,7 @@ impl eframe::App for App {
             self.fetch_cover_art(cover_art_id);
         }
 
-        ctx.request_repaint_after_secs(0.05);
+        ctx.request_repaint_after_secs(self.config.general.repaint_secs);
     }
 }
 
