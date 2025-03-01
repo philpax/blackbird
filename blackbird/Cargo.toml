@@ -21,3 +21,4 @@ image = { version = "0.25", default-features = false, features = [
     "png",
 ] }
 rodio = "0.20.1"
+egui-phosphor = "0.9.0"

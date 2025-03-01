@@ -52,6 +52,7 @@ struct App {
 struct PlayingSong {
     album_id: AlbumId,
     song_id: SongId,
+    data: Vec<u8>,
 }
 impl App {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
@@ -74,6 +75,11 @@ impl App {
             style.visuals.panel_fill = config.style.background();
             style.visuals.override_text_color = Some(config.style.text());
         });
+
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
+        cc.egui_ctx.set_fonts(fonts);
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
@@ -200,7 +206,11 @@ impl App {
                 }
                 ClientThreadResponse::Song(album_id, song_id, data) => {
                     tracing::info!("fetched song {song_id}");
-                    self.playing_song = Some(PlayingSong { album_id, song_id });
+                    self.playing_song = Some(PlayingSong {
+                        album_id,
+                        song_id,
+                        data: data.clone(),
+                    });
                     self.sink.clear();
                     self.sink
                         .append(rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap());
@@ -253,69 +263,123 @@ impl eframe::App for App {
                     .fill(self.config.style.background()),
             )
             .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
-                    if let Some(playing_song) = &self.playing_song {
-                        let album = self
-                            .album_id_to_idx
-                            .get(&playing_song.album_id)
-                            .and_then(|id| self.albums.get(*id));
-                        if let Some(album) = album {
-                            ui.horizontal(|ui| {
-                                if let Some(song) = album.songs.as_ref().and_then(|songs| {
-                                    songs.iter().find(|s| s.id == playing_song.song_id)
-                                }) {
-                                    if let Some(artist) =
-                                        song.artist.as_ref().filter(|a| **a != album.artist)
-                                    {
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.vertical(|ui| {
+                            ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+                            if let Some(playing_song) = &self.playing_song {
+                                let album = self
+                                    .album_id_to_idx
+                                    .get(&playing_song.album_id)
+                                    .and_then(|id| self.albums.get(*id));
+                                if let Some(album) = album {
+                                    ui.horizontal(|ui| {
+                                        if let Some(song) = album.songs.as_ref().and_then(|songs| {
+                                            songs.iter().find(|s| s.id == playing_song.song_id)
+                                        }) {
+                                            if let Some(artist) =
+                                                song.artist.as_ref().filter(|a| **a != album.artist)
+                                            {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(artist)
+                                                            .color(style::string_to_colour(artist)),
+                                                    )
+                                                    .selectable(false),
+                                                );
+                                                ui.add(egui::Label::new(" - ").selectable(false));
+                                            }
+                                            ui.add(egui::Label::new(&song.title).selectable(false));
+                                        } else {
+                                            ui.add(
+                                                egui::Label::new("Song not found")
+                                                    .selectable(false),
+                                            );
+                                        }
+                                    });
+                                    ui.horizontal(|ui| {
                                         ui.add(
                                             egui::Label::new(
-                                                egui::RichText::new(artist)
-                                                    .color(style::string_to_colour(artist)),
+                                                egui::RichText::new(&album.name)
+                                                    .color(self.config.style.album()),
                                             )
                                             .selectable(false),
                                         );
-                                        ui.add(egui::Label::new(" - ").selectable(false));
-                                    }
-                                    ui.add(egui::Label::new(&song.title).selectable(false));
+                                        ui.add(egui::Label::new(" by ").selectable(false));
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&album.artist)
+                                                    .color(style::string_to_colour(&album.artist)),
+                                            )
+                                            .selectable(false),
+                                        );
+                                    });
                                 } else {
-                                    ui.add(egui::Label::new("Song not found").selectable(false));
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::Label::new("Album not found").selectable(false),
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Label::new("That's a bug!").selectable(false));
+                                    });
                                 }
-                            });
-                            ui.horizontal(|ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&album.name)
-                                            .color(self.config.style.album()),
-                                    )
-                                    .selectable(false),
-                                );
-                                ui.add(egui::Label::new(" by ").selectable(false));
-                                ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(&album.artist)
-                                            .color(style::string_to_colour(&album.artist)),
-                                    )
-                                    .selectable(false),
-                                );
-                            });
-                        } else {
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Label::new("Album not found").selectable(false));
-                            });
-                            ui.horizontal(|ui| {
-                                ui.add(egui::Label::new("That's a bug!").selectable(false));
-                            });
-                        }
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.add(egui::Label::new("Nothing playing").selectable(false));
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.add(egui::Label::new("Nothing playing").selectable(false));
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::Label::new("Double-click a song to play it!")
+                                            .selectable(false),
+                                    );
+                                });
+                            }
                         });
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Label::new("Double-click a song to play it!")
-                                    .selectable(false),
-                            );
+                    });
+
+                    if let Some(playing_song) = &self.playing_song {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.style_mut().visuals.override_text_color = None;
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(egui_phosphor::regular::STOP)
+                                            .size(32.0),
+                                    )
+                                    .selectable(false)
+                                    .sense(egui::Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                self.sink.clear();
+                            }
+                            if ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new(egui_phosphor::regular::PLAY_PAUSE)
+                                            .size(32.0),
+                                    )
+                                    .selectable(false)
+                                    .sense(egui::Sense::click()),
+                                )
+                                .clicked()
+                            {
+                                if self.sink.empty() {
+                                    self.sink.append(
+                                        rodio::Decoder::new_looped(std::io::Cursor::new(
+                                            playing_song.data.clone(),
+                                        ))
+                                        .unwrap(),
+                                    );
+                                }
+
+                                if self.sink.is_paused() {
+                                    self.sink.play();
+                                } else {
+                                    self.sink.pause();
+                                }
+                            }
                         });
                     }
                 });
