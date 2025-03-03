@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    future::Future,
+    pin::Pin,
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use blackbird_subsonic as bs;
@@ -33,42 +35,13 @@ fn main() {
 struct App {
     config: Config,
     last_config_update: std::time::Instant,
-    client_thread: ClientThread,
-
-    albums: Vec<Album>,
-    album_id_to_idx: HashMap<AlbumId, usize>,
-    pending_album_request_ids: HashSet<AlbumId>,
-
-    cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
-    pending_cover_art_requests: HashSet<String>,
-
-    _output_stream: rodio::OutputStream,
-    _output_stream_handle: rodio::OutputStreamHandle,
-    sink: rodio::Sink,
-    playing_song: Option<PlayingSong>,
-
-    error: Option<String>,
+    logic_thread: AppLogic,
 }
-struct PlayingSong {
-    album_id: AlbumId,
-    song_id: SongId,
-    data: Vec<u8>,
-}
+
 impl App {
-    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
-    const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
-    const MAX_COVER_ART_CACHE_SIZE: usize = 32;
-
     fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let config = Config::load();
         config.save();
-
-        let client = bs::Client::new(
-            config.general.base_url.clone(),
-            config.general.username.clone(),
-            config.general.password.clone(),
-            "blackbird".to_string(),
-        );
 
         cc.egui_ctx.set_visuals(egui::Visuals::dark());
         cc.egui_ctx.style_mut(|style| {
@@ -83,140 +56,20 @@ impl App {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let (output_stream, output_stream_handle) = rodio::OutputStream::try_default().unwrap();
-        let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
-        sink.set_volume(1.0);
-
-        let client_thread = ClientThread::new(client);
-        client_thread.request(ClientThreadRequest::Ping);
-        client_thread.request(ClientThreadRequest::FetchAlbums);
+        let logic_thread = AppLogic::new(
+            bs::Client::new(
+                config.general.base_url.clone(),
+                config.general.username.clone(),
+                config.general.password.clone(),
+                "blackbird".to_string(),
+            ),
+            cc.egui_ctx.clone(),
+        );
 
         App {
             config,
             last_config_update: std::time::Instant::now(),
-            client_thread,
-
-            albums: vec![],
-            album_id_to_idx: HashMap::new(),
-            pending_album_request_ids: HashSet::new(),
-
-            cover_art_cache: HashMap::new(),
-            pending_cover_art_requests: HashSet::new(),
-
-            _output_stream: output_stream,
-            _output_stream_handle: output_stream_handle,
-            sink,
-            playing_song: None,
-
-            error: None,
-        }
-    }
-
-    fn fetch_album(&mut self, album_id: AlbumId) {
-        if self.pending_album_request_ids.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
-            return;
-        }
-        self.client_thread
-            .request(ClientThreadRequest::FetchAlbum(album_id.clone()));
-        self.pending_album_request_ids.insert(album_id);
-    }
-
-    fn does_album_need_fetching(&self, album_id: &AlbumId) -> bool {
-        !self.pending_album_request_ids.contains(album_id)
-            && self.albums[self.album_id_to_idx[album_id]].songs.is_none()
-    }
-
-    fn fetch_cover_art(&mut self, cover_art_id: String) {
-        if self.pending_cover_art_requests.len() >= Self::MAX_CONCURRENT_COVER_ART_REQUESTS {
-            return;
-        }
-        self.client_thread
-            .request(ClientThreadRequest::FetchCoverArt(cover_art_id.clone()));
-        self.pending_cover_art_requests.insert(cover_art_id);
-    }
-
-    fn does_cover_art_need_fetching(&self, cover_art_id: &String) -> bool {
-        !self.pending_cover_art_requests.contains(cover_art_id)
-            && !self.cover_art_cache.contains_key(cover_art_id)
-    }
-
-    fn process_responses(&mut self) {
-        for response in self.client_thread.recv_iter() {
-            match response {
-                ClientThreadResponse::Ping => {
-                    tracing::info!("successfully pinged Subsonic server");
-                }
-                ClientThreadResponse::Error(error) => {
-                    tracing::error!("client thread error: {error}");
-                    self.error = Some(error)
-                }
-                ClientThreadResponse::Albums(albums) => {
-                    tracing::info!("fetched {} albums", albums.len());
-                    self.albums = albums.into_iter().map(|a| a.into()).collect();
-                    self.albums.sort();
-                    self.album_id_to_idx = self
-                        .albums
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| (a.id.clone(), i))
-                        .collect();
-                }
-                ClientThreadResponse::Album(album) => {
-                    tracing::trace!(
-                        "fetched album {} - {} ({})",
-                        album.album.artist.as_deref().unwrap_or("Unknown Artist"),
-                        album.album.name,
-                        album.album.id
-                    );
-                    let id = AlbumId(album.album.id.clone());
-                    let idx = self
-                        .album_id_to_idx
-                        .get(&id)
-                        .unwrap_or_else(|| panic!("Album ID `{id}` not found in album list"));
-                    self.albums[*idx].songs =
-                        Some(album.song.into_iter().map(|s| s.into()).collect());
-                    self.pending_album_request_ids.remove(&id);
-                }
-                ClientThreadResponse::CoverArt(cover_art_id, cover_art) => {
-                    tracing::info!("fetched cover art {cover_art_id}");
-                    if self.cover_art_cache.len() == Self::MAX_COVER_ART_CACHE_SIZE {
-                        let oldest_id = self
-                            .cover_art_cache
-                            .iter()
-                            .min_by_key(|(_, (_, time))| *time)
-                            .map(|(id, _)| id.clone())
-                            .expect("cover art cache not empty");
-
-                        self.cover_art_cache.remove(&oldest_id);
-                        tracing::info!("evicted cover art {oldest_id}");
-                    }
-
-                    let uri = format!("bytes://{cover_art_id}");
-                    self.pending_cover_art_requests.remove(&cover_art_id);
-                    self.cover_art_cache.insert(
-                        cover_art_id,
-                        (
-                            egui::ImageSource::Bytes {
-                                uri: uri.into(),
-                                bytes: cover_art.into(),
-                            },
-                            std::time::Instant::now(),
-                        ),
-                    );
-                }
-                ClientThreadResponse::Song(album_id, song_id, data) => {
-                    tracing::info!("fetched song {song_id}");
-                    self.playing_song = Some(PlayingSong {
-                        album_id,
-                        song_id,
-                        data: data.clone(),
-                    });
-                    self.sink.clear();
-                    self.sink
-                        .append(rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap());
-                    self.sink.play();
-                }
-            }
+            logic_thread,
         }
     }
 
@@ -231,21 +84,18 @@ impl App {
         }
     }
 }
+
 impl eframe::App for App {
-    fn update(&mut self, ctx: &eframe::egui::Context, _frame: &mut eframe::Frame) {
-        self.process_responses();
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_for_config_updates();
 
-        let mut fetch_set = HashSet::new();
-        let mut cover_art_fetch_set = HashSet::new();
-
-        if let Some(error) = &self.error {
+        if let Some(error) = self.logic_thread.get_error() {
             let mut open = true;
             egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
-                ui.label(error);
+                ui.label(&error);
             });
             if !open {
-                self.error = None;
+                self.logic_thread.clear_error();
             }
         }
 
@@ -267,63 +117,49 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.vertical(|ui| {
                             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
-                            if let Some(playing_song) = &self.playing_song {
-                                let album = self
-                                    .album_id_to_idx
-                                    .get(&playing_song.album_id)
-                                    .and_then(|id| self.albums.get(*id));
-                                if let Some(album) = album {
-                                    ui.horizontal(|ui| {
-                                        if let Some(song) = album.songs.as_ref().and_then(|songs| {
-                                            songs.iter().find(|s| s.id == playing_song.song_id)
-                                        }) {
-                                            if let Some(artist) =
-                                                song.artist.as_ref().filter(|a| **a != album.artist)
-                                            {
-                                                ui.add(
-                                                    egui::Label::new(
-                                                        egui::RichText::new(artist)
-                                                            .color(style::string_to_colour(artist)),
-                                                    )
-                                                    .selectable(false),
-                                                );
-                                                ui.add(egui::Label::new(" - ").selectable(false));
-                                            }
-                                            ui.add(egui::Label::new(&song.title).selectable(false));
-                                        } else {
+                            if let Some((album, song_id)) = self.logic_thread.get_playing_info() {
+                                ui.horizontal(|ui| {
+                                    if let Some(song) = album
+                                        .songs
+                                        .as_ref()
+                                        .and_then(|s| s.iter().find(|s| s.id == song_id))
+                                    {
+                                        if let Some(artist) =
+                                            song.artist.as_ref().filter(|a| **a != album.artist)
+                                        {
                                             ui.add(
-                                                egui::Label::new("Song not found")
-                                                    .selectable(false),
+                                                egui::Label::new(
+                                                    egui::RichText::new(artist)
+                                                        .color(style::string_to_colour(artist)),
+                                                )
+                                                .selectable(false),
                                             );
+                                            ui.add(egui::Label::new(" - ").selectable(false));
                                         }
-                                    });
-                                    ui.horizontal(|ui| {
+                                        ui.add(egui::Label::new(&song.title).selectable(false));
+                                    } else {
                                         ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(&album.name)
-                                                    .color(self.config.style.album()),
-                                            )
-                                            .selectable(false),
+                                            egui::Label::new("Song not found").selectable(false),
                                         );
-                                        ui.add(egui::Label::new(" by ").selectable(false));
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(&album.artist)
-                                                    .color(style::string_to_colour(&album.artist)),
-                                            )
-                                            .selectable(false),
-                                        );
-                                    });
-                                } else {
-                                    ui.horizontal(|ui| {
-                                        ui.add(
-                                            egui::Label::new("Album not found").selectable(false),
-                                        );
-                                    });
-                                    ui.horizontal(|ui| {
-                                        ui.add(egui::Label::new("That's a bug!").selectable(false));
-                                    });
-                                }
+                                    }
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&album.name)
+                                                .color(self.config.style.album()),
+                                        )
+                                        .selectable(false),
+                                    );
+                                    ui.add(egui::Label::new(" by ").selectable(false));
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&album.artist)
+                                                .color(style::string_to_colour(&album.artist)),
+                                        )
+                                        .selectable(false),
+                                    );
+                                });
                             } else {
                                 ui.horizontal(|ui| {
                                     ui.add(egui::Label::new("Nothing playing").selectable(false));
@@ -338,7 +174,7 @@ impl eframe::App for App {
                         });
                     });
 
-                    if let Some(playing_song) = &self.playing_song {
+                    if self.logic_thread.is_song_loaded() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.style_mut().visuals.override_text_color = None;
                             if ui
@@ -352,7 +188,7 @@ impl eframe::App for App {
                                 )
                                 .clicked()
                             {
-                                self.sink.clear();
+                                self.logic_thread.stop_playback();
                             }
                             if ui
                                 .add(
@@ -365,20 +201,7 @@ impl eframe::App for App {
                                 )
                                 .clicked()
                             {
-                                if self.sink.empty() {
-                                    self.sink.append(
-                                        rodio::Decoder::new_looped(std::io::Cursor::new(
-                                            playing_song.data.clone(),
-                                        ))
-                                        .unwrap(),
-                                    );
-                                }
-
-                                if self.sink.is_paused() {
-                                    self.sink.play();
-                                } else {
-                                    self.sink.pause();
-                                }
+                                self.logic_thread.toggle_playback();
                             }
                         });
                     }
@@ -397,204 +220,475 @@ impl eframe::App for App {
 
                     let row_height = ui.text_style_height(&egui::TextStyle::Body);
                     let album_margin_bottom_row_count = 1;
-                    let num_rows = self.albums.iter().map(|album| album.line_count()).sum();
+
+                    // Get album data for rendering
+                    let num_rows = self
+                        .logic_thread
+                        .calculate_total_rows(album_margin_bottom_row_count);
+
                     egui::ScrollArea::vertical().auto_shrink(false).show_rows(
                         ui,
                         row_height,
                         num_rows,
                         |ui, visible_row_range| {
-                            let mut current_row = 0;
-                            for album in &self.albums {
+                            // Calculate which albums are in view
+                            let visible_albums = self.logic_thread.get_visible_albums(
+                                visible_row_range.clone(),
+                                album_margin_bottom_row_count,
+                            );
+
+                            let playing_song_id = self.logic_thread.get_playing_song_id();
+
+                            let mut current_row = visible_albums.start_row;
+
+                            for album in visible_albums.albums {
                                 let album_lines =
                                     album.line_count() + album_margin_bottom_row_count;
-                                let album_range = current_row..(current_row + album_lines);
 
-                                // If this album starts after the visible range, we can break out.
-                                if album_range.start >= visible_row_range.end {
-                                    break;
+                                // If the album needs to be loaded
+                                if album.songs.is_none() {
+                                    self.logic_thread.fetch_album(&album.id);
                                 }
 
-                                // If this album is completely above the visible range, skip it.
-                                if album_range.end <= visible_row_range.start {
-                                    current_row += album_lines;
-                                    continue;
-                                }
-
-                                if self.does_album_need_fetching(&album.id) {
-                                    fetch_set.insert(album.id.clone());
-                                }
-
+                                // Handle cover art if enabled
                                 if self.config.general.album_art_enabled {
                                     if let Some(cover_art_id) = &album.cover_art_id {
-                                        if self.does_cover_art_need_fetching(cover_art_id) {
-                                            cover_art_fetch_set.insert(cover_art_id.clone());
+                                        if !self.logic_thread.has_cover_art(cover_art_id) {
+                                            self.logic_thread.fetch_cover_art(cover_art_id);
                                         }
                                     }
                                 }
 
-                                // Compute the visible portion of the album's rows, rebased to the album.
+                                // Compute the visible portion of the album's rows, rebased to the album
                                 let local_start =
                                     visible_row_range.start.saturating_sub(current_row);
-                                let local_end = (visible_row_range.end - current_row)
+                                let local_end = visible_row_range
+                                    .end
+                                    .saturating_sub(current_row)
                                     .min(album_lines - album_margin_bottom_row_count);
-                                let local_visible_range = local_start..local_end;
 
+                                // Ensure we have a valid range (start <= end)
+                                let local_visible_range = local_start..local_end.max(local_start);
+
+                                // Get cover art if needed
+                                let cover_art = if self.config.general.album_art_enabled {
+                                    album
+                                        .cover_art_id
+                                        .as_deref()
+                                        .and_then(|id| self.logic_thread.get_cover_art(id))
+                                } else {
+                                    None
+                                };
+
+                                // Display the album
                                 let clicked_song_id = album.ui(
                                     ui,
                                     &self.config.style,
                                     local_visible_range,
-                                    album.cover_art_id.as_deref().and_then(|id| {
-                                        self.cover_art_cache.get(id).map(|(img, _)| img).cloned()
-                                    }),
+                                    cover_art,
                                     self.config.general.album_art_enabled,
-                                    self.playing_song.as_ref().map(|s| &s.song_id),
+                                    playing_song_id.as_ref(),
                                 );
 
+                                // Handle song selection
                                 if let Some(song_id) = clicked_song_id {
-                                    let song = album
-                                        .songs
-                                        .as_ref()
-                                        .unwrap()
-                                        .iter()
-                                        .find(|s| s.id == *song_id)
-                                        .unwrap();
-                                    println!(
-                                        "{} - {} - {} ({song_id})",
-                                        album.artist, album.name, song.title
-                                    );
-                                    self.client_thread.request(ClientThreadRequest::FetchSong(
-                                        album.id.clone(),
-                                        song_id.clone(),
-                                    ));
+                                    if let Some(songs) = &album.songs {
+                                        if let Some(song) = songs.iter().find(|s| s.id == *song_id)
+                                        {
+                                            println!(
+                                                "{} - {} - {} ({song_id})",
+                                                album.artist, album.name, song.title
+                                            );
+                                            self.logic_thread.play_song(&album.id, song_id);
+                                        }
+                                    }
                                 }
 
                                 ui.add_space(row_height * album_margin_bottom_row_count as f32);
-
                                 current_row += album_lines;
                             }
                         },
                     );
                 });
             });
-
-        // pad fetch_set up to MAX_CONCURRENT_ALBUM_REQUESTS
-        // by adding album IDs in order until we have enough
-        for album in &self.albums {
-            if fetch_set.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
-                break;
-            }
-            if self.does_album_need_fetching(&album.id) {
-                fetch_set.insert(album.id.clone());
-            }
-        }
-
-        for album_id in fetch_set {
-            self.fetch_album(album_id);
-        }
-
-        for cover_art_id in cover_art_fetch_set {
-            self.fetch_cover_art(cover_art_id);
-        }
-
-        ctx.request_repaint_after_secs(self.config.general.repaint_secs);
     }
 }
 
-struct ClientThread {
-    _thread: std::thread::JoinHandle<()>,
-    request_tx: std::sync::mpsc::Sender<ClientThreadRequest>,
-    response_rx: std::sync::mpsc::Receiver<ClientThreadResponse>,
+struct PlayingSong {
+    album_id: AlbumId,
+    song_id: SongId,
+    data: Vec<u8>,
 }
-enum ClientThreadRequest {
-    Ping,
-    FetchAlbums,
-    FetchAlbum(AlbumId),
-    FetchCoverArt(String),
-    FetchSong(AlbumId, SongId),
+
+struct AppState {
+    albums: Vec<Album>,
+    album_id_to_idx: HashMap<AlbumId, usize>,
+    pending_album_request_ids: HashSet<AlbumId>,
+
+    cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
+    pending_cover_art_requests: HashSet<String>,
+
+    sink: rodio::Sink,
+    playing_song: Option<PlayingSong>,
+
+    error: Option<String>,
 }
-enum ClientThreadResponse {
-    Ping,
-    Albums(Vec<bs::AlbumID3>),
-    Album(Box<bs::AlbumWithSongsID3>),
-    CoverArt(String, Vec<u8>),
-    Song(AlbumId, SongId, Vec<u8>),
-    Error(String),
+
+struct VisibleAlbumSet {
+    albums: Vec<Album>,
+    start_row: usize,
 }
-impl ClientThread {
-    fn new(client: bs::Client) -> Self {
-        let (request_tx, request_rx) = std::sync::mpsc::channel();
-        let (response_tx, response_rx) = std::sync::mpsc::channel();
+
+struct AppLogic {
+    tokio_tx: tokio::sync::mpsc::Sender<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+    _thread_handle: std::thread::JoinHandle<()>,
+    _output_stream: rodio::OutputStream,
+    _output_stream_handle: rodio::OutputStreamHandle,
+    state: Arc<RwLock<AppState>>,
+    client: Arc<bs::Client>,
+    ctx: egui::Context,
+}
+
+impl AppLogic {
+    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
+    const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
+    const MAX_COVER_ART_CACHE_SIZE: usize = 32;
+
+    fn new(client: bs::Client, ctx: egui::Context) -> Self {
+        // Initialize audio output
+        let (output_stream, output_stream_handle) = rodio::OutputStream::try_default().unwrap();
+        let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+        sink.set_volume(1.0);
+
+        let state = Arc::new(RwLock::new(AppState {
+            albums: vec![],
+            album_id_to_idx: HashMap::new(),
+            pending_album_request_ids: HashSet::new(),
+            cover_art_cache: HashMap::new(),
+            pending_cover_art_requests: HashSet::new(),
+            sink,
+            playing_song: None,
+            error: None,
+        }));
+
         let client = Arc::new(client);
-        let thread = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .build()
-                .unwrap();
 
-            fn send_result<T, E, F>(
-                response_tx: std::sync::mpsc::Sender<ClientThreadResponse>,
-                result: Result<T, E>,
-                f: F,
-            ) where
-                E: std::fmt::Display,
-                F: FnOnce(T) -> ClientThreadResponse,
-            {
-                let response = match result {
-                    Ok(value) => f(value),
-                    Err(e) => ClientThreadResponse::Error(e.to_string()),
-                };
-                response_tx.send(response).unwrap();
-            }
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let (tokio_tx, mut tokio_rx) = tokio::sync::mpsc::channel(100);
 
-            loop {
-                let request = request_rx.recv().unwrap();
-                let response_tx = response_tx.clone();
-                let client = client.clone();
-
-                runtime.spawn(async move {
-                    match request {
-                        ClientThreadRequest::Ping => {
-                            send_result(response_tx, client.ping().await, |_| {
-                                ClientThreadResponse::Ping
-                            });
-                        }
-                        ClientThreadRequest::FetchAlbums => {
-                            let albums = album::fetch_all_raw(&client).await;
-                            send_result(response_tx, albums, ClientThreadResponse::Albums);
-                        }
-                        ClientThreadRequest::FetchAlbum(album_id) => {
-                            let album = client.get_album_with_songs(album_id.0).await.map(Box::new);
-                            send_result(response_tx, album, ClientThreadResponse::Album);
-                        }
-                        ClientThreadRequest::FetchCoverArt(cover_art_id) => {
-                            let cover_art = client.get_cover_art(&cover_art_id).await;
-                            send_result(response_tx, cover_art, |cover_art| {
-                                ClientThreadResponse::CoverArt(cover_art_id, cover_art)
-                            });
-                        }
-                        ClientThreadRequest::FetchSong(album_id, song_id) => {
-                            let song = client.download(&song_id.0).await;
-                            send_result(response_tx, song, |song| {
-                                ClientThreadResponse::Song(album_id, song_id, song)
-                            });
-                        }
-                    }
-                });
-            }
+        // Create a thread for background processing
+        let thread_handle = std::thread::spawn(move || {
+            runtime.block_on(async {
+                while let Some(task) = tokio_rx.recv().await {
+                    tokio::spawn(task);
+                }
+            });
         });
 
-        ClientThread {
-            _thread: thread,
-            request_tx,
-            response_rx,
+        let logic = AppLogic {
+            tokio_tx,
+            _thread_handle: thread_handle,
+            _output_stream: output_stream,
+            _output_stream_handle: output_stream_handle,
+            state,
+            client,
+            ctx,
+        };
+        logic.initial_fetch();
+        logic
+    }
+
+    fn spawn(&self, task: impl Future<Output = ()> + Send + Sync + 'static) {
+        self.tokio_tx.blocking_send(Box::pin(task)).unwrap();
+    }
+
+    fn initial_fetch(&self) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let ctx = self.ctx.clone();
+        self.spawn(async move {
+            if let Err(e) = client.ping().await {
+                state.write().unwrap().error = Some(e.to_string());
+                return;
+            }
+
+            match Album::fetch_all(&client).await {
+                Ok(albums) => {
+                    let mut state = state.write().unwrap();
+                    state.albums = albums;
+                    state.albums.sort();
+                    state.album_id_to_idx = state
+                        .albums
+                        .iter()
+                        .enumerate()
+                        .map(|(i, a)| (a.id.clone(), i))
+                        .collect();
+                }
+                Err(e) => {
+                    state.write().unwrap().error = Some(e.to_string());
+                    ctx.request_repaint();
+                }
+            };
+        })
+    }
+
+    fn calculate_total_rows(&self, album_margin_bottom_row_count: usize) -> usize {
+        self.read_state()
+            .albums
+            .iter()
+            .map(|album| album.line_count() + album_margin_bottom_row_count)
+            .sum()
+    }
+
+    fn get_visible_albums(
+        &self,
+        visible_row_range: std::ops::Range<usize>,
+        album_margin_bottom_row_count: usize,
+    ) -> VisibleAlbumSet {
+        let state = self.read_state();
+        let mut current_row = 0;
+        let mut visible_albums = Vec::new();
+        // We'll set this to the actual start row of first visible album
+        let mut start_row = 0;
+        let mut first_visible_found = false;
+
+        for album in &state.albums {
+            let album_lines = album.line_count() + album_margin_bottom_row_count;
+            let album_range = current_row..(current_row + album_lines);
+
+            // If this album starts after the visible range, we can break out
+            if album_range.start >= visible_row_range.end {
+                break;
+            }
+
+            // If this album is completely above the visible range, skip it
+            if album_range.end <= visible_row_range.start {
+                current_row += album_lines;
+                continue;
+            }
+
+            // Found first visible album - record its starting row
+            if !first_visible_found {
+                start_row = current_row;
+                first_visible_found = true;
+            }
+
+            visible_albums.push(album.clone());
+            current_row += album_lines;
+        }
+
+        VisibleAlbumSet {
+            albums: visible_albums,
+            start_row,
         }
     }
 
-    fn request(&self, request: ClientThreadRequest) {
-        self.request_tx.send(request).unwrap();
+    fn fetch_album(&self, album_id: &AlbumId) {
+        {
+            let mut state = self.write_state();
+            if state.pending_album_request_ids.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
+                return;
+            }
+            if state.pending_album_request_ids.contains(album_id) {
+                return;
+            }
+            state.pending_album_request_ids.insert(album_id.clone());
+        }
+
+        self.spawn({
+            let client = self.client.clone();
+            let state = self.state.clone();
+            let album_id = album_id.clone();
+            let ctx = self.ctx.clone();
+            async move {
+                match client.get_album_with_songs(album_id.0.clone()).await {
+                    Ok(album) => {
+                        let mut state = state.write().unwrap();
+                        let idx = match state.album_id_to_idx.get(&album_id) {
+                            Some(idx) => *idx,
+                            None => {
+                                state.pending_album_request_ids.remove(&album_id);
+                                return;
+                            }
+                        };
+                        state.albums[idx].songs =
+                            Some(album.song.into_iter().map(|s| s.into()).collect());
+                        state.pending_album_request_ids.remove(&album_id);
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        let mut state = state.write().unwrap();
+                        state.error = Some(e.to_string());
+                        state.pending_album_request_ids.remove(&album_id);
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        });
     }
 
-    fn recv_iter(&self) -> impl Iterator<Item = ClientThreadResponse> + use<'_> {
-        self.response_rx.try_iter()
+    fn fetch_cover_art(&self, cover_art_id: &str) {
+        {
+            let mut state = self.write_state();
+            if state.pending_cover_art_requests.len() >= Self::MAX_CONCURRENT_COVER_ART_REQUESTS {
+                return;
+            }
+            if state.pending_cover_art_requests.contains(cover_art_id) {
+                return;
+            }
+            state
+                .pending_cover_art_requests
+                .insert(cover_art_id.to_string());
+        }
+
+        self.spawn({
+            let client = self.client.clone();
+            let state = self.state.clone();
+            let cover_art_id = cover_art_id.to_string();
+            let ctx = self.ctx.clone();
+            async move {
+                match client.get_cover_art(&cover_art_id).await {
+                    Ok(cover_art) => {
+                        let mut state = state.write().unwrap();
+                        if state.cover_art_cache.len() == Self::MAX_COVER_ART_CACHE_SIZE {
+                            let oldest_id = state
+                                .cover_art_cache
+                                .iter()
+                                .min_by_key(|(_, (_, time))| *time)
+                                .map(|(id, _)| id.clone())
+                                .expect("cover art cache not empty");
+                            state.cover_art_cache.remove(&oldest_id);
+                        }
+
+                        let uri = format!("bytes://{cover_art_id}");
+                        state.pending_cover_art_requests.remove(&cover_art_id);
+                        state.cover_art_cache.insert(
+                            cover_art_id,
+                            (
+                                egui::ImageSource::Bytes {
+                                    uri: uri.into(),
+                                    bytes: cover_art.into(),
+                                },
+                                std::time::Instant::now(),
+                            ),
+                        );
+                        ctx.request_repaint();
+                    }
+                    Err(e) => {
+                        let mut state = state.write().unwrap();
+                        state.error = Some(e.to_string());
+                        state.pending_cover_art_requests.remove(&cover_art_id);
+                        ctx.request_repaint();
+                    }
+                }
+            }
+        });
+    }
+
+    fn play_song(&self, album_id: &AlbumId, song_id: &SongId) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let album_id = album_id.clone();
+        let song_id = song_id.clone();
+        let ctx = self.ctx.clone();
+
+        self.spawn(async move {
+            match client.download(&song_id.0).await {
+                Ok(data) => {
+                    let mut state = state.write().unwrap();
+                    state.playing_song = Some(PlayingSong {
+                        album_id,
+                        song_id,
+                        data: data.clone(),
+                    });
+                    state.sink.clear();
+                    state
+                        .sink
+                        .append(rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap());
+                    state.sink.play();
+                    ctx.request_repaint();
+                }
+                Err(e) => {
+                    let mut state = state.write().unwrap();
+                    state.error = Some(e.to_string());
+                    ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    fn toggle_playback(&self) {
+        let state = self.write_state();
+        if state.sink.is_paused() {
+            if let Some(playing_song) = &state.playing_song {
+                if state.sink.empty() {
+                    state.sink.append(
+                        rodio::Decoder::new_looped(std::io::Cursor::new(playing_song.data.clone()))
+                            .unwrap(),
+                    );
+                }
+                state.sink.play();
+            }
+        } else {
+            state.sink.pause();
+        }
+    }
+
+    fn stop_playback(&self) {
+        self.write_state().sink.clear();
+    }
+
+    fn get_cover_art(&self, id: &str) -> Option<egui::ImageSource<'static>> {
+        self.read_state()
+            .cover_art_cache
+            .get(id)
+            .map(|(img, _)| img.clone())
+    }
+
+    fn has_cover_art(&self, id: &str) -> bool {
+        let state = self.read_state();
+        state.cover_art_cache.contains_key(id) || state.pending_cover_art_requests.contains(id)
+    }
+
+    fn get_playing_song_id(&self) -> Option<SongId> {
+        self.read_state()
+            .playing_song
+            .as_ref()
+            .map(|s| s.song_id.clone())
+    }
+
+    fn is_song_loaded(&self) -> bool {
+        self.read_state().playing_song.is_some()
+    }
+
+    fn get_playing_info(&self) -> Option<(Album, SongId)> {
+        let state = self.read_state();
+        let playing = state.playing_song.as_ref()?;
+        Some((
+            state
+                .albums
+                .get(state.album_id_to_idx.get(&playing.album_id).cloned()?)
+                .cloned()?,
+            playing.song_id.clone(),
+        ))
+    }
+
+    fn get_error(&self) -> Option<String> {
+        self.read_state().error.clone()
+    }
+
+    fn clear_error(&self) {
+        self.write_state().error = None;
+    }
+
+    fn write_state(&self) -> RwLockWriteGuard<AppState> {
+        self.state.write().unwrap()
+    }
+
+    fn read_state(&self) -> RwLockReadGuard<AppState> {
+        self.state.read().unwrap()
     }
 }

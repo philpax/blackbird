@@ -1,4 +1,4 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::{atomic::AtomicBool, Arc};
 
 use crate::{album::AlbumId, bs, style, util};
 
@@ -10,7 +10,7 @@ impl std::fmt::Display for SongId {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// A song, as `blackbird` cares about it
 pub struct Song {
     /// The song ID
@@ -32,7 +32,7 @@ pub struct Song {
     /// The album ID
     pub _album_id: Option<AlbumId>,
 
-    was_hovered: AtomicBool,
+    was_hovered: Arc<AtomicBool>,
 }
 impl From<bs::Child> for Song {
     fn from(child: bs::Child) -> Self {
@@ -46,7 +46,7 @@ impl From<bs::Child> for Song {
             duration: child.duration,
             disc_number: child.disc_number,
             _album_id: child.album_id.map(AlbumId),
-            was_hovered: AtomicBool::new(false),
+            was_hovered: Arc::new(AtomicBool::new(false)),
         }
     }
 }

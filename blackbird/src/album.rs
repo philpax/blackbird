@@ -15,7 +15,7 @@ impl std::fmt::Display for AlbumId {
 }
 
 /// An album, as `blackbird` cares about it
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Album {
     /// The album ID
     pub id: AlbumId,
@@ -81,6 +81,29 @@ impl Ord for Album {
     }
 }
 impl Album {
+    /// Returns all albums; does not include songs.
+    pub async fn fetch_all(client: &bs::Client) -> anyhow::Result<Vec<Album>> {
+        let mut all_albums = vec![];
+        let mut offset = 0;
+        loop {
+            let albums = client
+                .get_album_list_2(
+                    bs::AlbumListType::AlphabeticalByArtist,
+                    Some(500),
+                    Some(offset),
+                )
+                .await?;
+            let album_count = albums.len();
+
+            offset += album_count;
+            all_albums.extend(albums.into_iter().map(|a| a.into()));
+            if album_count < 500 {
+                break;
+            }
+        }
+        Ok(all_albums)
+    }
+
     pub fn ui(
         &self,
         ui: &mut egui::Ui,
@@ -213,26 +236,4 @@ impl Album {
 
         artist + album + songs
     }
-}
-
-pub async fn fetch_all_raw(client: &bs::Client) -> anyhow::Result<Vec<bs::AlbumID3>> {
-    let mut all_albums = Vec::new();
-    let mut offset = 0;
-    loop {
-        let albums = client
-            .get_album_list_2(
-                bs::AlbumListType::AlphabeticalByArtist,
-                Some(500),
-                Some(offset),
-            )
-            .await?;
-        let album_count = albums.len();
-
-        offset += album_count;
-        all_albums.extend(albums);
-        if album_count < 500 {
-            break;
-        }
-    }
-    Ok(all_albums)
 }
