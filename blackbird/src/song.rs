@@ -1,6 +1,11 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    collections::HashMap,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use crate::{album::AlbumId, bs, style, util};
+
+pub type SongMap = HashMap<SongId, Song>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SongId(pub String);
@@ -30,7 +35,7 @@ pub struct Song {
     /// The disc number
     pub disc_number: Option<u32>,
     /// The album ID
-    pub _album_id: Option<AlbumId>,
+    pub album_id: Option<AlbumId>,
 
     was_hovered: Arc<AtomicBool>,
 }
@@ -45,7 +50,7 @@ impl From<bs::Child> for Song {
             _genre: child.genre,
             duration: child.duration,
             disc_number: child.disc_number,
-            _album_id: child.album_id.map(AlbumId),
+            album_id: child.album_id.map(AlbumId),
             was_hovered: Arc::new(AtomicBool::new(false)),
         }
     }

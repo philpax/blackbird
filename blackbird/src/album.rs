@@ -2,7 +2,7 @@ use std::ops::Range;
 
 use crate::{
     bs,
-    song::{Song, SongId},
+    song::{SongId, SongMap},
     style, util,
 };
 
@@ -23,14 +23,12 @@ pub struct Album {
     pub name: String,
     /// The album artist name
     pub artist: String,
-    /// The album artist ID
-    pub _artist_id: Option<String>,
     /// The album cover art ID
     pub cover_art_id: Option<String>,
     /// The number of songs in the album
     pub song_count: u32,
     /// The songs in the album
-    pub songs: Option<Vec<Song>>,
+    pub songs: Option<Vec<SongId>>,
     /// The total duration of the album in seconds
     pub duration: u32,
     /// The release year of the album
@@ -44,7 +42,6 @@ impl From<bs::AlbumID3> for Album {
             id: AlbumId(album.id),
             name: album.name,
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
-            _artist_id: album.artist_id,
             cover_art_id: album.cover_art,
             song_count: album.song_count,
             songs: None,
@@ -104,6 +101,7 @@ impl Album {
         Ok(all_albums)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &self,
         ui: &mut egui::Ui,
@@ -111,6 +109,7 @@ impl Album {
         row_range: Range<usize>,
         album_art: Option<egui::ImageSource>,
         album_art_enabled: bool,
+        song_map: &SongMap,
         playing_song: Option<&SongId>,
     ) -> Option<&SongId> {
         ui.horizontal(|ui| {
@@ -195,30 +194,37 @@ impl Album {
                 ..egui::Margin::ZERO
             })
             .show(ui, |ui| {
-                if let Some(songs) = &self.songs {
-                    // Clamp the song slice to the actual number of songs.
-                    let end = song_end.min(songs.len());
-
-                    // Do a pre-pass to calculate the maximum track length width.
-                    let max_track_length_width = songs[song_start..end]
-                        .iter()
-                        .map(|song| song.track_length_str_width(ui))
-                        .fold(0.0, f32::max);
-
-                    for song in &songs[song_start..end] {
-                        if song.ui(
-                            ui,
-                            style,
-                            &self.artist,
-                            max_track_length_width,
-                            playing_song == Some(&song.id),
-                        ) {
-                            output = Some(&song.id);
-                        }
-                    }
-                } else {
+                const LOADING_LABEL: &str = "[loading...]";
+                let Some(songs) = &self.songs else {
                     for _ in song_start..song_end {
-                        ui.add(egui::Label::new("[loading...]").selectable(false));
+                        ui.add(egui::Label::new(LOADING_LABEL).selectable(false));
+                    }
+                    return;
+                };
+
+                // Clamp the song slice to the actual number of songs.
+                let end = song_end.min(songs.len());
+
+                // Do a pre-pass to calculate the maximum track length width.
+                let max_track_length_width = songs[song_start..end]
+                    .iter()
+                    .filter_map(|song_id| song_map.get(song_id))
+                    .map(|song| song.track_length_str_width(ui))
+                    .fold(0.0, f32::max);
+
+                for song_id in &songs[song_start..end] {
+                    let Some(song) = song_map.get(song_id) else {
+                        ui.add(egui::Label::new(LOADING_LABEL).selectable(false));
+                        continue;
+                    };
+                    if song.ui(
+                        ui,
+                        style,
+                        &self.artist,
+                        max_track_length_width,
+                        playing_song == Some(&song.id),
+                    ) {
+                        output = Some(song_id);
                     }
                 }
             });

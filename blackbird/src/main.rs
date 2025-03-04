@@ -15,7 +15,7 @@ use config::*;
 
 mod album;
 use album::*;
-use song::SongId;
+use song::{Song, SongId, SongMap};
 
 mod song;
 
@@ -117,36 +117,26 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.vertical(|ui| {
                             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
-                            if let Some((album, song_id)) = self.logic_thread.get_playing_info() {
+                            if let Some(pi) = self.logic_thread.get_playing_info() {
                                 ui.horizontal(|ui| {
-                                    if let Some(song) = album
-                                        .songs
-                                        .as_ref()
-                                        .and_then(|s| s.iter().find(|s| s.id == song_id))
+                                    if let Some(artist) =
+                                        pi.song_artist.as_ref().filter(|a| **a != pi.album_artist)
                                     {
-                                        if let Some(artist) =
-                                            song.artist.as_ref().filter(|a| **a != album.artist)
-                                        {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(artist)
-                                                        .color(style::string_to_colour(artist)),
-                                                )
-                                                .selectable(false),
-                                            );
-                                            ui.add(egui::Label::new(" - ").selectable(false));
-                                        }
-                                        ui.add(egui::Label::new(&song.title).selectable(false));
-                                    } else {
                                         ui.add(
-                                            egui::Label::new("Song not found").selectable(false),
+                                            egui::Label::new(
+                                                egui::RichText::new(artist)
+                                                    .color(style::string_to_colour(artist)),
+                                            )
+                                            .selectable(false),
                                         );
+                                        ui.add(egui::Label::new(" - ").selectable(false));
                                     }
+                                    ui.add(egui::Label::new(&pi.song_title).selectable(false));
                                 });
                                 ui.horizontal(|ui| {
                                     ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(&album.name)
+                                            egui::RichText::new(&pi.album_name)
                                                 .color(self.config.style.album()),
                                         )
                                         .selectable(false),
@@ -154,15 +144,22 @@ impl eframe::App for App {
                                     ui.add(egui::Label::new(" by ").selectable(false));
                                     ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(&album.artist)
-                                                .color(style::string_to_colour(&album.artist)),
+                                            egui::RichText::new(&pi.album_artist)
+                                                .color(style::string_to_colour(&pi.album_artist)),
                                         )
                                         .selectable(false),
                                     );
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::Label::new("Nothing playing").selectable(false));
+                                    let percent_loaded = self.logic_thread.get_loaded_0_to_1();
+                                    ui.add(
+                                        egui::Label::new(format!(
+                                            "Nothing playing | {:0.1}% loaded",
+                                            percent_loaded * 100.0
+                                        ))
+                                        .selectable(false),
+                                    );
                                 });
                                 ui.horizontal(|ui| {
                                     ui.add(
@@ -287,21 +284,13 @@ impl eframe::App for App {
                                     local_visible_range,
                                     cover_art,
                                     self.config.general.album_art_enabled,
+                                    &self.logic_thread.read_state().song_map,
                                     playing_song_id.as_ref(),
                                 );
 
                                 // Handle song selection
                                 if let Some(song_id) = clicked_song_id {
-                                    if let Some(songs) = &album.songs {
-                                        if let Some(song) = songs.iter().find(|s| s.id == *song_id)
-                                        {
-                                            println!(
-                                                "{} - {} - {} ({song_id})",
-                                                album.artist, album.name, song.title
-                                            );
-                                            self.logic_thread.play_song(&album.id, song_id);
-                                        }
-                                    }
+                                    self.logic_thread.play_song(song_id);
                                 }
 
                                 ui.add_space(row_height * album_margin_bottom_row_count as f32);
@@ -315,7 +304,6 @@ impl eframe::App for App {
 }
 
 struct PlayingSong {
-    album_id: AlbumId,
     song_id: SongId,
     data: Vec<u8>,
 }
@@ -324,6 +312,7 @@ struct AppState {
     albums: Vec<Album>,
     album_id_to_idx: HashMap<AlbumId, usize>,
     pending_album_request_ids: HashSet<AlbumId>,
+    song_map: SongMap,
 
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
@@ -364,6 +353,7 @@ impl AppLogic {
             albums: vec![],
             album_id_to_idx: HashMap::new(),
             pending_album_request_ids: HashSet::new(),
+            song_map: HashMap::new(),
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
             sink,
@@ -505,17 +495,23 @@ impl AppLogic {
             let ctx = self.ctx.clone();
             async move {
                 match client.get_album_with_songs(album_id.0.clone()).await {
-                    Ok(album) => {
+                    Ok(incoming_album) => {
                         let mut state = state.write().unwrap();
-                        let idx = match state.album_id_to_idx.get(&album_id) {
-                            Some(idx) => *idx,
-                            None => {
-                                state.pending_album_request_ids.remove(&album_id);
-                                return;
-                            }
-                        };
-                        state.albums[idx].songs =
-                            Some(album.song.into_iter().map(|s| s.into()).collect());
+                        let album_idx = state.album_id_to_idx[&album_id];
+                        let album = &mut state.albums[album_idx];
+                        album.songs = Some(
+                            incoming_album
+                                .song
+                                .iter()
+                                .map(|s| SongId(s.id.clone()))
+                                .collect(),
+                        );
+                        state
+                            .song_map
+                            .extend(incoming_album.song.into_iter().map(|s| {
+                                let s: Song = s.into();
+                                (s.id.clone(), s)
+                            }));
                         state.pending_album_request_ids.remove(&album_id);
                         ctx.request_repaint();
                     }
@@ -588,10 +584,9 @@ impl AppLogic {
         });
     }
 
-    fn play_song(&self, album_id: &AlbumId, song_id: &SongId) {
+    fn play_song(&self, song_id: &SongId) {
         let client = self.client.clone();
         let state = self.state.clone();
-        let album_id = album_id.clone();
         let song_id = song_id.clone();
         let ctx = self.ctx.clone();
 
@@ -600,7 +595,6 @@ impl AppLogic {
                 Ok(data) => {
                     let mut state = state.write().unwrap();
                     state.playing_song = Some(PlayingSong {
-                        album_id,
                         song_id,
                         data: data.clone(),
                     });
@@ -664,16 +658,29 @@ impl AppLogic {
         self.read_state().playing_song.is_some()
     }
 
-    fn get_playing_info(&self) -> Option<(Album, SongId)> {
+    fn get_playing_info(&self) -> Option<PlayingInfo> {
         let state = self.read_state();
         let playing = state.playing_song.as_ref()?;
-        Some((
+        let song = state.song_map.get(&playing.song_id)?;
+        let album = state.albums.get(
             state
-                .albums
-                .get(state.album_id_to_idx.get(&playing.album_id).cloned()?)
-                .cloned()?,
-            playing.song_id.clone(),
-        ))
+                .album_id_to_idx
+                .get(song.album_id.as_ref()?)
+                .copied()?,
+        )?;
+        Some(PlayingInfo {
+            album_name: album.name.clone(),
+            album_artist: album.artist.clone(),
+            song_title: song.title.clone(),
+            song_artist: song.artist.clone(),
+        })
+    }
+
+    fn get_loaded_0_to_1(&self) -> f32 {
+        let state = self.read_state();
+        let total_albums = state.albums.len();
+        let loaded_albums = state.albums.iter().filter(|a| a.songs.is_some()).count();
+        loaded_albums as f32 / total_albums as f32
     }
 
     fn get_error(&self) -> Option<String> {
@@ -691,4 +698,11 @@ impl AppLogic {
     fn read_state(&self) -> RwLockReadGuard<AppState> {
         self.state.read().unwrap()
     }
+}
+
+struct PlayingInfo {
+    album_name: String,
+    album_artist: String,
+    song_title: String,
+    song_artist: Option<String>,
 }
