@@ -328,8 +328,16 @@ struct VisibleAlbumSet {
     start_row: usize,
 }
 
+#[derive(Clone)]
+struct TokioHandle(tokio::sync::mpsc::Sender<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>);
+impl TokioHandle {
+    fn spawn(&self, task: impl Future<Output = ()> + Send + Sync + 'static) {
+        self.0.blocking_send(Box::pin(task)).unwrap();
+    }
+}
+
 struct AppLogic {
-    tokio_tx: tokio::sync::mpsc::Sender<Pin<Box<dyn Future<Output = ()> + Send + Sync>>>,
+    tokio: TokioHandle,
     _thread_handle: std::thread::JoinHandle<()>,
     _output_stream: rodio::OutputStream,
     _output_stream_handle: rodio::OutputStreamHandle,
@@ -339,7 +347,7 @@ struct AppLogic {
 }
 
 impl AppLogic {
-    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 10;
+    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 100;
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
@@ -379,7 +387,7 @@ impl AppLogic {
         });
 
         let logic = AppLogic {
-            tokio_tx,
+            tokio: TokioHandle(tokio_tx),
             _thread_handle: thread_handle,
             _output_stream: output_stream,
             _output_stream_handle: output_stream_handle,
@@ -392,7 +400,7 @@ impl AppLogic {
     }
 
     fn spawn(&self, task: impl Future<Output = ()> + Send + Sync + 'static) {
-        self.tokio_tx.blocking_send(Box::pin(task)).unwrap();
+        self.tokio.spawn(task);
     }
 
     fn initial_fetch(&self) {
