@@ -352,45 +352,6 @@ impl AppLogic {
         // Create the logic thread for audio playback
         let (logic_tx, logic_rx) = std::sync::mpsc::channel();
 
-        // Initialize audio output in the logic thread
-        let logic_thread_handle = std::thread::spawn(move || {
-            let (_output_stream, output_stream_handle) =
-                rodio::OutputStream::try_default().unwrap();
-            let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
-            sink.set_volume(1.0);
-
-            let mut last_data = None;
-            while let Ok(msg) = logic_rx.recv() {
-                match msg {
-                    LogicThreadMessage::PlaySong(data) => {
-                        sink.clear();
-                        last_data = Some(data.clone());
-                        sink.append(
-                            rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
-                        );
-                        sink.play();
-                    }
-                    LogicThreadMessage::TogglePlayback => {
-                        if !sink.is_paused() {
-                            sink.pause();
-                            continue;
-                        }
-                        if sink.empty() {
-                            if let Some(data) = last_data.clone() {
-                                sink.append(
-                                    rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
-                                );
-                            }
-                        }
-                        sink.play();
-                    }
-                    LogicThreadMessage::StopPlayback => {
-                        sink.clear();
-                    }
-                }
-            }
-        });
-
         let state = Arc::new(RwLock::new(AppState {
             albums: vec![],
             album_id_to_idx: HashMap::new(),
@@ -409,6 +370,7 @@ impl AppLogic {
             .build()
             .unwrap();
         let (tokio_tx, mut tokio_rx) = tokio::sync::mpsc::channel(100);
+        let tokio = TokioHandle(tokio_tx);
 
         // Create a thread for background processing
         let tokio_thread_handle = std::thread::spawn(move || {
@@ -419,8 +381,87 @@ impl AppLogic {
             });
         });
 
+        // Initialize audio output in the logic thread
+        let logic_thread_handle = std::thread::spawn({
+            let state = state.clone();
+            let client = client.clone();
+            let ctx = ctx.clone();
+            let tokio = tokio.clone();
+            move || {
+                let (_output_stream, output_stream_handle) =
+                    rodio::OutputStream::try_default().unwrap();
+                let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+                sink.set_volume(1.0);
+
+                let mut last_data = None;
+                loop {
+                    // Process all available messages without blocking
+                    while let Ok(msg) = logic_rx.try_recv() {
+                        match msg {
+                            LogicThreadMessage::PlaySong(data) => {
+                                sink.clear();
+                                last_data = Some(data.clone());
+                                sink.append(
+                                    rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
+                                );
+                                sink.play();
+                            }
+                            LogicThreadMessage::TogglePlayback => {
+                                if !sink.is_paused() {
+                                    sink.pause();
+                                    continue;
+                                }
+                                if sink.empty() {
+                                    if let Some(data) = last_data.clone() {
+                                        sink.append(
+                                            rodio::Decoder::new_looped(std::io::Cursor::new(data))
+                                                .unwrap(),
+                                        );
+                                    }
+                                }
+                                sink.play();
+                            }
+                            LogicThreadMessage::StopPlayback => {
+                                sink.clear();
+                            }
+                        }
+                    }
+
+                    // Fetch unloaded albums up to MAX_CONCURRENT_ALBUM_REQUESTS
+                    {
+                        let pending_count = state.read().unwrap().pending_album_request_ids.len();
+
+                        if pending_count < Self::MAX_CONCURRENT_ALBUM_REQUESTS {
+                            // Find albums that need to be loaded
+                            let unloaded_albums: Vec<AlbumId> = {
+                                let state_read = state.read().unwrap();
+                                state_read
+                                    .albums
+                                    .iter()
+                                    .filter(|album| album.songs.is_none())
+                                    .filter(|album| {
+                                        !state_read.pending_album_request_ids.contains(&album.id)
+                                    })
+                                    .take(Self::MAX_CONCURRENT_ALBUM_REQUESTS - pending_count)
+                                    .map(|album| album.id.clone())
+                                    .collect()
+                            };
+
+                            // Fetch each album
+                            for album_id in unloaded_albums {
+                                Self::fetch_album_impl(&tokio, &client, &state, &ctx, &album_id);
+                            }
+                        }
+                    }
+
+                    // Sleep for 10ms between iterations
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        });
+
         let logic = AppLogic {
-            tokio: TokioHandle(tokio_tx),
+            tokio,
             _tokio_thread_handle: tokio_thread_handle,
             state,
             client,
@@ -517,9 +558,17 @@ impl AppLogic {
         }
     }
 
-    fn fetch_album(&self, album_id: &AlbumId) {
+    // Shared implementation for fetching an album
+    fn fetch_album_impl(
+        tokio: &TokioHandle,
+        client: &Arc<bs::Client>,
+        state: &Arc<RwLock<AppState>>,
+        ctx: &egui::Context,
+        album_id: &AlbumId,
+    ) {
+        // Mark album as pending
         {
-            let mut state = self.write_state();
+            let mut state = state.write().unwrap();
             if state.pending_album_request_ids.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
                 return;
             }
@@ -529,42 +578,50 @@ impl AppLogic {
             state.pending_album_request_ids.insert(album_id.clone());
         }
 
-        self.spawn({
-            let client = self.client.clone();
-            let state = self.state.clone();
-            let album_id = album_id.clone();
-            let ctx = self.ctx.clone();
-            async move {
-                match client.get_album_with_songs(album_id.0.clone()).await {
-                    Ok(incoming_album) => {
-                        let mut state = state.write().unwrap();
-                        let album_idx = state.album_id_to_idx[&album_id];
-                        let album = &mut state.albums[album_idx];
-                        album.songs = Some(
-                            incoming_album
-                                .song
-                                .iter()
-                                .map(|s| SongId(s.id.clone()))
-                                .collect(),
-                        );
-                        state
-                            .song_map
-                            .extend(incoming_album.song.into_iter().map(|s| {
-                                let s: Song = s.into();
-                                (s.id.clone(), s)
-                            }));
-                        state.pending_album_request_ids.remove(&album_id);
-                        ctx.request_repaint();
-                    }
-                    Err(e) => {
-                        let mut state = state.write().unwrap();
-                        state.error = Some(e.to_string());
-                        state.pending_album_request_ids.remove(&album_id);
-                        ctx.request_repaint();
-                    }
+        // Clone what we need for the async task
+        let client = client.clone();
+        let state = state.clone();
+        let album_id = album_id.clone();
+        let ctx = ctx.clone();
+
+        // Create the async task
+        let task = async move {
+            match client.get_album_with_songs(album_id.0.clone()).await {
+                Ok(incoming_album) => {
+                    let mut state = state.write().unwrap();
+                    let album_idx = state.album_id_to_idx[&album_id];
+                    let album = &mut state.albums[album_idx];
+                    album.songs = Some(
+                        incoming_album
+                            .song
+                            .iter()
+                            .map(|s| SongId(s.id.clone()))
+                            .collect(),
+                    );
+                    state
+                        .song_map
+                        .extend(incoming_album.song.into_iter().map(|s| {
+                            let s: Song = s.into();
+                            (s.id.clone(), s)
+                        }));
+                    state.pending_album_request_ids.remove(&album_id);
+                    ctx.request_repaint();
+                }
+                Err(e) => {
+                    let mut state = state.write().unwrap();
+                    state.error = Some(e.to_string());
+                    state.pending_album_request_ids.remove(&album_id);
+                    ctx.request_repaint();
                 }
             }
-        });
+        };
+
+        // Get a TokioHandle to spawn the task
+        tokio.spawn(task);
+    }
+
+    fn fetch_album(&self, album_id: &AlbumId) {
+        Self::fetch_album_impl(&self.tokio, &self.client, &self.state, &self.ctx, album_id);
     }
 
     fn fetch_cover_art(&self, cover_art_id: &str) {
