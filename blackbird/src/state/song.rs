@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::{album::AlbumId, bs};
+use crate::{bs, state::AlbumId};
 
 pub type SongMap = HashMap<SongId, Song>;
 

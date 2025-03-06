@@ -1,16 +1,11 @@
 use blackbird_subsonic as bs;
 
-mod style;
-mod util;
-
 mod config;
-
-mod album;
-
-mod song;
-
 mod logic;
+mod state;
+mod style;
 mod ui;
+mod util;
 
 fn main() {
     let subscriber = tracing_subscriber::FmtSubscriber::new();

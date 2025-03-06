@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{bs, song::SongId};
+use crate::{bs, state::SongId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AlbumId(pub String);

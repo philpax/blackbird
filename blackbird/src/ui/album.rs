@@ -1,8 +1,7 @@
 use std::ops::Range;
 
 use crate::{
-    album::Album,
-    song::{SongId, SongMap},
+    state::{Album, SongId, SongMap},
     style,
     ui::song,
     util,

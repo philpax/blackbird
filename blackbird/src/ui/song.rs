@@ -1,4 +1,4 @@
-use crate::{song::Song, style, util};
+use crate::{state::Song, style, util};
 
 pub fn track_length_str_width(song: &Song, ui: &egui::Ui) -> f32 {
     egui::WidgetText::from(track_length_str(song))

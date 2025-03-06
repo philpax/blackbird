@@ -6,9 +6,8 @@ use std::{
 };
 
 use crate::{
-    album::{Album, AlbumId},
     bs,
-    song::{Song, SongId, SongMap},
+    state::{Album, AlbumId, Song, SongId, SongMap},
 };
 
 pub struct Logic {

@@ -1,4 +1,4 @@
-use crate::{bs, config::Config, logic::Logic, song::SongId, style};
+use crate::{bs, config::Config, logic::Logic, state::SongId, style};
 
 mod album;
 mod song;
