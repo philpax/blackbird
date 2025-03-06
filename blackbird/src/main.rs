@@ -131,7 +131,13 @@ impl eframe::App for App {
                                         );
                                         ui.add(egui::Label::new(" - ").selectable(false));
                                     }
-                                    ui.add(egui::Label::new(&pi.song_title).selectable(false));
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&pi.song_title)
+                                                .color(self.config.style.track_name_playing()),
+                                        )
+                                        .selectable(false),
+                                    );
                                 });
                                 ui.horizontal(|ui| {
                                     ui.add(
