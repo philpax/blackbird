@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::{bs, config::Config, logic::Logic, state::SongId, style};
 
 mod album;
@@ -21,6 +23,17 @@ impl Ui {
         });
 
         let mut fonts = egui::FontDefinitions::default();
+        fonts.font_data.insert(
+            "GoNoto".into(),
+            Arc::new(egui::FontData::from_static(include_bytes!(
+                "../../assets/GoNotoCurrent-Regular.ttf"
+            ))),
+        );
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .push("GoNoto".into());
         egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
         cc.egui_ctx.set_fonts(fonts);
