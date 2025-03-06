@@ -35,7 +35,7 @@ fn main() {
 struct App {
     config: Config,
     last_config_update: std::time::Instant,
-    logic_thread: AppLogic,
+    logic: AppLogic,
 }
 
 impl App {
@@ -56,7 +56,7 @@ impl App {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let logic_thread = AppLogic::new(
+        let logic = AppLogic::new(
             bs::Client::new(
                 config.general.base_url.clone(),
                 config.general.username.clone(),
@@ -69,7 +69,7 @@ impl App {
         App {
             config,
             last_config_update: std::time::Instant::now(),
-            logic_thread,
+            logic,
         }
     }
 
@@ -89,13 +89,13 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.poll_for_config_updates();
 
-        if let Some(error) = self.logic_thread.get_error() {
+        if let Some(error) = self.logic.get_error() {
             let mut open = true;
             egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
                 ui.label(&error);
             });
             if !open {
-                self.logic_thread.clear_error();
+                self.logic.clear_error();
             }
         }
 
@@ -117,7 +117,7 @@ impl eframe::App for App {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         ui.vertical(|ui| {
                             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
-                            if let Some(pi) = self.logic_thread.get_playing_info() {
+                            if let Some(pi) = self.logic.get_playing_info() {
                                 ui.horizontal(|ui| {
                                     if let Some(artist) =
                                         pi.song_artist.as_ref().filter(|a| **a != pi.album_artist)
@@ -152,7 +152,7 @@ impl eframe::App for App {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    let percent_loaded = self.logic_thread.get_loaded_0_to_1();
+                                    let percent_loaded = self.logic.get_loaded_0_to_1();
                                     ui.add(
                                         egui::Label::new(format!(
                                             "Nothing playing | {:0.1}% loaded",
@@ -171,7 +171,7 @@ impl eframe::App for App {
                         });
                     });
 
-                    if self.logic_thread.is_song_loaded() {
+                    if self.logic.is_song_loaded() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.style_mut().visuals.override_text_color = None;
                             if ui
@@ -185,7 +185,7 @@ impl eframe::App for App {
                                 )
                                 .clicked()
                             {
-                                self.logic_thread.stop_playback();
+                                self.logic.stop_playback();
                             }
                             if ui
                                 .add(
@@ -198,7 +198,7 @@ impl eframe::App for App {
                                 )
                                 .clicked()
                             {
-                                self.logic_thread.toggle_playback();
+                                self.logic.toggle_playback();
                             }
                         });
                     }
@@ -220,7 +220,7 @@ impl eframe::App for App {
 
                     // Get album data for rendering
                     let num_rows = self
-                        .logic_thread
+                        .logic
                         .calculate_total_rows(album_margin_bottom_row_count);
 
                     egui::ScrollArea::vertical().auto_shrink(false).show_rows(
@@ -229,12 +229,12 @@ impl eframe::App for App {
                         num_rows,
                         |ui, visible_row_range| {
                             // Calculate which albums are in view
-                            let visible_albums = self.logic_thread.get_visible_albums(
+                            let visible_albums = self.logic.get_visible_albums(
                                 visible_row_range.clone(),
                                 album_margin_bottom_row_count,
                             );
 
-                            let playing_song_id = self.logic_thread.get_playing_song_id();
+                            let playing_song_id = self.logic.get_playing_song_id();
 
                             let mut current_row = visible_albums.start_row;
 
@@ -244,14 +244,14 @@ impl eframe::App for App {
 
                                 // If the album needs to be loaded
                                 if album.songs.is_none() {
-                                    self.logic_thread.fetch_album(&album.id);
+                                    self.logic.fetch_album(&album.id);
                                 }
 
                                 // Handle cover art if enabled
                                 if self.config.general.album_art_enabled {
                                     if let Some(cover_art_id) = &album.cover_art_id {
-                                        if !self.logic_thread.has_cover_art(cover_art_id) {
-                                            self.logic_thread.fetch_cover_art(cover_art_id);
+                                        if !self.logic.has_cover_art(cover_art_id) {
+                                            self.logic.fetch_cover_art(cover_art_id);
                                         }
                                     }
                                 }
@@ -272,7 +272,7 @@ impl eframe::App for App {
                                     album
                                         .cover_art_id
                                         .as_deref()
-                                        .and_then(|id| self.logic_thread.get_cover_art(id))
+                                        .and_then(|id| self.logic.get_cover_art(id))
                                 } else {
                                     None
                                 };
@@ -284,13 +284,13 @@ impl eframe::App for App {
                                     local_visible_range,
                                     cover_art,
                                     self.config.general.album_art_enabled,
-                                    &self.logic_thread.read_state().song_map,
+                                    &self.logic.read_state().song_map,
                                     playing_song_id.as_ref(),
                                 );
 
                                 // Handle song selection
                                 if let Some(song_id) = clicked_song_id {
-                                    self.logic_thread.play_song(song_id);
+                                    self.logic.play_song(song_id);
                                 }
 
                                 ui.add_space(row_height * album_margin_bottom_row_count as f32);
@@ -303,11 +303,6 @@ impl eframe::App for App {
     }
 }
 
-struct PlayingSong {
-    song_id: SongId,
-    data: Vec<u8>,
-}
-
 struct AppState {
     albums: Vec<Album>,
     album_id_to_idx: HashMap<AlbumId, usize>,
@@ -317,12 +312,14 @@ struct AppState {
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
 
-    sink: rodio::Sink,
-    playing_song: Option<PlayingSong>,
-
+    playing_song: Option<SongId>,
     error: Option<String>,
 }
-
+enum LogicThreadMessage {
+    PlaySong(Vec<u8>),
+    TogglePlayback,
+    StopPlayback,
+}
 struct VisibleAlbumSet {
     albums: Vec<Album>,
     start_row: usize,
@@ -338,12 +335,12 @@ impl TokioHandle {
 
 struct AppLogic {
     tokio: TokioHandle,
-    _thread_handle: std::thread::JoinHandle<()>,
-    _output_stream: rodio::OutputStream,
-    _output_stream_handle: rodio::OutputStreamHandle,
+    _tokio_thread_handle: std::thread::JoinHandle<()>,
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
     ctx: egui::Context,
+    logic_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
+    _logic_thread_handle: std::thread::JoinHandle<()>,
 }
 
 impl AppLogic {
@@ -352,10 +349,47 @@ impl AppLogic {
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
     fn new(client: bs::Client, ctx: egui::Context) -> Self {
-        // Initialize audio output
-        let (output_stream, output_stream_handle) = rodio::OutputStream::try_default().unwrap();
-        let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
-        sink.set_volume(1.0);
+        // Create the logic thread for audio playback
+        let (logic_tx, logic_rx) = std::sync::mpsc::channel();
+
+        // Initialize audio output in the logic thread
+        let logic_thread_handle = std::thread::spawn(move || {
+            let (_output_stream, output_stream_handle) =
+                rodio::OutputStream::try_default().unwrap();
+            let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+            sink.set_volume(1.0);
+
+            let mut last_data = None;
+            while let Ok(msg) = logic_rx.recv() {
+                match msg {
+                    LogicThreadMessage::PlaySong(data) => {
+                        sink.clear();
+                        last_data = Some(data.clone());
+                        sink.append(
+                            rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
+                        );
+                        sink.play();
+                    }
+                    LogicThreadMessage::TogglePlayback => {
+                        if !sink.is_paused() {
+                            sink.pause();
+                            continue;
+                        }
+                        if sink.empty() {
+                            if let Some(data) = last_data.clone() {
+                                sink.append(
+                                    rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
+                                );
+                            }
+                        }
+                        sink.play();
+                    }
+                    LogicThreadMessage::StopPlayback => {
+                        sink.clear();
+                    }
+                }
+            }
+        });
 
         let state = Arc::new(RwLock::new(AppState {
             albums: vec![],
@@ -364,7 +398,6 @@ impl AppLogic {
             song_map: HashMap::new(),
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
-            sink,
             playing_song: None,
             error: None,
         }));
@@ -378,7 +411,7 @@ impl AppLogic {
         let (tokio_tx, mut tokio_rx) = tokio::sync::mpsc::channel(100);
 
         // Create a thread for background processing
-        let thread_handle = std::thread::spawn(move || {
+        let tokio_thread_handle = std::thread::spawn(move || {
             runtime.block_on(async {
                 while let Some(task) = tokio_rx.recv().await {
                     tokio::spawn(task);
@@ -388,12 +421,12 @@ impl AppLogic {
 
         let logic = AppLogic {
             tokio: TokioHandle(tokio_tx),
-            _thread_handle: thread_handle,
-            _output_stream: output_stream,
-            _output_stream_handle: output_stream_handle,
+            _tokio_thread_handle: tokio_thread_handle,
             state,
             client,
             ctx,
+            logic_thread_tx: logic_tx,
+            _logic_thread_handle: logic_thread_handle,
         };
         logic.initial_fetch();
         logic
@@ -597,20 +630,19 @@ impl AppLogic {
         let state = self.state.clone();
         let song_id = song_id.clone();
         let ctx = self.ctx.clone();
+        let logic_tx = self.logic_thread_tx.clone();
 
         self.spawn(async move {
             match client.download(&song_id.0).await {
                 Ok(data) => {
-                    let mut state = state.write().unwrap();
-                    state.playing_song = Some(PlayingSong {
-                        song_id,
-                        data: data.clone(),
-                    });
-                    state.sink.clear();
-                    state
-                        .sink
-                        .append(rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap());
-                    state.sink.play();
+                    // Update the state to reflect the new playing song
+                    {
+                        let mut state = state.write().unwrap();
+                        state.playing_song = Some(song_id.clone());
+                    }
+
+                    // Send the data to the logic thread to play
+                    logic_tx.send(LogicThreadMessage::PlaySong(data)).unwrap();
                     ctx.request_repaint();
                 }
                 Err(e) => {
@@ -623,24 +655,15 @@ impl AppLogic {
     }
 
     fn toggle_playback(&self) {
-        let state = self.write_state();
-        if state.sink.is_paused() {
-            if let Some(playing_song) = &state.playing_song {
-                if state.sink.empty() {
-                    state.sink.append(
-                        rodio::Decoder::new_looped(std::io::Cursor::new(playing_song.data.clone()))
-                            .unwrap(),
-                    );
-                }
-                state.sink.play();
-            }
-        } else {
-            state.sink.pause();
-        }
+        self.logic_thread_tx
+            .send(LogicThreadMessage::TogglePlayback)
+            .unwrap();
     }
 
     fn stop_playback(&self) {
-        self.write_state().sink.clear();
+        self.logic_thread_tx
+            .send(LogicThreadMessage::StopPlayback)
+            .unwrap();
     }
 
     fn get_cover_art(&self, id: &str) -> Option<egui::ImageSource<'static>> {
@@ -656,10 +679,7 @@ impl AppLogic {
     }
 
     fn get_playing_song_id(&self) -> Option<SongId> {
-        self.read_state()
-            .playing_song
-            .as_ref()
-            .map(|s| s.song_id.clone())
+        self.read_state().playing_song.clone()
     }
 
     fn is_song_loaded(&self) -> bool {
@@ -668,8 +688,7 @@ impl AppLogic {
 
     fn get_playing_info(&self) -> Option<PlayingInfo> {
         let state = self.read_state();
-        let playing = state.playing_song.as_ref()?;
-        let song = state.song_map.get(&playing.song_id)?;
+        let song = state.song_map.get(state.playing_song.as_ref()?)?;
         let album = state.albums.get(
             state
                 .album_id_to_idx
