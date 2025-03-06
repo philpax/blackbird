@@ -304,7 +304,7 @@ impl eframe::App for App {
 }
 
 struct AppState {
-    albums: Vec<Album>,
+    albums: Vec<Arc<Album>>,
     album_id_to_idx: HashMap<AlbumId, usize>,
     pending_album_request_ids: HashSet<AlbumId>,
     song_map: SongMap,
@@ -321,7 +321,7 @@ enum LogicThreadMessage {
     StopPlayback,
 }
 struct VisibleAlbumSet {
-    albums: Vec<Album>,
+    albums: Vec<Arc<Album>>,
     start_row: usize,
 }
 
@@ -590,14 +590,17 @@ impl AppLogic {
                 Ok(incoming_album) => {
                     let mut state = state.write().unwrap();
                     let album_idx = state.album_id_to_idx[&album_id];
-                    let album = &mut state.albums[album_idx];
-                    album.songs = Some(
-                        incoming_album
-                            .song
-                            .iter()
-                            .map(|s| SongId(s.id.clone()))
-                            .collect(),
-                    );
+                    // Replace the Arc in the array
+                    state.albums[album_idx] = Arc::new(Album {
+                        songs: Some(
+                            incoming_album
+                                .song
+                                .iter()
+                                .map(|s| SongId(s.id.clone()))
+                                .collect(),
+                        ),
+                        ..(*state.albums[album_idx]).clone()
+                    });
                     state
                         .song_map
                         .extend(incoming_album.song.into_iter().map(|s| {

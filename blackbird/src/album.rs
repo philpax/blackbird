@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crate::{
     bs,
@@ -79,7 +79,7 @@ impl Ord for Album {
 }
 impl Album {
     /// Returns all albums; does not include songs.
-    pub async fn fetch_all(client: &bs::Client) -> anyhow::Result<Vec<Album>> {
+    pub async fn fetch_all(client: &bs::Client) -> anyhow::Result<Vec<Arc<Album>>> {
         let mut all_albums = vec![];
         let mut offset = 0;
         loop {
@@ -93,7 +93,7 @@ impl Album {
             let album_count = albums.len();
 
             offset += album_count;
-            all_albums.extend(albums.into_iter().map(|a| a.into()));
+            all_albums.extend(albums.into_iter().map(|a| Arc::new(a.into())));
             if album_count < 500 {
                 break;
             }
