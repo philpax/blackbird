@@ -1,9 +1,13 @@
-use crate::{bs, config::Config, logic::Logic, style};
+use crate::{bs, config::Config, logic::Logic, song::SongId, style};
+
+mod album;
+mod song;
 
 pub struct Ui {
     config: Config,
     last_config_update: std::time::Instant,
     logic: Logic,
+    hovered_song_last_frame: Option<SongId>,
 }
 impl Ui {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
@@ -37,6 +41,7 @@ impl Ui {
             config,
             last_config_update: std::time::Instant::now(),
             logic,
+            hovered_song_last_frame: None,
         }
     }
 
@@ -193,7 +198,7 @@ impl eframe::App for Ui {
                     // Get album data for rendering
                     let num_rows = self
                         .logic
-                        .calculate_total_rows(album_margin_bottom_row_count);
+                        .calculate_total_rows(album_margin_bottom_row_count, album::line_count);
 
                     egui::ScrollArea::vertical().auto_shrink(false).show_rows(
                         ui,
@@ -204,15 +209,17 @@ impl eframe::App for Ui {
                             let visible_albums = self.logic.get_visible_albums(
                                 visible_row_range.clone(),
                                 album_margin_bottom_row_count,
+                                album::line_count,
                             );
 
                             let playing_song_id = self.logic.get_playing_song_id();
 
                             let mut current_row = visible_albums.start_row;
 
+                            let mut new_hovered_song_last_frame = None;
                             for album in visible_albums.albums {
                                 let album_lines =
-                                    album.line_count() + album_margin_bottom_row_count;
+                                    album::line_count(&album) + album_margin_bottom_row_count;
 
                                 // If the album needs to be loaded
                                 if album.songs.is_none() {
@@ -250,7 +257,8 @@ impl eframe::App for Ui {
                                 };
 
                                 // Display the album
-                                let clicked_song_id = album.ui(
+                                let album_response = album::ui(
+                                    &album,
                                     ui,
                                     &self.config.style,
                                     local_visible_range,
@@ -258,16 +266,22 @@ impl eframe::App for Ui {
                                     self.config.general.album_art_enabled,
                                     &self.logic.get_song_map(),
                                     playing_song_id.as_ref(),
+                                    self.hovered_song_last_frame.as_ref(),
                                 );
+                                if let Some(hovered_song) = album_response.hovered_song.cloned() {
+                                    new_hovered_song_last_frame = Some(hovered_song);
+                                }
 
                                 // Handle song selection
-                                if let Some(song_id) = clicked_song_id {
+                                if let Some(song_id) = album_response.clicked_song {
                                     self.logic.play_song(song_id);
                                 }
 
                                 ui.add_space(row_height * album_margin_bottom_row_count as f32);
                                 current_row += album_lines;
                             }
+
+                            self.hovered_song_last_frame = new_hovered_song_last_frame;
                         },
                     );
                 });

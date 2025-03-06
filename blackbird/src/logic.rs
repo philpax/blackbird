@@ -168,11 +168,15 @@ impl Logic {
         logic
     }
 
-    pub fn calculate_total_rows(&self, album_margin_bottom_row_count: usize) -> usize {
+    pub fn calculate_total_rows(
+        &self,
+        album_margin_bottom_row_count: usize,
+        album_line_count_getter: impl Fn(&Album) -> usize,
+    ) -> usize {
         self.read_state()
             .albums
             .iter()
-            .map(|album| album.line_count() + album_margin_bottom_row_count)
+            .map(|album| album_line_count_getter(album) + album_margin_bottom_row_count)
             .sum()
     }
 
@@ -180,6 +184,7 @@ impl Logic {
         &self,
         visible_row_range: std::ops::Range<usize>,
         album_margin_bottom_row_count: usize,
+        album_line_count_getter: impl Fn(&Album) -> usize,
     ) -> VisibleAlbumSet {
         let state = self.read_state();
         let mut current_row = 0;
@@ -189,7 +194,7 @@ impl Logic {
         let mut first_visible_found = false;
 
         for album in &state.albums {
-            let album_lines = album.line_count() + album_margin_bottom_row_count;
+            let album_lines = album_line_count_getter(album) + album_margin_bottom_row_count;
             let album_range = current_row..(current_row + album_lines);
 
             // If this album starts after the visible range, we can break out
