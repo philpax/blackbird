@@ -165,7 +165,7 @@ impl Song {
         self.was_hovered
             .store(r.hovered(), std::sync::atomic::Ordering::Relaxed);
 
-        r.double_clicked()
+        r.clicked()
     }
 }
 impl Song {
