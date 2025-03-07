@@ -1,6 +1,6 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-use crate::{bs, config::Config, logic::Logic, state::SongId};
+use crate::{config::Config, logic::Logic, state::SongId};
 
 mod album;
 mod song;
@@ -10,21 +10,26 @@ mod util;
 pub use style::Style;
 
 pub struct Ui {
-    config: Config,
-    last_config_update: std::time::Instant,
-    logic: Logic,
+    config: Arc<RwLock<Config>>,
+    logic: Arc<Logic>,
     hovered_song_last_frame: Option<SongId>,
 }
-impl Ui {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let config = Config::load();
-        config.save();
 
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
-        cc.egui_ctx.style_mut(|style| {
-            style.visuals.panel_fill = config.style.background();
-            style.visuals.override_text_color = Some(config.style.text());
-        });
+impl Ui {
+    pub fn new(
+        cc: &eframe::CreationContext<'_>,
+        config: Arc<RwLock<Config>>,
+        logic: Arc<Logic>,
+    ) -> Self {
+        {
+            let config_read = config.read().unwrap();
+
+            cc.egui_ctx.set_visuals(egui::Visuals::dark());
+            cc.egui_ctx.style_mut(|style| {
+                style.visuals.panel_fill = config_read.style.background();
+                style.visuals.override_text_color = Some(config_read.style.text());
+            });
+        }
 
         let mut fonts = egui::FontDefinitions::default();
         fonts.font_data.insert(
@@ -44,38 +49,17 @@ impl Ui {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        let logic = Logic::new(
-            bs::Client::new(
-                config.general.base_url.clone(),
-                config.general.username.clone(),
-                config.general.password.clone(),
-                "blackbird".to_string(),
-            ),
-            cc.egui_ctx.clone(),
-        );
-
         Ui {
             config,
-            last_config_update: std::time::Instant::now(),
             logic,
             hovered_song_last_frame: None,
         }
     }
-
-    fn poll_for_config_updates(&mut self) {
-        if self.last_config_update.elapsed() > std::time::Duration::from_secs(1) {
-            let new_config = Config::load();
-            if new_config != self.config {
-                self.config = new_config;
-                self.config.save();
-            }
-            self.last_config_update = std::time::Instant::now();
-        }
-    }
 }
+
 impl eframe::App for Ui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.poll_for_config_updates();
+        let config_read = self.config.read().unwrap();
 
         if let Some(error) = self.logic.get_error() {
             let mut open = true;
@@ -98,7 +82,7 @@ impl eframe::App for Ui {
                         top: margin,
                         bottom: margin,
                     })
-                    .fill(self.config.style.background()),
+                    .fill(config_read.style.background()),
             )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -122,7 +106,7 @@ impl eframe::App for Ui {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(&pi.song_title)
-                                                .color(self.config.style.track_name_playing()),
+                                                .color(config_read.style.track_name_playing()),
                                         )
                                         .selectable(false),
                                     );
@@ -131,7 +115,7 @@ impl eframe::App for Ui {
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(&pi.album_name)
-                                                .color(self.config.style.album()),
+                                                .color(config_read.style.album()),
                                         )
                                         .selectable(false),
                                     );
@@ -207,7 +191,7 @@ impl eframe::App for Ui {
                         bar_inner_margin: scroll_margin.into(),
                         ..egui::style::ScrollStyle::solid()
                     };
-                    ui.style_mut().visuals.extreme_bg_color = self.config.style.background();
+                    ui.style_mut().visuals.extreme_bg_color = config_read.style.background();
 
                     let row_height = ui.text_style_height(&egui::TextStyle::Body);
                     let album_margin_bottom_row_count = 1;
@@ -244,7 +228,7 @@ impl eframe::App for Ui {
                                 }
 
                                 // Handle cover art if enabled
-                                if self.config.general.album_art_enabled {
+                                if config_read.general.album_art_enabled {
                                     if let Some(cover_art_id) = &album.cover_art_id {
                                         if !self.logic.has_cover_art(cover_art_id) {
                                             self.logic.fetch_cover_art(cover_art_id);
@@ -264,7 +248,7 @@ impl eframe::App for Ui {
                                 let local_visible_range = local_start..local_end.max(local_start);
 
                                 // Get cover art if needed
-                                let cover_art = if self.config.general.album_art_enabled {
+                                let cover_art = if config_read.general.album_art_enabled {
                                     album
                                         .cover_art_id
                                         .as_deref()
@@ -277,10 +261,10 @@ impl eframe::App for Ui {
                                 let album_response = album::ui(
                                     &album,
                                     ui,
-                                    &self.config.style,
+                                    &config_read.style,
                                     local_visible_range,
                                     cover_art,
-                                    self.config.general.album_art_enabled,
+                                    config_read.general.album_art_enabled,
                                     &self.logic.get_song_map(),
                                     playing_song_id.as_ref(),
                                     self.hovered_song_last_frame.as_ref(),

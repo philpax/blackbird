@@ -3,10 +3,12 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::{Duration, Instant},
 };
 
 use crate::{
     bs,
+    config::Config,
     state::{Album, AlbumId, Song, SongId, SongMap},
 };
 
@@ -16,7 +18,6 @@ pub struct Logic {
     state: Arc<RwLock<AppState>>,
     song_map: Arc<RwLock<SongMap>>,
     client: Arc<bs::Client>,
-    ctx: egui::Context,
     logic_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
     _logic_thread_handle: std::thread::JoinHandle<()>,
 }
@@ -37,8 +38,9 @@ impl Logic {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 100;
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
+    const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-    pub fn new(client: bs::Client, ctx: egui::Context) -> Self {
+    pub fn new(client: bs::Client, config: Arc<RwLock<Config>>) -> Self {
         // Create the logic thread for audio playback
         let (logic_tx, logic_rx) = std::sync::mpsc::channel();
 
@@ -50,6 +52,7 @@ impl Logic {
             pending_cover_art_requests: HashSet::new(),
             playing_song: None,
             error: None,
+            last_config_update: Instant::now(),
         }));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
 
@@ -76,8 +79,8 @@ impl Logic {
             let state = state.clone();
             let song_map = song_map.clone();
             let client = client.clone();
-            let ctx = ctx.clone();
             let tokio = tokio.clone();
+            let config = config.clone();
             move || {
                 let (_output_stream, output_stream_handle) =
                     rodio::OutputStream::try_default().unwrap();
@@ -118,6 +121,21 @@ impl Logic {
                         }
                     }
 
+                    // Poll for config updates
+                    {
+                        let mut state_write = state.write().unwrap();
+                        if state_write.last_config_update.elapsed() > Self::CONFIG_CHECK_INTERVAL {
+                            let new_config = Config::load();
+                            let current_config = config.read().unwrap();
+                            if new_config != *current_config {
+                                drop(current_config);
+                                *config.write().unwrap() = new_config;
+                                config.read().unwrap().save();
+                            }
+                            state_write.last_config_update = Instant::now();
+                        }
+                    }
+
                     // Fetch unloaded albums up to MAX_CONCURRENT_ALBUM_REQUESTS
                     {
                         let pending_count = state.read().unwrap().pending_album_request_ids.len();
@@ -141,7 +159,7 @@ impl Logic {
                             // Fetch each album
                             for album_id in unloaded_albums {
                                 Self::fetch_album_impl(
-                                    &tokio, &client, &state, &song_map, &ctx, &album_id,
+                                    &tokio, &client, &state, &song_map, &album_id,
                                 );
                             }
                         }
@@ -159,7 +177,6 @@ impl Logic {
             state,
             song_map,
             client,
-            ctx,
             logic_thread_tx: logic_tx,
             _logic_thread_handle: logic_thread_handle,
         };
@@ -229,7 +246,6 @@ impl Logic {
             &self.client,
             &self.state,
             &self.song_map,
-            &self.ctx,
             album_id,
         );
     }
@@ -252,7 +268,6 @@ impl Logic {
             let client = self.client.clone();
             let state = self.state.clone();
             let cover_art_id = cover_art_id.to_string();
-            let ctx = self.ctx.clone();
             async move {
                 match client.get_cover_art(&cover_art_id).await {
                     Ok(cover_art) => {
@@ -279,13 +294,11 @@ impl Logic {
                                 std::time::Instant::now(),
                             ),
                         );
-                        ctx.request_repaint();
                     }
                     Err(e) => {
                         let mut state = state.write().unwrap();
                         state.error = Some(e.to_string());
                         state.pending_cover_art_requests.remove(&cover_art_id);
-                        ctx.request_repaint();
                     }
                 }
             }
@@ -296,7 +309,6 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let song_id = song_id.clone();
-        let ctx = self.ctx.clone();
         let logic_tx = self.logic_thread_tx.clone();
 
         self.spawn(async move {
@@ -310,12 +322,10 @@ impl Logic {
 
                     // Send the data to the logic thread to play
                     logic_tx.send(LogicThreadMessage::PlaySong(data)).unwrap();
-                    ctx.request_repaint();
                 }
                 Err(e) => {
                     let mut state = state.write().unwrap();
                     state.error = Some(e.to_string());
-                    ctx.request_repaint();
                 }
             }
         });
@@ -398,7 +408,6 @@ impl Logic {
     fn initial_fetch(&self) {
         let client = self.client.clone();
         let state = self.state.clone();
-        let ctx = self.ctx.clone();
         self.spawn(async move {
             if let Err(e) = client.ping().await {
                 state.write().unwrap().error = Some(e.to_string());
@@ -419,7 +428,6 @@ impl Logic {
                 }
                 Err(e) => {
                     state.write().unwrap().error = Some(e.to_string());
-                    ctx.request_repaint();
                 }
             };
         })
@@ -439,7 +447,6 @@ impl Logic {
         client: &Arc<bs::Client>,
         state: &Arc<RwLock<AppState>>,
         song_map: &Arc<RwLock<SongMap>>,
-        ctx: &egui::Context,
         album_id: &AlbumId,
     ) {
         // Mark album as pending
@@ -458,7 +465,6 @@ impl Logic {
         let client = client.clone();
         let state = state.clone();
         let album_id = album_id.clone();
-        let ctx = ctx.clone();
         let song_map = song_map.clone();
 
         // Create the async task
@@ -486,13 +492,11 @@ impl Logic {
                         }));
                     }
                     state.pending_album_request_ids.remove(&album_id);
-                    ctx.request_repaint();
                 }
                 Err(e) => {
                     let mut state = state.write().unwrap();
                     state.error = Some(e.to_string());
                     state.pending_album_request_ids.remove(&album_id);
-                    ctx.request_repaint();
                 }
             }
         };
@@ -512,6 +516,7 @@ struct AppState {
 
     playing_song: Option<SongId>,
     error: Option<String>,
+    last_config_update: Instant,
 }
 
 enum LogicThreadMessage {
