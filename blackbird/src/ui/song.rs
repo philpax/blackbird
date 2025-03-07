@@ -1,4 +1,8 @@
-use crate::{state::Song, style, util};
+use crate::{
+    state::Song,
+    ui::{style, util::RightAlignedWidget},
+    util,
+};
 
 pub fn track_length_str_width(song: &Song, ui: &egui::Ui) -> f32 {
     egui::WidgetText::from(track_length_str(song))
@@ -34,7 +38,7 @@ pub fn ui(
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.add_sized(
                     egui::vec2(32.0, text_height),
-                    util::RightAlignedWidget(
+                    RightAlignedWidget(
                         egui::Label::new(
                             egui::RichText::new(track_str).color(style.track_number()),
                         )
@@ -69,7 +73,7 @@ pub fn ui(
                         max_track_length_width + 32.0,
                         text_height,
                     ),
-                    util::RightAlignedWidget(
+                    RightAlignedWidget(
                         egui::Label::new(
                             egui::RichText::new(track_length_str(song)).color(style.track_length()),
                         )

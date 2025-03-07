@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::style;
+use crate::ui;
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct Config {
     #[serde(default)]
     pub general: General,
     #[serde(default)]
-    pub style: style::Style,
+    pub style: ui::Style,
 }
 impl Config {
     pub const FILENAME: &str = "config.toml";

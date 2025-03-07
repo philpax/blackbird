@@ -1,9 +1,13 @@
 use std::sync::Arc;
 
-use crate::{bs, config::Config, logic::Logic, state::SongId, style};
+use crate::{bs, config::Config, logic::Logic, state::SongId};
 
 mod album;
 mod song;
+mod style;
+mod util;
+
+pub use style::Style;
 
 pub struct Ui {
     config: Config,

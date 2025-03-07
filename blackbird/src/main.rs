@@ -3,7 +3,6 @@ use blackbird_subsonic as bs;
 mod config;
 mod logic;
 mod state;
-mod style;
 mod ui;
 mod util;
 
