@@ -1,11 +1,21 @@
 use blackbird_subsonic as bs;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, OnceLock, RwLock};
 
 mod config;
 mod logic;
 mod state;
 mod ui;
 mod util;
+
+trait Repainter: std::fmt::Debug {
+    fn repaint(&self);
+}
+impl Repainter for egui::Context {
+    fn repaint(&self) {
+        self.request_repaint();
+    }
+}
+type SharedRepainter = Arc<OnceLock<Box<dyn Repainter + Send + Sync>>>;
 
 fn main() {
     let subscriber = tracing_subscriber::FmtSubscriber::new();
@@ -25,15 +35,25 @@ fn main() {
         "blackbird".to_string(),
     );
 
+    // Create a repainter handle that will get populated by the UI
+    let repainter = SharedRepainter::new(Default::default());
+
     // Now wrap config in Arc<RwLock> after using it for client creation
     let config = Arc::new(RwLock::new(config));
-    let logic = Arc::new(logic::Logic::new(client, config.clone()));
+    let logic = Arc::new(logic::Logic::new(client, config.clone(), repainter.clone()));
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
         "blackbird",
         native_options,
-        Box::new(move |cc| Ok(Box::new(ui::Ui::new(cc, config.clone(), logic.clone())))),
+        Box::new(move |cc| {
+            Ok(Box::new(ui::Ui::new(
+                cc,
+                config.clone(),
+                logic.clone(),
+                repainter.clone(),
+            )))
+        }),
     )
     .unwrap();
 }

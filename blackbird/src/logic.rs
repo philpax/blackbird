@@ -10,6 +10,7 @@ use crate::{
     bs,
     config::Config,
     state::{Album, AlbumId, Song, SongId, SongMap},
+    SharedRepainter,
 };
 
 pub struct Logic {
@@ -40,7 +41,11 @@ impl Logic {
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
     const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-    pub fn new(client: bs::Client, config: Arc<RwLock<Config>>) -> Self {
+    pub fn new(
+        client: bs::Client,
+        config: Arc<RwLock<Config>>,
+        repainter: SharedRepainter,
+    ) -> Self {
         // Create the logic thread for audio playback
         let (logic_tx, logic_rx) = std::sync::mpsc::channel();
 
@@ -81,6 +86,7 @@ impl Logic {
             let client = client.clone();
             let tokio = tokio.clone();
             let config = config.clone();
+            let repainter = repainter.clone();
             move || {
                 let (_output_stream, output_stream_handle) =
                     rodio::OutputStream::try_default().unwrap();
@@ -133,6 +139,9 @@ impl Logic {
                                 config.read().unwrap().save();
                             }
                             state_write.last_config_update = Instant::now();
+                            if let Some(repainter) = repainter.get() {
+                                repainter.repaint();
+                            }
                         }
                     }
 

@@ -1,6 +1,6 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{config::Config, logic::Logic, state::SongId};
+use crate::{config::Config, logic::Logic, state::SongId, SharedRepainter};
 
 mod album;
 mod song;
@@ -20,6 +20,7 @@ impl Ui {
         cc: &eframe::CreationContext<'_>,
         config: Arc<RwLock<Config>>,
         logic: Arc<Logic>,
+        repainter: SharedRepainter,
     ) -> Self {
         {
             let config_read = config.read().unwrap();
@@ -48,6 +49,8 @@ impl Ui {
         cc.egui_ctx.set_fonts(fonts);
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
+
+        repainter.set(Box::new(cc.egui_ctx.clone())).unwrap();
 
         Ui {
             config,
