@@ -405,6 +405,10 @@ impl Logic {
         self.song_map.read().unwrap()
     }
 
+    pub fn song_count(&self) -> usize {
+        self.song_map.read().unwrap().len()
+    }
+
     pub fn clear_error(&self) {
         self.write_state().error = None;
     }

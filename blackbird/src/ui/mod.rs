@@ -136,8 +136,9 @@ impl eframe::App for Ui {
                                     let percent_loaded = self.logic.get_loaded_0_to_1();
                                     ui.add(
                                         egui::Label::new(format!(
-                                            "Nothing playing | {:0.1}% loaded",
-                                            percent_loaded * 100.0
+                                            "Nothing playing | {:0.1}% loaded | {} songs",
+                                            percent_loaded * 100.0,
+                                            self.logic.song_count(),
                                         ))
                                         .selectable(false),
                                     );
