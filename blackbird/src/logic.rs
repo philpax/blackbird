@@ -53,6 +53,7 @@ impl Logic {
             albums: vec![],
             album_id_to_idx: HashMap::new(),
             pending_album_request_ids: HashSet::new(),
+            song_count: 0,
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
             playing_song: None,
@@ -406,7 +407,7 @@ impl Logic {
     }
 
     pub fn song_count(&self) -> usize {
-        self.song_map.read().unwrap().len()
+        self.read_state().song_count
     }
 
     pub fn clear_error(&self) {
@@ -438,6 +439,7 @@ impl Logic {
                         .enumerate()
                         .map(|(i, a)| (a.id.clone(), i))
                         .collect();
+                    state.song_count = state.albums.iter().map(|a| a.song_count as usize).sum();
                 }
                 Err(e) => {
                     state.write().unwrap().error = Some(e.to_string());
@@ -523,6 +525,7 @@ struct AppState {
     albums: Vec<Arc<Album>>,
     album_id_to_idx: HashMap<AlbumId, usize>,
     pending_album_request_ids: HashSet<AlbumId>,
+    song_count: usize,
 
     cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
