@@ -59,6 +59,7 @@ impl Logic {
             song_count: 0,
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
+            is_loading_song: false,
             playing_song: None,
             error: None,
             last_config_update: Instant::now(),
@@ -317,12 +318,14 @@ impl Logic {
         let logic_tx = self.logic_thread_tx.clone();
 
         self.spawn(async move {
+            state.write().unwrap().is_loading_song = true;
             match client.download(&song_id.0).await {
                 Ok(data) => {
                     // Update the state to reflect the new playing song
                     {
                         let mut state = state.write().unwrap();
                         state.playing_song = Some(song_id.clone());
+                        state.is_loading_song = false;
                     }
 
                     // Send the data to the logic thread to play
@@ -366,6 +369,10 @@ impl Logic {
 
     pub fn is_song_loaded(&self) -> bool {
         self.read_state().playing_song.is_some()
+    }
+
+    pub fn is_song_loading(&self) -> bool {
+        self.read_state().is_loading_song
     }
 
     pub fn get_playing_info(&self) -> Option<PlayingInfo> {
@@ -525,6 +532,7 @@ struct AppState {
     cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
 
+    is_loading_song: bool,
     playing_song: Option<SongId>,
     error: Option<String>,
     last_config_update: Instant,

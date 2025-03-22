@@ -102,63 +102,75 @@ impl eframe::App for Ui {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.vertical(|ui| {
-                            ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+                        ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+                        ui.horizontal(|ui| {
+                            if self.logic.is_song_loading() {
+                                ui.add(egui::Spinner::new());
+                                ui.add_space(16.0);
+                            }
+
                             if let Some(pi) = self.logic.get_playing_info() {
-                                ui.horizontal(|ui| {
-                                    if let Some(artist) =
-                                        pi.song_artist.as_ref().filter(|a| **a != pi.album_artist)
-                                    {
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        if let Some(artist) = pi
+                                            .song_artist
+                                            .as_ref()
+                                            .filter(|a| **a != pi.album_artist)
+                                        {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(artist)
+                                                        .color(style::string_to_colour(artist)),
+                                                )
+                                                .selectable(false),
+                                            );
+                                            ui.add(egui::Label::new(" - ").selectable(false));
+                                        }
                                         ui.add(
                                             egui::Label::new(
-                                                egui::RichText::new(artist)
-                                                    .color(style::string_to_colour(artist)),
+                                                egui::RichText::new(&pi.song_title)
+                                                    .color(config_read.style.track_name_playing()),
                                             )
                                             .selectable(false),
                                         );
-                                        ui.add(egui::Label::new(" - ").selectable(false));
-                                    }
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&pi.song_title)
-                                                .color(config_read.style.track_name_playing()),
-                                        )
-                                        .selectable(false),
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&pi.album_name)
-                                                .color(config_read.style.album()),
-                                        )
-                                        .selectable(false),
-                                    );
-                                    ui.add(egui::Label::new(" by ").selectable(false));
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&pi.album_artist)
-                                                .color(style::string_to_colour(&pi.album_artist)),
-                                        )
-                                        .selectable(false),
-                                    );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&pi.album_name)
+                                                    .color(config_read.style.album()),
+                                            )
+                                            .selectable(false),
+                                        );
+                                        ui.add(egui::Label::new(" by ").selectable(false));
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(&pi.album_artist).color(
+                                                    style::string_to_colour(&pi.album_artist),
+                                                ),
+                                            )
+                                            .selectable(false),
+                                        );
+                                    });
                                 });
                             } else {
-                                ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::Label::new(format!(
-                                            "Nothing playing | {:0.1}% loaded | {} songs",
-                                            percent_loaded * 100.0,
-                                            self.logic.song_count(),
-                                        ))
-                                        .selectable(false),
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.add(
-                                        egui::Label::new("Click a song to play it!")
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::Label::new(format!(
+                                                "Nothing playing | {:0.1}% loaded | {} songs",
+                                                percent_loaded * 100.0,
+                                                self.logic.song_count(),
+                                            ))
                                             .selectable(false),
-                                    );
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add(
+                                            egui::Label::new("Click a song to play it!")
+                                                .selectable(false),
+                                        );
+                                    });
                                 });
                             }
                         });
