@@ -536,18 +536,28 @@ name = "blackbird"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blackbird-core",
  "blackbird-subsonic",
  "eframe",
  "egui",
  "egui-phosphor",
  "egui_extras",
  "image",
+ "serde",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "blackbird-core"
+version = "0.1.0"
+dependencies = [
+ "blackbird-subsonic",
  "rodio",
  "serde",
  "tokio",
  "toml",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -2068,7 +2078,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc2f4eb4bc735547cfed7c0a4922cbd04a4655978c09b54f1f7b228750664c34"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]

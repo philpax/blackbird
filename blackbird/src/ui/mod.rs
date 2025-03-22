@@ -1,25 +1,34 @@
 use std::sync::{Arc, RwLock};
 
-use crate::{config::Config, logic::Logic, state::SongId, SharedRepainter};
-
 mod album;
 mod song;
 mod style;
 mod util;
 
+use blackbird_core::SharedRepainter;
 pub use style::Style;
 
+use crate::bc;
+
+#[derive(Debug)]
+struct ContextRepainter(egui::Context);
+impl bc::Repainter for ContextRepainter {
+    fn repaint(&self) {
+        self.0.request_repaint();
+    }
+}
+
 pub struct Ui {
-    config: Arc<RwLock<Config>>,
-    logic: Arc<Logic>,
-    hovered_song_last_frame: Option<SongId>,
+    config: Arc<RwLock<bc::Config<style::Style>>>,
+    logic: Arc<bc::Logic>,
+    hovered_song_last_frame: Option<bc::state::SongId>,
 }
 
 impl Ui {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        config: Arc<RwLock<Config>>,
-        logic: Arc<Logic>,
+        config: Arc<RwLock<bc::Config<style::Style>>>,
+        logic: Arc<bc::Logic>,
         repainter: SharedRepainter,
     ) -> Self {
         {
@@ -50,7 +59,9 @@ impl Ui {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        repainter.set(Box::new(cc.egui_ctx.clone())).unwrap();
+        repainter
+            .set(Box::new(ContextRepainter(cc.egui_ctx.clone())))
+            .unwrap();
 
         Ui {
             config,
@@ -258,10 +269,9 @@ impl eframe::App for Ui {
 
                                 // Get cover art if needed
                                 let cover_art = if config_read.general.album_art_enabled {
-                                    album
-                                        .cover_art_id
-                                        .as_deref()
-                                        .and_then(|id| self.logic.get_cover_art(id))
+                                    album.cover_art_id.as_deref().and_then(|id| {
+                                        Some((id.to_string(), self.logic.get_cover_art(id)?))
+                                    })
                                 } else {
                                     None
                                 };
@@ -272,7 +282,10 @@ impl eframe::App for Ui {
                                     ui,
                                     &config_read.style,
                                     local_visible_range,
-                                    cover_art,
+                                    cover_art.map(|(id, bytes)| egui::ImageSource::Bytes {
+                                        uri: id.into(),
+                                        bytes: bytes.into(),
+                                    }),
                                     config_read.general.album_art_enabled,
                                     &self.logic.get_song_map(),
                                     playing_song_id.as_ref(),

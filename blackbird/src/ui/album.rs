@@ -1,9 +1,11 @@
 use std::ops::Range;
 
 use crate::{
-    state::{Album, SongId, SongMap},
+    bc::{
+        state::{Album, SongId, SongMap},
+        util,
+    },
     ui::{song, style},
-    util,
 };
 
 pub struct AlbumResponse<'a> {

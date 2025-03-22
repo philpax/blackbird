@@ -6,11 +6,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::{Serialize, de::DeserializeOwned};
+
 use crate::{
-    bs,
+    SharedRepainter, bs,
     config::Config,
     state::{Album, AlbumId, Song, SongId, SongMap},
-    SharedRepainter,
 };
 
 pub struct Logic {
@@ -41,9 +42,11 @@ impl Logic {
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
     const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-    pub fn new(
+    pub fn new<
+        Style: Default + DeserializeOwned + Serialize + PartialEq + Send + Sync + 'static,
+    >(
         client: bs::Client,
-        config: Arc<RwLock<Config>>,
+        config: Arc<RwLock<Config<Style>>>,
         repainter: SharedRepainter,
     ) -> Self {
         // Create the logic thread for audio playback
@@ -292,18 +295,10 @@ impl Logic {
                             state.cover_art_cache.remove(&oldest_id);
                         }
 
-                        let uri = format!("bytes://{cover_art_id}");
                         state.pending_cover_art_requests.remove(&cover_art_id);
-                        state.cover_art_cache.insert(
-                            cover_art_id,
-                            (
-                                egui::ImageSource::Bytes {
-                                    uri: uri.into(),
-                                    bytes: cover_art.into(),
-                                },
-                                std::time::Instant::now(),
-                            ),
-                        );
+                        state
+                            .cover_art_cache
+                            .insert(cover_art_id, (cover_art, std::time::Instant::now()));
                     }
                     Err(e) => {
                         let mut state = state.write().unwrap();
@@ -353,7 +348,7 @@ impl Logic {
             .unwrap();
     }
 
-    pub fn get_cover_art(&self, id: &str) -> Option<egui::ImageSource<'static>> {
+    pub fn get_cover_art(&self, id: &str) -> Option<Vec<u8>> {
         self.read_state()
             .cover_art_cache
             .get(id)
@@ -527,7 +522,7 @@ struct AppState {
     pending_album_request_ids: HashSet<AlbumId>,
     song_count: usize,
 
-    cover_art_cache: HashMap<String, (egui::ImageSource<'static>, std::time::Instant)>,
+    cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
 
     playing_song: Option<SongId>,

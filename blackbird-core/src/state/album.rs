@@ -75,7 +75,7 @@ impl Ord for Album {
 }
 impl Album {
     /// Returns all albums; does not include songs.
-    pub async fn fetch_all(client: &bs::Client) -> anyhow::Result<Vec<Arc<Album>>> {
+    pub async fn fetch_all(client: &bs::Client) -> bs::ClientResult<Vec<Arc<Album>>> {
         let mut all_albums = vec![];
         let mut offset = 0;
         loop {

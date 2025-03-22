@@ -1,15 +1,13 @@
-use serde::{Deserialize, Serialize};
-
-use crate::ui;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
-pub struct Config {
+pub struct Config<Style: Default> {
     #[serde(default)]
     pub general: General,
     #[serde(default)]
-    pub style: ui::Style,
+    pub style: Style,
 }
-impl Config {
+impl<Style: Default + DeserializeOwned + Serialize> Config<Style> {
     pub const FILENAME: &str = "config.toml";
 
     pub fn load() -> Self {

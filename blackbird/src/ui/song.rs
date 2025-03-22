@@ -1,7 +1,6 @@
 use crate::{
-    state::Song,
+    bc::{state::Song, util},
     ui::{style, util::RightAlignedWidget},
-    util,
 };
 
 pub fn track_length_str_width(song: &Song, ui: &egui::Ui) -> f32 {
