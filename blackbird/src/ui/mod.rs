@@ -76,6 +76,7 @@ impl eframe::App for Ui {
 
         let margin = 8;
         let scroll_margin = 4;
+        let percent_loaded = self.logic.get_loaded_0_to_1();
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::default()
@@ -133,7 +134,6 @@ impl eframe::App for Ui {
                                 });
                             } else {
                                 ui.horizontal(|ui| {
-                                    let percent_loaded = self.logic.get_loaded_0_to_1();
                                     ui.add(
                                         egui::Label::new(format!(
                                             "Nothing playing | {:0.1}% loaded | {} songs",
@@ -189,6 +189,11 @@ impl eframe::App for Ui {
                 ui.separator();
 
                 ui.scope(|ui| {
+                    if percent_loaded < 1.0 {
+                        ui.add_sized(ui.available_size(), egui::Spinner::new());
+                        return;
+                    }
+
                     // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
                     // to 0, but egui doesn't allow that for solid scroll bars.
                     ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
