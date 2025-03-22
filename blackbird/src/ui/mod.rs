@@ -145,7 +145,7 @@ impl eframe::App for Ui {
                                 });
                                 ui.horizontal(|ui| {
                                     ui.add(
-                                        egui::Label::new("Double-click a song to play it!")
+                                        egui::Label::new("Click a song to play it!")
                                             .selectable(false),
                                     );
                                 });
