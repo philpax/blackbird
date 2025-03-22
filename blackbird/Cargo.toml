@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 blackbird-core = { path = "../blackbird-core" }
-blackbird-subsonic = { path = "../blackbird-subsonic" }
 
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

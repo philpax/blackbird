@@ -3,7 +3,6 @@ use std::sync::{Arc, RwLock};
 mod ui;
 
 use blackbird_core as bc;
-use blackbird_subsonic as bs;
 
 fn main() {
     let subscriber = tracing_subscriber::FmtSubscriber::new();
@@ -16,19 +15,22 @@ fn main() {
     config.save();
 
     // Create client with config values
-    let client = bs::Client::new(
-        config.general.base_url.clone(),
-        config.general.username.clone(),
-        config.general.password.clone(),
-        "blackbird".to_string(),
-    );
+    let base_url = config.general.base_url.clone();
+    let username = config.general.username.clone();
+    let password = config.general.password.clone();
 
     // Create a repainter handle that will get populated by the UI
     let repainter = bc::SharedRepainter::new(Default::default());
 
     // Now wrap config in Arc<RwLock> after using it for client creation
     let config = Arc::new(RwLock::new(config));
-    let logic = Arc::new(bc::Logic::new(client, config.clone(), repainter.clone()));
+    let logic = Arc::new(bc::Logic::new(
+        base_url,
+        username,
+        password,
+        config.clone(),
+        repainter.clone(),
+    ));
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(

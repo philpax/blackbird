@@ -45,7 +45,9 @@ impl Logic {
     pub fn new<
         Style: Default + DeserializeOwned + Serialize + PartialEq + Send + Sync + 'static,
     >(
-        client: bs::Client,
+        base_url: String,
+        username: String,
+        password: String,
         config: Arc<RwLock<Config<Style>>>,
         repainter: SharedRepainter,
     ) -> Self {
@@ -66,7 +68,12 @@ impl Logic {
         }));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
 
-        let client = Arc::new(client);
+        let client = Arc::new(bs::Client::new(
+            base_url,
+            username,
+            password,
+            "blackbird".to_string(),
+        ));
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
