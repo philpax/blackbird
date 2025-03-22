@@ -261,16 +261,6 @@ impl Logic {
         }
     }
 
-    pub fn fetch_album(&self, album_id: &AlbumId) {
-        Self::fetch_album_impl(
-            &self.tokio,
-            &self.client,
-            &self.state,
-            &self.song_map,
-            album_id,
-        );
-    }
-
     pub fn fetch_cover_art(&self, cover_art_id: &str) {
         {
             let mut state = self.write_state();

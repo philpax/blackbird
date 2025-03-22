@@ -254,11 +254,6 @@ impl eframe::App for Ui {
                                 let album_lines =
                                     album::line_count(&album) + album_margin_bottom_row_count;
 
-                                // If the album needs to be loaded
-                                if album.songs.is_none() {
-                                    self.logic.fetch_album(&album.id);
-                                }
-
                                 // Handle cover art if enabled
                                 if config_read.general.album_art_enabled {
                                     if let Some(cover_art_id) = &album.cover_art_id {
