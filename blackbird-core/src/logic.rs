@@ -487,20 +487,27 @@ impl Logic {
                 Ok(incoming_album) => {
                     let mut state = state.write().unwrap();
                     let album_idx = state.album_id_to_idx[&album_id];
+
+                    let mut songs = incoming_album.song.clone();
+                    songs.sort_by_key(|s| {
+                        (
+                            s.year.unwrap_or_default(),
+                            s.album_id.clone().unwrap_or_default(),
+                            s.disc_number.unwrap_or_default(),
+                            s.track.unwrap_or_default(),
+                            s.artist.clone().unwrap_or_default().to_ascii_lowercase(),
+                            s.title.to_ascii_lowercase(),
+                        )
+                    });
+
                     // Replace the Arc in the array
                     state.albums[album_idx] = Arc::new(Album {
-                        songs: Some(
-                            incoming_album
-                                .song
-                                .iter()
-                                .map(|s| SongId(s.id.clone()))
-                                .collect(),
-                        ),
+                        songs: Some(songs.iter().map(|s| SongId(s.id.clone())).collect()),
                         ..(*state.albums[album_idx]).clone()
                     });
                     {
                         let mut song_map = song_map.write().unwrap();
-                        song_map.extend(incoming_album.song.into_iter().map(|s| {
+                        song_map.extend(songs.into_iter().map(|s| {
                             let s: Song = s.into();
                             (s.id.clone(), s)
                         }));
