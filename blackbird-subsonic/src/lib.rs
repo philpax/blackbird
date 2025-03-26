@@ -233,13 +233,13 @@ impl Client {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct Response {
     subsonic_response: SubsonicResponse,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SubsonicResponse {
     status: ResponseStatus,
@@ -251,7 +251,7 @@ struct SubsonicResponse {
     album: Option<AlbumWithSongsID3>,
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 /// The status of a response.
 enum ResponseStatus {
@@ -261,7 +261,7 @@ enum ResponseStatus {
     Failed,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// An error that occurred when making a request.
 struct ResponseError {
     /// The error code.
@@ -270,13 +270,13 @@ struct ResponseError {
     message: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct AlbumList2 {
     album: Vec<AlbumID3>,
 }
 
 /// Represents an album with ID3 metadata
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumID3 {
     /// The album ID
@@ -313,7 +313,7 @@ pub struct AlbumID3 {
 }
 
 /// Represents an album with ID3 metadata and songs
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumWithSongsID3 {
     /// The album metadata
@@ -324,7 +324,7 @@ pub struct AlbumWithSongsID3 {
 }
 
 /// Represents a child item (file or directory) in the Subsonic API
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Child {
     /// The unique identifier
