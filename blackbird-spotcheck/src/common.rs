@@ -11,10 +11,23 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 #[serde(transparent)]
 pub struct Uri(pub String);
 
-#[derive(Debug, Clone, Serialize, Deserialize, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumId {
     pub artist: String,
     pub album: String,
+}
+impl PartialEq for AlbumId {
+    fn eq(&self, other: &Self) -> bool {
+        self.artist.eq_ignore_ascii_case(&other.artist)
+            && self.album.eq_ignore_ascii_case(&other.album)
+    }
+}
+impl Eq for AlbumId {}
+impl std::hash::Hash for AlbumId {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.artist.to_lowercase().hash(state);
+        self.album.to_lowercase().hash(state);
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
