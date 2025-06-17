@@ -1,4 +1,8 @@
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    io::Write as _,
+    path::{Path, PathBuf},
+};
 
 use anyhow::Context as _;
 use serde::{Deserialize, Serialize};
@@ -87,13 +91,34 @@ enum StreamingHistoryRecord {
 
 type StreamingHistory = Vec<StreamingHistoryRecord>;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Track {
+    artist: String,
+    album: String,
+    track: String,
+    uri: String,
+    play_count: u32,
+}
+
 fn main() -> anyhow::Result<()> {
     let path = PathBuf::from(std::env::args().nth(1).context("No path provided")?);
 
     let library: Library =
         serde_json::from_str(&std::fs::read_to_string(path.join("YourLibrary.json"))?)?;
 
-    println!("{library:?}");
+    let mut tracks = HashMap::new();
+    for track in library.tracks {
+        tracks.insert(
+            track.uri.clone(),
+            Track {
+                artist: track.artist,
+                album: track.album,
+                track: track.track,
+                uri: track.uri,
+                play_count: 0,
+            },
+        );
+    }
 
     for file in path.join("Spotify Extended Streaming History").read_dir()? {
         let file = file?;
@@ -110,7 +135,34 @@ fn main() -> anyhow::Result<()> {
 
         println!("Processing {}", file.display());
         let history: StreamingHistory = serde_json::from_str(&std::fs::read_to_string(file)?)?;
-        println!("{history:?}");
+
+        for record in history {
+            match record {
+                StreamingHistoryRecord::Track(track) => {
+                    tracks
+                        .entry(track.spotify_track_uri.clone())
+                        .or_insert(Track {
+                            artist: track.master_metadata_album_artist_name,
+                            album: track.master_metadata_album_album_name,
+                            track: track.master_metadata_track_name,
+                            uri: track.spotify_track_uri,
+                            play_count: 0,
+                        })
+                        .play_count += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let output_dir = Path::new("spotcheck-output");
+    let _ = std::fs::remove_dir_all(output_dir);
+    std::fs::create_dir_all(output_dir)?;
+
+    let mut file = std::fs::File::create(output_dir.join("tracks.ndjson"))?;
+    for track in tracks.values() {
+        serde_json::to_writer(&mut file, &track)?;
+        file.write_all(b"\n")?;
     }
 
     Ok(())
