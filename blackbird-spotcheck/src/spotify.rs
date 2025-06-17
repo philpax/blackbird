@@ -16,12 +16,28 @@ mod library {
         track: String,
         uri: String,
     }
+    impl From<&Track> for common::AlbumId {
+        fn from(track: &Track) -> Self {
+            common::AlbumId {
+                artist: track.artist.clone(),
+                album: track.album.clone(),
+            }
+        }
+    }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
     struct Album {
         artist: String,
         album: String,
         uri: String,
+    }
+    impl From<&Album> for common::AlbumId {
+        fn from(album: &Album) -> Self {
+            common::AlbumId {
+                artist: album.artist.clone(),
+                album: album.album.clone(),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,15 +64,9 @@ mod library {
 
         for album in library.albums {
             albums.insert(
-                common::AlbumId {
-                    artist: album.artist.clone(),
-                    album: album.album.clone(),
-                },
+                (&album).into(),
                 common::Album {
-                    album_id: common::AlbumId {
-                        artist: album.artist,
-                        album: album.album,
-                    },
+                    album_id: (&album).into(),
                     uri: Some(common::Uri(album.uri)),
                     play_count: 0,
                 },
@@ -64,10 +74,7 @@ mod library {
         }
 
         for track in library.tracks {
-            let album_id = common::AlbumId {
-                artist: track.artist.clone(),
-                album: track.album.clone(),
-            };
+            let album_id = common::AlbumId::from(&track);
             if !albums.contains_key(&album_id) {
                 albums.insert(
                     album_id.clone(),
@@ -126,6 +133,14 @@ mod history {
         master_metadata_album_artist_name: String,
         master_metadata_album_album_name: String,
         spotify_track_uri: String,
+    }
+    impl From<&TrackRecord> for common::AlbumId {
+        fn from(track: &TrackRecord) -> Self {
+            common::AlbumId {
+                artist: track.master_metadata_album_artist_name.clone(),
+                album: track.master_metadata_album_album_name.clone(),
+            }
+        }
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,10 +201,7 @@ mod history {
                     continue;
                 };
 
-                let album_id = common::AlbumId {
-                    artist: track.master_metadata_album_artist_name,
-                    album: track.master_metadata_album_album_name,
-                };
+                let album_id = common::AlbumId::from(&track);
 
                 tracks
                     .entry(common::Uri(track.spotify_track_uri.clone()))
