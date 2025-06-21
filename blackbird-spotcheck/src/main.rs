@@ -43,7 +43,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     tracing::info!("Sorting albums by play count...");
-    let mut albums_vec = albums.0.values().collect::<Vec<_>>();
+    let mut albums_vec = albums.0.into_values().collect::<Vec<_>>();
     albums_vec.sort_by_key(|album| -(album.play_count as i32));
 
     tracing::info!("Generating top albums report...");
@@ -104,93 +104,115 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Generating missing albums report...");
     let mut output = std::fs::File::create(output_dir.join("top-missing-albums.md"))?;
     writeln!(output, "# Top Missing Albums")?;
-    let mut counter = 0;
 
     // Also create a report for found albums
     let mut found_output = std::fs::File::create(output_dir.join("top-found-albums.md"))?;
     writeln!(found_output, "# Top Found Albums")?;
-    let mut found_counter = 0;
 
-    for (i, album) in albums_vec.iter().enumerate() {
-        if i % 250 == 0 {
-            tracing::info!("Verifying album {} of {}", i + 1, albums_vec.len());
-        }
+    // Process albums in parallel chunks
+    let chunk_size = 100;
+    let mut all_results = Vec::new();
 
-        let spotify_artist = &album.album_id.artist;
-        let spotify_album = &album.album_id.album;
-
-        // First try exact match (fastest)
-        let exact_key = format!(
-            "{} - {}",
-            spotify_artist.to_lowercase(),
-            spotify_album.to_lowercase()
+    for (chunk_idx, chunk) in albums_vec.chunks(chunk_size).enumerate() {
+        tracing::info!(
+            "Processing chunk {} of {}",
+            chunk_idx + 1,
+            (albums_vec.len() + chunk_size - 1) / chunk_size
         );
-        if exact_album_matches.contains(&exact_key) {
-            writeln!(
-                found_output,
-                "{}: {} - {} ({} plays) [exact match]",
-                found_counter + 1,
-                album.album_id.artist,
-                album.album_id.album,
-                album.play_count
-            )?;
-            found_counter += 1;
-            continue;
-        }
 
-        // If no exact match, try fuzzy matching
-        let normalized_spotify_artist = normalize_artist_name(spotify_artist);
+        let tasks: Vec<_> = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, album)| {
+                let exact_album_matches = exact_album_matches.clone();
+                let normalized_artist_albums = normalized_artist_albums.clone();
+                let normalized_subsonic_artists = normalized_subsonic_artists.clone();
+                let album = album.clone();
+                let global_idx = chunk_idx * chunk_size + i;
 
-        let mut found_match = false;
+                tokio::task::spawn_blocking(move || {
+                    let spotify_artist = &album.album_id.artist;
+                    let spotify_album = &album.album_id.album;
 
-        // Look for similar artists
-        for subsonic_artist in &normalized_subsonic_artists {
-            if fuzzy_match(&normalized_spotify_artist, subsonic_artist) > 0.8 {
-                // Found a similar artist, now check their albums
-                if let Some(albums) = normalized_artist_albums.get(subsonic_artist) {
-                    for (_, subsonic_album_name) in albums {
-                        let album_similarity = fuzzy_match(spotify_album, subsonic_album_name);
-                        if album_similarity > 0.8 {
-                            found_match = true;
-                            break;
+                    // First try exact match (fastest)
+                    let exact_key = format!(
+                        "{} - {}",
+                        spotify_artist.to_lowercase(),
+                        spotify_album.to_lowercase()
+                    );
+                    if exact_album_matches.contains(&exact_key) {
+                        return (global_idx, album, Some("exact"));
+                    }
+
+                    // If no exact match, try fuzzy matching (CPU-intensive work)
+                    let normalized_spotify_artist = normalize_artist_name(spotify_artist);
+
+                    // Look for similar artists
+                    for subsonic_artist in &normalized_subsonic_artists {
+                        if fuzzy_match(&normalized_spotify_artist, subsonic_artist) > 0.8 {
+                            // Found a similar artist, now check their albums
+                            if let Some(albums) = normalized_artist_albums.get(subsonic_artist) {
+                                for (_, subsonic_album_name) in albums {
+                                    let album_similarity =
+                                        fuzzy_match(spotify_album, subsonic_album_name);
+                                    if album_similarity > 0.8 {
+                                        return (global_idx, album, Some("fuzzy"));
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-                if found_match {
-                    break;
-                }
+
+                    (global_idx, album, None)
+                })
+            })
+            .collect();
+
+        let chunk_results = futures::future::join_all(tasks).await;
+        for result in chunk_results {
+            all_results.push(result?);
+        }
+    }
+
+    // Sort results by original index to maintain play count order
+    all_results.sort_by_key(|(idx, _, _)| *idx);
+
+    // Write results to files
+    let mut found_counter = 0;
+    let mut missing_counter = 0;
+
+    for (_, album, match_type) in all_results {
+        match match_type {
+            Some(match_kind) => {
+                writeln!(
+                    found_output,
+                    "{}: {} - {} ({} plays) [{}]",
+                    found_counter + 1,
+                    album.album_id.artist,
+                    album.album_id.album,
+                    album.play_count,
+                    match_kind
+                )?;
+                found_counter += 1;
+            }
+            None => {
+                writeln!(
+                    output,
+                    "{}: {} - {} ({} plays)",
+                    missing_counter + 1,
+                    album.album_id.artist,
+                    album.album_id.album,
+                    album.play_count
+                )?;
+                missing_counter += 1;
             }
         }
-
-        if found_match {
-            writeln!(
-                found_output,
-                "{}: {} - {} ({} plays) [fuzzy match]",
-                found_counter + 1,
-                album.album_id.artist,
-                album.album_id.album,
-                album.play_count
-            )?;
-            found_counter += 1;
-            continue;
-        }
-
-        writeln!(
-            output,
-            "{}: {} - {} ({} plays)",
-            counter + 1,
-            album.album_id.artist,
-            album.album_id.album,
-            album.play_count
-        )?;
-
-        counter += 1;
     }
 
     tracing::info!(
         "Found {} albums in Subsonic, {} missing",
         found_counter,
-        counter
+        missing_counter
     );
 
     tracing::info!("blackbird-spotcheck completed successfully!");

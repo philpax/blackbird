@@ -8,6 +8,7 @@ blackbird-shared = { path = "../blackbird-shared" }
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 
 chrono = { version = "0.4.41", features = ["serde"] }
+futures = "0.3"
 
 anyhow = { workspace = true }
 serde = { workspace = true }
