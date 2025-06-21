@@ -5,9 +5,9 @@ edition = "2024"
 
 [dependencies]
 serde = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 
 rodio = "0.20.1"
-tokio = { version = "1.43.1", features = ["full"] }

@@ -579,9 +579,15 @@ name = "blackbird-spotcheck"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blackbird-shared",
+ "blackbird-subsonic",
  "chrono",
  "serde",
  "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
