@@ -117,7 +117,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(
             "Processing chunk {} of {}",
             chunk_idx + 1,
-            (albums_vec.len() + chunk_size - 1) / chunk_size
+            albums_vec.len().div_ceil(chunk_size)
         );
 
         let tasks: Vec<_> = chunk
@@ -285,13 +285,10 @@ fn jaro_similarity(s1: &str, s2: &str) -> f64 {
     let mut matches = 0;
 
     for (i, c1) in s1.chars().enumerate() {
-        let start = if i > match_distance {
-            i - match_distance
-        } else {
-            0
-        };
+        let start = i.saturating_sub(match_distance);
         let end = (i + match_distance + 1).min(len2);
 
+        #[allow(clippy::needless_range_loop)]
         for j in start..end {
             if !s2_matches[j] && c1 == s2.chars().nth(j).unwrap() {
                 s1_matches[i] = true;
