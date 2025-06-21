@@ -3,14 +3,12 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
-    time::{Duration, Instant},
 };
 
-use serde::{Serialize, de::DeserializeOwned};
+use tokio::io::AsyncWriteExt as _;
 
 use crate::{
-    SharedRepainter, bs,
-    config::Config,
+    bs,
     state::{Album, AlbumId, Song, SongId, SongMap},
 };
 
@@ -40,17 +38,8 @@ impl Logic {
     const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 100;
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
-    const CONFIG_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
-    pub fn new<
-        Style: Default + DeserializeOwned + Serialize + PartialEq + Send + Sync + 'static,
-    >(
-        base_url: String,
-        username: String,
-        password: String,
-        config: Arc<RwLock<Config<Style>>>,
-        repainter: SharedRepainter,
-    ) -> Self {
+    pub fn new(base_url: String, username: String, password: String) -> Self {
         // Create the logic thread for audio playback
         let (logic_tx, logic_rx) = std::sync::mpsc::channel();
 
@@ -64,7 +53,6 @@ impl Logic {
             is_loading_song: false,
             playing_song: None,
             error: None,
-            last_config_update: Instant::now(),
         }));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
 
@@ -97,8 +85,6 @@ impl Logic {
             let song_map = song_map.clone();
             let client = client.clone();
             let tokio = tokio.clone();
-            let config = config.clone();
-            let repainter = repainter.clone();
             move || {
                 let (_output_stream, output_stream_handle) =
                     rodio::OutputStream::try_default().unwrap();
@@ -135,24 +121,6 @@ impl Logic {
                             }
                             LogicThreadMessage::StopPlayback => {
                                 sink.clear();
-                            }
-                        }
-                    }
-
-                    // Poll for config updates
-                    {
-                        let mut state_write = state.write().unwrap();
-                        if state_write.last_config_update.elapsed() > Self::CONFIG_CHECK_INTERVAL {
-                            let new_config = Config::load();
-                            let current_config = config.read().unwrap();
-                            if new_config != *current_config {
-                                drop(current_config);
-                                *config.write().unwrap() = new_config;
-                                config.read().unwrap().save();
-                            }
-                            state_write.last_config_update = Instant::now();
-                            if let Some(repainter) = repainter.get() {
-                                repainter.repaint();
                             }
                         }
                     }
@@ -539,7 +507,6 @@ struct AppState {
     is_loading_song: bool,
     playing_song: Option<SongId>,
     error: Option<String>,
-    last_config_update: Instant,
 }
 
 enum LogicThreadMessage {

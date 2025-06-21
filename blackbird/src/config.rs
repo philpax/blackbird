@@ -1,13 +1,17 @@
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize};
+
+use crate::ui;
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
-pub struct Config<Style: Default> {
+pub struct Config {
     #[serde(default)]
     pub general: General,
     #[serde(default)]
-    pub style: Style,
+    pub server: blackbird_shared::config::Server,
+    #[serde(default)]
+    pub style: ui::Style,
 }
-impl<Style: Default + DeserializeOwned + Serialize> Config<Style> {
+impl Config {
     pub const FILENAME: &str = "config.toml";
 
     pub fn load() -> Self {
@@ -39,18 +43,12 @@ impl<Style: Default + DeserializeOwned + Serialize> Config<Style> {
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct General {
-    pub base_url: String,
-    pub username: String,
-    pub password: String,
     pub album_art_enabled: bool,
     pub repaint_secs: f32,
 }
 impl Default for General {
     fn default() -> Self {
         Self {
-            base_url: "http://localhost:4533".to_string(),
-            username: "YOUR_USERNAME".to_string(),
-            password: "YOUR_PASSWORD".to_string(),
             album_art_enabled: true,
             repaint_secs: 1.0,
         }

@@ -5,21 +5,13 @@ mod song;
 mod style;
 mod util;
 
-use blackbird_core::SharedRepainter;
 pub use style::Style;
 
-use crate::bc;
-
-#[derive(Debug)]
-struct ContextRepainter(egui::Context);
-impl bc::Repainter for ContextRepainter {
-    fn repaint(&self) {
-        self.0.request_repaint();
-    }
-}
+use crate::{bc, config::Config};
 
 pub struct Ui {
-    config: Arc<RwLock<bc::Config<style::Style>>>,
+    config: Arc<RwLock<Config>>,
+    _config_reload_thread: std::thread::JoinHandle<()>,
     logic: Arc<bc::Logic>,
     hovered_song_last_frame: Option<bc::state::SongId>,
 }
@@ -27,9 +19,8 @@ pub struct Ui {
 impl Ui {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
-        config: Arc<RwLock<bc::Config<style::Style>>>,
+        config: Arc<RwLock<Config>>,
         logic: Arc<bc::Logic>,
-        repainter: SharedRepainter,
     ) -> Self {
         {
             let config_read = config.read().unwrap();
@@ -59,12 +50,26 @@ impl Ui {
 
         egui_extras::install_image_loaders(&cc.egui_ctx);
 
-        repainter
-            .set(Box::new(ContextRepainter(cc.egui_ctx.clone())))
-            .unwrap();
+        let _config_reload_thread = std::thread::spawn({
+            let config = config.clone();
+            let egui_ctx = cc.egui_ctx.clone();
+            move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(1));
+
+                let new_config = Config::load();
+                let current_config = config.read().unwrap();
+                if new_config != *current_config {
+                    drop(current_config);
+                    *config.write().unwrap() = new_config;
+                    config.read().unwrap().save();
+                    egui_ctx.request_repaint();
+                }
+            }
+        });
 
         Ui {
             config,
+            _config_reload_thread,
             logic,
             hovered_song_last_frame: None,
         }

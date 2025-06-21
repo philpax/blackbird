@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 blackbird-core = { path = "../blackbird-core" }
+blackbird-shared = { path = "../blackbird-shared" }
 
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -19,3 +20,4 @@ image = { version = "0.25", default-features = false, features = [
     "png",
 ] }
 egui-phosphor = "0.9.0"
+toml = "0.8.20"
