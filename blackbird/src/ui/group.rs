@@ -79,8 +79,11 @@ pub fn ui<'a>(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(util::seconds_to_hms_string(group.duration))
-                                    .color(style.album_length()),
+                                egui::RichText::new(util::seconds_to_hms_string(
+                                    group.duration,
+                                    false,
+                                ))
+                                .color(style.album_length()),
                             )
                             .selectable(false),
                         );

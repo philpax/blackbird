@@ -104,5 +104,5 @@ pub fn ui(
 }
 
 fn track_length_str(song: &Song) -> String {
-    util::seconds_to_hms_string(song.duration.unwrap_or(0))
+    util::seconds_to_hms_string(song.duration.unwrap_or(0), false)
 }

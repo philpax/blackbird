@@ -152,7 +152,7 @@ impl eframe::App for Ui {
                                         let [position_hms, duration_hms] =
                                             [pi.song_position, pi.song_duration]
                                                 .map(|d| d.as_secs() as u32)
-                                                .map(seconds_to_hms_string);
+                                                .map(|s| seconds_to_hms_string(s, true));
                                         ui.add(
                                             egui::Label::new(
                                                 egui::RichText::new(format!(
