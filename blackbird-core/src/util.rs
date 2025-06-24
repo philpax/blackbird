@@ -9,6 +9,7 @@ pub fn seconds_to_hms_string(seconds: u32, pad_first: bool) -> String {
     let minutes = (seconds % 3600) / 60;
     let seconds = seconds % 60;
 
+    #[allow(clippy::collapsible_else_if)]
     if hours > 0 {
         if pad_first {
             format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
