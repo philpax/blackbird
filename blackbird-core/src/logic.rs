@@ -5,11 +5,9 @@ use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use tokio::io::AsyncWriteExt as _;
-
 use crate::{
     bs,
-    state::{Album, AlbumId, Song, SongId, SongMap},
+    state::{Album, AlbumId, Group, Song, SongId, SongMap},
 };
 
 pub struct Logic {
@@ -18,8 +16,8 @@ pub struct Logic {
     state: Arc<RwLock<AppState>>,
     song_map: Arc<RwLock<SongMap>>,
     client: Arc<bs::Client>,
-    logic_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
-    _logic_thread_handle: std::thread::JoinHandle<()>,
+    playback_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
+    _playback_thread_handle: std::thread::JoinHandle<()>,
 }
 
 pub struct PlayingInfo {
@@ -29,27 +27,23 @@ pub struct PlayingInfo {
     pub song_artist: Option<String>,
 }
 
-pub struct VisibleAlbumSet {
-    pub albums: Vec<Arc<Album>>,
+pub struct VisibleGroupSet {
+    pub groups: Vec<Arc<Group>>,
     pub start_row: usize,
 }
 
 impl Logic {
-    const MAX_CONCURRENT_ALBUM_REQUESTS: usize = 100;
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
     pub fn new(base_url: String, username: String, password: String) -> Self {
-        // Create the logic thread for audio playback
-        let (logic_tx, logic_rx) = std::sync::mpsc::channel();
-
         let state = Arc::new(RwLock::new(AppState {
-            albums: vec![],
-            album_id_to_idx: HashMap::new(),
-            pending_album_request_ids: HashSet::new(),
-            song_count: 0,
+            songs: vec![],
+            groups: vec![],
+            albums: HashMap::new(),
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
+            has_loaded_all_songs: false,
             is_loading_song: false,
             playing_song: None,
             error: None,
@@ -79,84 +73,50 @@ impl Logic {
             });
         });
 
-        // Initialize audio output in the logic thread
-        let logic_thread_handle = std::thread::spawn({
-            let state = state.clone();
-            let song_map = song_map.clone();
-            let client = client.clone();
-            let tokio = tokio.clone();
-            move || {
-                let (_output_stream, output_stream_handle) =
-                    rodio::OutputStream::try_default().unwrap();
-                let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
-                sink.set_volume(1.0);
+        // Initialize audio output in the playback thread
+        let (playback_thread_tx, playback_thread_rx) = std::sync::mpsc::channel();
+        let playback_thread_handle = std::thread::spawn(move || {
+            let (_output_stream, output_stream_handle) =
+                rodio::OutputStream::try_default().unwrap();
+            let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+            sink.set_volume(1.0);
 
-                let mut last_data = None;
-                loop {
-                    // Process all available messages without blocking
-                    while let Ok(msg) = logic_rx.try_recv() {
-                        match msg {
-                            LogicThreadMessage::PlaySong(data) => {
-                                sink.clear();
-                                last_data = Some(data.clone());
-                                sink.append(
-                                    rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
-                                );
-                                sink.play();
+            let mut last_data = None;
+            loop {
+                // Process all available messages without blocking
+                while let Ok(msg) = playback_thread_rx.try_recv() {
+                    match msg {
+                        LogicThreadMessage::PlaySong(data) => {
+                            sink.clear();
+                            last_data = Some(data.clone());
+                            sink.append(
+                                rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
+                            );
+                            sink.play();
+                        }
+                        LogicThreadMessage::TogglePlayback => {
+                            if !sink.is_paused() {
+                                sink.pause();
+                                continue;
                             }
-                            LogicThreadMessage::TogglePlayback => {
-                                if !sink.is_paused() {
-                                    sink.pause();
-                                    continue;
+                            if sink.empty() {
+                                if let Some(data) = last_data.clone() {
+                                    sink.append(
+                                        rodio::Decoder::new_looped(std::io::Cursor::new(data))
+                                            .unwrap(),
+                                    );
                                 }
-                                if sink.empty() {
-                                    if let Some(data) = last_data.clone() {
-                                        sink.append(
-                                            rodio::Decoder::new_looped(std::io::Cursor::new(data))
-                                                .unwrap(),
-                                        );
-                                    }
-                                }
-                                sink.play();
                             }
-                            LogicThreadMessage::StopPlayback => {
-                                sink.clear();
-                            }
+                            sink.play();
+                        }
+                        LogicThreadMessage::StopPlayback => {
+                            sink.clear();
                         }
                     }
-
-                    // Fetch unloaded albums up to MAX_CONCURRENT_ALBUM_REQUESTS
-                    {
-                        let pending_count = state.read().unwrap().pending_album_request_ids.len();
-
-                        if pending_count < Self::MAX_CONCURRENT_ALBUM_REQUESTS {
-                            // Find albums that need to be loaded
-                            let unloaded_albums: Vec<AlbumId> = {
-                                let state_read = state.read().unwrap();
-                                state_read
-                                    .albums
-                                    .iter()
-                                    .filter(|album| album.songs.is_none())
-                                    .filter(|album| {
-                                        !state_read.pending_album_request_ids.contains(&album.id)
-                                    })
-                                    .take(Self::MAX_CONCURRENT_ALBUM_REQUESTS - pending_count)
-                                    .map(|album| album.id.clone())
-                                    .collect()
-                            };
-
-                            // Fetch each album
-                            for album_id in unloaded_albums {
-                                Self::fetch_album_impl(
-                                    &tokio, &client, &state, &song_map, &album_id,
-                                );
-                            }
-                        }
-                    }
-
-                    // Sleep for 10ms between iterations
-                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
+
+                // Sleep for 10ms between iterations
+                std::thread::sleep(std::time::Duration::from_millis(10));
             }
         });
 
@@ -166,8 +126,8 @@ impl Logic {
             state,
             song_map,
             client,
-            logic_thread_tx: logic_tx,
-            _logic_thread_handle: logic_thread_handle,
+            playback_thread_tx,
+            _playback_thread_handle: playback_thread_handle,
         };
         logic.initial_fetch();
         logic
@@ -175,41 +135,41 @@ impl Logic {
 
     pub fn calculate_total_rows(
         &self,
-        album_margin_bottom_row_count: usize,
-        album_line_count_getter: impl Fn(&Album) -> usize,
+        group_margin_bottom_row_count: usize,
+        group_line_count_getter: impl Fn(&Group) -> usize,
     ) -> usize {
         self.read_state()
-            .albums
+            .groups
             .iter()
-            .map(|album| album_line_count_getter(album) + album_margin_bottom_row_count)
+            .map(|group| group_line_count_getter(group) + group_margin_bottom_row_count)
             .sum()
     }
 
-    pub fn get_visible_albums(
+    pub fn get_visible_groups(
         &self,
         visible_row_range: std::ops::Range<usize>,
-        album_margin_bottom_row_count: usize,
-        album_line_count_getter: impl Fn(&Album) -> usize,
-    ) -> VisibleAlbumSet {
+        group_margin_bottom_row_count: usize,
+        group_line_count_getter: impl Fn(&Group) -> usize,
+    ) -> VisibleGroupSet {
         let state = self.read_state();
         let mut current_row = 0;
-        let mut visible_albums = Vec::new();
+        let mut visible_groups = Vec::new();
         // We'll set this to the actual start row of first visible album
         let mut start_row = 0;
         let mut first_visible_found = false;
 
-        for album in &state.albums {
-            let album_lines = album_line_count_getter(album) + album_margin_bottom_row_count;
-            let album_range = current_row..(current_row + album_lines);
+        for group in &state.groups {
+            let group_lines = group_line_count_getter(group) + group_margin_bottom_row_count;
+            let group_range = current_row..(current_row + group_lines);
 
             // If this album starts after the visible range, we can break out
-            if album_range.start >= visible_row_range.end {
+            if group_range.start >= visible_row_range.end {
                 break;
             }
 
             // If this album is completely above the visible range, skip it
-            if album_range.end <= visible_row_range.start {
-                current_row += album_lines;
+            if group_range.end <= visible_row_range.start {
+                current_row += group_lines;
                 continue;
             }
 
@@ -219,12 +179,12 @@ impl Logic {
                 first_visible_found = true;
             }
 
-            visible_albums.push(album.clone());
-            current_row += album_lines;
+            visible_groups.push(group.clone());
+            current_row += group_lines;
         }
 
-        VisibleAlbumSet {
-            albums: visible_albums,
+        VisibleGroupSet {
+            groups: visible_groups,
             start_row,
         }
     }
@@ -280,7 +240,7 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let song_id = song_id.clone();
-        let logic_tx = self.logic_thread_tx.clone();
+        let logic_tx = self.playback_thread_tx.clone();
 
         self.spawn(async move {
             state.write().unwrap().is_loading_song = true;
@@ -305,13 +265,13 @@ impl Logic {
     }
 
     pub fn toggle_playback(&self) {
-        self.logic_thread_tx
+        self.playback_thread_tx
             .send(LogicThreadMessage::TogglePlayback)
             .unwrap();
     }
 
     pub fn stop_playback(&self) {
-        self.logic_thread_tx
+        self.playback_thread_tx
             .send(LogicThreadMessage::StopPlayback)
             .unwrap();
     }
@@ -344,12 +304,7 @@ impl Logic {
         let state = self.read_state();
         let song_map = self.song_map.read().unwrap();
         let song = song_map.get(state.playing_song.as_ref()?)?;
-        let album = state.albums.get(
-            state
-                .album_id_to_idx
-                .get(song.album_id.as_ref()?)
-                .copied()?,
-        )?;
+        let album = state.albums.get(song.album_id.as_ref()?)?;
         Some(PlayingInfo {
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
@@ -358,11 +313,9 @@ impl Logic {
         })
     }
 
-    pub fn get_loaded_0_to_1(&self) -> f32 {
+    pub fn has_loaded_all_songs(&self) -> bool {
         let state = self.read_state();
-        let total_albums = state.albums.len();
-        let loaded_albums = state.albums.iter().filter(|a| a.songs.is_some()).count();
-        loaded_albums as f32 / total_albums as f32
+        state.has_loaded_all_songs
     }
 
     pub fn get_error(&self) -> Option<String> {
@@ -371,10 +324,6 @@ impl Logic {
 
     pub fn get_song_map(&self) -> RwLockReadGuard<SongMap> {
         self.song_map.read().unwrap()
-    }
-
-    pub fn song_count(&self) -> usize {
-        self.read_state().song_count
     }
 
     pub fn clear_error(&self) {
@@ -389,6 +338,7 @@ impl Logic {
     fn initial_fetch(&self) {
         let client = self.client.clone();
         let state = self.state.clone();
+        let song_map = self.song_map.clone();
         self.spawn(async move {
             if let Err(e) = client.ping().await {
                 state.write().unwrap().error = Some(e.to_string());
@@ -398,20 +348,119 @@ impl Logic {
             match Album::fetch_all(&client).await {
                 Ok(albums) => {
                     let mut state = state.write().unwrap();
-                    state.albums = albums;
-                    state.albums.sort();
-                    state.album_id_to_idx = state
-                        .albums
-                        .iter()
-                        .enumerate()
-                        .map(|(i, a)| (a.id.clone(), i))
-                        .collect();
-                    state.song_count = state.albums.iter().map(|a| a.song_count as usize).sum();
+                    state.albums = albums.into_iter().map(|a| (a.id.clone(), a)).collect();
                 }
                 Err(e) => {
                     state.write().unwrap().error = Some(e.to_string());
                 }
             };
+
+            let mut offset = 0;
+            loop {
+                let response = client
+                    .search3(&bs::Search3Request {
+                        query: "".to_string(),
+                        artist_count: Some(0),
+                        album_count: Some(0),
+                        song_count: Some(10000),
+                        song_offset: Some(offset),
+                        ..Default::default()
+                    })
+                    .await
+                    .unwrap();
+
+                if response.song.is_empty() {
+                    break;
+                }
+
+                let song_count = response.song.len();
+                {
+                    let mut song_map = song_map.write().unwrap();
+                    for song in response.song {
+                        let song = Song::from(song);
+                        song_map.insert(song.id.clone(), song);
+                    }
+                }
+                tracing::info!("Fetched {song_count} songs");
+                offset += song_count as u32;
+            }
+
+            {
+                let song_map = song_map.read().unwrap();
+                let mut state = state.write().unwrap();
+                // Get all song IDs.
+                state.songs = song_map.keys().cloned().collect();
+                // This is all mad ineffcient but cbf doing it better.
+                // Sort songs.
+                {
+                    let song_data: HashMap<SongId, _> = state
+                        .songs
+                        .iter()
+                        .map(|id| {
+                            let song = song_map.get(id).unwrap_or_else(|| {
+                                panic!("Song not found in song map: {id}");
+                            });
+                            let album_id = song.album_id.as_ref().unwrap_or_else(|| {
+                                panic!("Album ID not found in song: {:?}", song);
+                            });
+                            let album = state.albums.get(album_id).unwrap_or_else(|| {
+                                panic!("Album not found in state: {:?}", album_id);
+                            });
+                            (
+                                id.clone(),
+                                (
+                                    album.artist.clone(),
+                                    album.year.unwrap_or_default(),
+                                    album.name.clone(),
+                                    song.disc_number.unwrap_or_default(),
+                                    song.track.unwrap_or_default(),
+                                    song.title.clone(),
+                                ),
+                            )
+                        })
+                        .collect();
+                    state
+                        .songs
+                        .sort_by_cached_key(|id| song_data.get(id).unwrap());
+                }
+                // Build groups.
+                let mut new_groups = vec![];
+                let mut current_group: Option<Group> = None;
+                for song_id in &state.songs {
+                    let song = song_map.get(song_id).unwrap_or_else(|| {
+                        panic!("Song not found in song map: {song_id}");
+                    });
+                    let album_id = song.album_id.as_ref().unwrap_or_else(|| {
+                        panic!("Album ID not found in song: {:?}", song);
+                    });
+                    let album = state.albums.get(album_id).unwrap_or_else(|| {
+                        panic!("Album not found in state: {:?}", album_id);
+                    });
+
+                    if current_group.is_none() || matches!(&current_group, Some(group) if !(group.artist == album.artist && group.album == album.name && group.year == album.year)) {
+                        if let Some(group) = current_group.take() {
+                            new_groups.push(Arc::new(group));
+                        }
+
+                        current_group = Some(Group {
+                            artist: album.artist.clone(),
+                            album: album.name.clone(),
+                            year: album.year,
+                            duration: album.duration,
+                            songs: vec![],
+                            cover_art_id: album.cover_art_id.clone(),
+                        });
+                    }
+
+                    current_group.as_mut().unwrap().songs.push(song_id.clone());
+                }
+                if let Some(group) = current_group.take() {
+                    new_groups.push(Arc::new(group));
+                }
+                state.groups = new_groups;
+
+                state.has_loaded_all_songs = true;
+            }
         })
     }
 
@@ -422,87 +471,15 @@ impl Logic {
     fn read_state(&self) -> RwLockReadGuard<AppState> {
         self.state.read().unwrap()
     }
-
-    // Shared implementation for fetching an album
-    fn fetch_album_impl(
-        tokio: &TokioHandle,
-        client: &Arc<bs::Client>,
-        state: &Arc<RwLock<AppState>>,
-        song_map: &Arc<RwLock<SongMap>>,
-        album_id: &AlbumId,
-    ) {
-        // Mark album as pending
-        {
-            let mut state = state.write().unwrap();
-            if state.pending_album_request_ids.len() >= Self::MAX_CONCURRENT_ALBUM_REQUESTS {
-                return;
-            }
-            if state.pending_album_request_ids.contains(album_id) {
-                return;
-            }
-            state.pending_album_request_ids.insert(album_id.clone());
-        }
-
-        // Clone what we need for the async task
-        let client = client.clone();
-        let state = state.clone();
-        let album_id = album_id.clone();
-        let song_map = song_map.clone();
-
-        // Create the async task
-        let task = async move {
-            match client.get_album_with_songs(album_id.0.clone()).await {
-                Ok(incoming_album) => {
-                    let mut state = state.write().unwrap();
-                    let album_idx = state.album_id_to_idx[&album_id];
-
-                    let mut songs = incoming_album.song.clone();
-                    songs.sort_by_key(|s| {
-                        (
-                            s.year.unwrap_or_default(),
-                            s.album_id.clone().unwrap_or_default(),
-                            s.disc_number.unwrap_or_default(),
-                            s.track.unwrap_or_default(),
-                            s.artist.clone().unwrap_or_default().to_ascii_lowercase(),
-                            s.title.to_ascii_lowercase(),
-                        )
-                    });
-
-                    // Replace the Arc in the array
-                    state.albums[album_idx] = Arc::new(Album {
-                        songs: Some(songs.iter().map(|s| SongId(s.id.clone())).collect()),
-                        ..(*state.albums[album_idx]).clone()
-                    });
-                    {
-                        let mut song_map = song_map.write().unwrap();
-                        song_map.extend(songs.into_iter().map(|s| {
-                            let s: Song = s.into();
-                            (s.id.clone(), s)
-                        }));
-                    }
-                    state.pending_album_request_ids.remove(&album_id);
-                }
-                Err(e) => {
-                    let mut state = state.write().unwrap();
-                    state.error = Some(e.to_string());
-                    state.pending_album_request_ids.remove(&album_id);
-                }
-            }
-        };
-
-        // Get a TokioHandle to spawn the task
-        tokio.spawn(task);
-    }
 }
 
 struct AppState {
-    albums: Vec<Arc<Album>>,
-    album_id_to_idx: HashMap<AlbumId, usize>,
-    pending_album_request_ids: HashSet<AlbumId>,
-    song_count: usize,
-
+    songs: Vec<SongId>,
+    groups: Vec<Arc<Group>>,
+    albums: HashMap<AlbumId, Album>,
     cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
     pending_cover_art_requests: HashSet<String>,
+    has_loaded_all_songs: bool,
 
     is_loading_song: bool,
     playing_song: Option<SongId>,

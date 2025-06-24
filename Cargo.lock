@@ -562,7 +562,6 @@ dependencies = [
  "blackbird-subsonic",
  "rodio",
  "serde",
- "serde_json",
  "tokio",
  "tracing",
 ]

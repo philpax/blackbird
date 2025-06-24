@@ -2,19 +2,19 @@ use std::ops::Range;
 
 use crate::{
     bc::{
-        state::{Album, SongId, SongMap},
+        state::{Group, SongId, SongMap},
         util,
     },
     ui::{song, style},
 };
 
-pub struct AlbumResponse<'a> {
+pub struct GroupResponse<'a> {
     pub clicked_song: Option<&'a SongId>,
     pub hovered_song: Option<&'a SongId>,
 }
 #[allow(clippy::too_many_arguments)]
 pub fn ui<'a>(
-    album: &'a Album,
+    group: &'a Group,
     ui: &mut egui::Ui,
     style: &style::Style,
     row_range: Range<usize>,
@@ -23,7 +23,7 @@ pub fn ui<'a>(
     song_map: &SongMap,
     playing_song: Option<&SongId>,
     hovered_song_last_frame: Option<&SongId>,
-) -> AlbumResponse<'a> {
+) -> GroupResponse<'a> {
     ui.horizontal(|ui| {
         let artist_visible = row_range.contains(&0);
         let album_visible = row_range.contains(&1);
@@ -43,8 +43,8 @@ pub fn ui<'a>(
             if artist_visible {
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(&album.artist)
-                            .color(style::string_to_colour(&album.artist)),
+                        egui::RichText::new(&group.artist)
+                            .color(style::string_to_colour(&group.artist)),
                     )
                     .selectable(false),
                 );
@@ -56,14 +56,14 @@ pub fn ui<'a>(
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         let mut layout_job = egui::text::LayoutJob::default();
                         layout_job.append(
-                            album.name.as_str(),
+                            group.album.as_str(),
                             0.0,
                             egui::TextFormat {
                                 color: style.album(),
                                 ..Default::default()
                             },
                         );
-                        if let Some(year) = album.year {
+                        if let Some(year) = group.year {
                             layout_job.append(
                                 format!(" ({})", year).as_str(),
                                 0.0,
@@ -79,7 +79,7 @@ pub fn ui<'a>(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(util::seconds_to_hms_string(album.duration))
+                                egui::RichText::new(util::seconds_to_hms_string(group.duration))
                                     .color(style.album_length()),
                             )
                             .selectable(false),
@@ -94,7 +94,7 @@ pub fn ui<'a>(
     let song_start = row_range.start.saturating_sub(2);
     let song_end = row_range.end.saturating_sub(2);
     if song_start >= song_end {
-        return AlbumResponse {
+        return GroupResponse {
             clicked_song: None,
             hovered_song: None,
         };
@@ -109,13 +109,7 @@ pub fn ui<'a>(
             ..egui::Margin::ZERO
         })
         .show(ui, |ui| {
-            const LOADING_LABEL: &str = "[loading...]";
-            let Some(songs) = &album.songs else {
-                for _ in song_start..song_end {
-                    ui.add(egui::Label::new(LOADING_LABEL).selectable(false));
-                }
-                return;
-            };
+            let songs = &group.songs;
 
             // Clamp the song slice to the actual number of songs.
             let end = song_end.min(songs.len());
@@ -129,14 +123,14 @@ pub fn ui<'a>(
 
             for song_id in &songs[song_start..end] {
                 let Some(song) = song_map.get(song_id) else {
-                    ui.add(egui::Label::new(LOADING_LABEL).selectable(false));
+                    ui.add(egui::Label::new("[loading...]").selectable(false));
                     continue;
                 };
                 let r = song::ui(
                     song,
                     ui,
                     style,
-                    &album.artist,
+                    &group.artist,
                     max_track_length_width,
                     playing_song == Some(&song.id),
                     hovered_song_last_frame == Some(&song.id),
@@ -151,19 +145,16 @@ pub fn ui<'a>(
             }
         });
 
-    AlbumResponse {
+    GroupResponse {
         clicked_song,
         hovered_song,
     }
 }
 
-pub fn line_count(album: &Album) -> usize {
+pub fn line_count(group: &Group) -> usize {
     let artist_lines = 1;
     let album_lines = 1;
-    let songs_lines = album
-        .songs
-        .as_ref()
-        .map_or(album.song_count as usize, |songs| songs.len());
+    let songs_lines = group.songs.len();
 
     artist_lines + album_lines + songs_lines
 }

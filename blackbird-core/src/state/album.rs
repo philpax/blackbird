@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use crate::{bs, state::SongId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -75,7 +73,7 @@ impl Ord for Album {
 }
 impl Album {
     /// Returns all albums; does not include songs.
-    pub async fn fetch_all(client: &bs::Client) -> bs::ClientResult<Vec<Arc<Album>>> {
+    pub async fn fetch_all(client: &bs::Client) -> bs::ClientResult<Vec<Album>> {
         let mut all_albums = vec![];
         let mut offset = 0;
         loop {
@@ -89,7 +87,7 @@ impl Album {
             let album_count = albums.len();
 
             offset += album_count;
-            all_albums.extend(albums.into_iter().map(|a| Arc::new(a.into())));
+            all_albums.extend(albums.into_iter().map(|a| a.into()));
             if album_count < 500 {
                 break;
             }
