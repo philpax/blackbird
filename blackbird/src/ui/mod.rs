@@ -13,6 +13,7 @@ use crate::{bc, config::Config};
 pub struct Ui {
     config: Arc<RwLock<Config>>,
     _config_reload_thread: std::thread::JoinHandle<()>,
+    _repaint_thread: std::thread::JoinHandle<()>,
     logic: Arc<bc::Logic>,
     hovered_song_last_frame: Option<bc::state::SongId>,
 }
@@ -68,9 +69,18 @@ impl Ui {
             }
         });
 
+        let _repaint_thread = std::thread::spawn({
+            let egui_ctx = cc.egui_ctx.clone();
+            move || loop {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                egui_ctx.request_repaint();
+            }
+        });
+
         Ui {
             config,
             _config_reload_thread,
+            _repaint_thread,
             logic,
             hovered_song_last_frame: None,
         }
