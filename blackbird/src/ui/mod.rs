@@ -5,6 +5,7 @@ mod song;
 mod style;
 mod util;
 
+use blackbird_core::util::seconds_to_hms_string;
 pub use style::Style;
 
 use crate::{bc, config::Config};
@@ -135,6 +136,19 @@ impl eframe::App for Ui {
                                             egui::Label::new(
                                                 egui::RichText::new(&pi.song_title)
                                                     .color(config_read.style.track_name_playing()),
+                                            )
+                                            .selectable(false),
+                                        );
+                                        let [position_hms, duration_hms] =
+                                            [pi.song_position, pi.song_duration]
+                                                .map(|d| d.as_secs() as u32)
+                                                .map(seconds_to_hms_string);
+                                        ui.add(
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    " {position_hms} / {duration_hms}"
+                                                ))
+                                                .color(config_read.style.track_duration()),
                                             )
                                             .selectable(false),
                                         );

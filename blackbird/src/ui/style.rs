@@ -38,6 +38,7 @@ style_fields![
     (track_name_hsv, track_name, [0.0, 0.0, 1.0]),
     (track_name_hovered_hsv, track_name_hovered, [0.6, 0.6, 1.0]),
     (track_name_playing_hsv, track_name_playing, [0.7, 0.7, 1.0]),
+    (track_duration_hsv, track_duration, [0.0, 0.0, 0.5]),
 ];
 
 fn hsv_to_color32(hsv: [f32; 3]) -> Color32 {

@@ -3,6 +3,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::Duration,
 };
 
 use crate::{
@@ -25,6 +26,8 @@ pub struct PlayingInfo {
     pub album_artist: String,
     pub song_title: String,
     pub song_artist: Option<String>,
+    pub song_duration: Duration,
+    pub song_position: Duration,
 }
 
 pub struct VisibleGroupSet {
@@ -75,48 +78,58 @@ impl Logic {
 
         // Initialize audio output in the playback thread
         let (playback_thread_tx, playback_thread_rx) = std::sync::mpsc::channel();
-        let playback_thread_handle = std::thread::spawn(move || {
-            let (_output_stream, output_stream_handle) =
-                rodio::OutputStream::try_default().unwrap();
-            let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
-            sink.set_volume(1.0);
+        let playback_thread_handle = std::thread::spawn({
+            let state = state.clone();
+            move || {
+                let (_output_stream, output_stream_handle) =
+                    rodio::OutputStream::try_default().unwrap();
+                let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+                sink.set_volume(1.0);
 
-            let mut last_data = None;
-            loop {
-                // Process all available messages without blocking
-                while let Ok(msg) = playback_thread_rx.try_recv() {
-                    match msg {
-                        LogicThreadMessage::PlaySong(data) => {
-                            sink.clear();
-                            last_data = Some(data.clone());
-                            sink.append(
-                                rodio::Decoder::new_looped(std::io::Cursor::new(data)).unwrap(),
-                            );
-                            sink.play();
-                        }
-                        LogicThreadMessage::TogglePlayback => {
-                            if !sink.is_paused() {
-                                sink.pause();
-                                continue;
+                let mut last_data = None;
+                loop {
+                    // Process all available messages without blocking
+                    while let Ok(msg) = playback_thread_rx.try_recv() {
+                        match msg {
+                            LogicThreadMessage::PlaySong(data) => {
+                                sink.clear();
+                                last_data = Some(data.clone());
+                                sink.append(
+                                    rodio::Decoder::new(std::io::Cursor::new(data)).unwrap(),
+                                );
+                                sink.play();
                             }
-                            if sink.empty() {
-                                if let Some(data) = last_data.clone() {
-                                    sink.append(
-                                        rodio::Decoder::new_looped(std::io::Cursor::new(data))
-                                            .unwrap(),
-                                    );
+                            LogicThreadMessage::TogglePlayback => {
+                                if !sink.is_paused() {
+                                    sink.pause();
+                                    continue;
                                 }
+                                if sink.empty() {
+                                    if let Some(data) = last_data.clone() {
+                                        sink.append(
+                                            rodio::Decoder::new(std::io::Cursor::new(data))
+                                                .unwrap(),
+                                        );
+                                    }
+                                }
+                                sink.play();
                             }
-                            sink.play();
-                        }
-                        LogicThreadMessage::StopPlayback => {
-                            sink.clear();
+                            LogicThreadMessage::StopPlayback => {
+                                sink.clear();
+                            }
                         }
                     }
-                }
 
-                // Sleep for 10ms between iterations
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                    {
+                        let mut state = state.write().unwrap();
+                        if let Some(playing_song) = state.playing_song.as_mut() {
+                            playing_song.position = sink.get_pos();
+                        }
+                    }
+
+                    // Sleep for 10ms between iterations
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
             }
         });
 
@@ -249,7 +262,10 @@ impl Logic {
                     // Update the state to reflect the new playing song
                     {
                         let mut state = state.write().unwrap();
-                        state.playing_song = Some(song_id.clone());
+                        state.playing_song = Some(PlayingSong {
+                            song_id: song_id.clone(),
+                            position: Duration::from_secs(0),
+                        });
                         state.is_loading_song = false;
                     }
 
@@ -289,7 +305,10 @@ impl Logic {
     }
 
     pub fn get_playing_song_id(&self) -> Option<SongId> {
-        self.read_state().playing_song.clone()
+        self.read_state()
+            .playing_song
+            .as_ref()
+            .map(|s| s.song_id.clone())
     }
 
     pub fn is_song_loaded(&self) -> bool {
@@ -303,13 +322,16 @@ impl Logic {
     pub fn get_playing_info(&self) -> Option<PlayingInfo> {
         let state = self.read_state();
         let song_map = self.song_map.read().unwrap();
-        let song = song_map.get(state.playing_song.as_ref()?)?;
+        let playing_song = state.playing_song.as_ref()?;
+        let song = song_map.get(&playing_song.song_id)?;
         let album = state.albums.get(song.album_id.as_ref()?)?;
         Some(PlayingInfo {
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
             song_title: song.title.clone(),
             song_artist: song.artist.clone(),
+            song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
+            song_position: playing_song.position,
         })
     }
 
@@ -482,8 +504,13 @@ struct AppState {
     has_loaded_all_songs: bool,
 
     is_loading_song: bool,
-    playing_song: Option<SongId>,
+    playing_song: Option<PlayingSong>,
     error: Option<String>,
+}
+
+struct PlayingSong {
+    song_id: SongId,
+    position: Duration,
 }
 
 enum LogicThreadMessage {
