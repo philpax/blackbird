@@ -5,7 +5,7 @@ use crate::{
         state::{Group, SongId, SongMap},
         util,
     },
-    ui::{song, style},
+    ui::{song, style, util as ui_util},
 };
 
 pub struct GroupResponse<'a> {
@@ -123,9 +123,9 @@ pub fn ui<'a>(
                         .map(|song| song::track_length_str_width(song, ui))
                         .fold(0.0, f32::max);
 
-                    // Get spacing that matches egui's default
-                    let spacing = ui.spacing().item_spacing.y;
-                    let spaced_row_height = song_row_height + spacing;
+                    // Use shared spacing calculation
+                    let total_spacing = ui_util::track_spacing(ui);
+                    let spaced_row_height = song_row_height + total_spacing;
 
                     // Set up the total height for all songs in this range (with spacing)
                     let total_height = (end - start) as f32 * spaced_row_height;
@@ -139,7 +139,7 @@ pub fn ui<'a>(
                         let Some(song) = song_map.get(song_id) else {
                             // Draw loading text directly with painter
                             ui.painter().text(
-                                egui::pos2(ui.min_rect().left(), song_y + spacing / 2.0),
+                                egui::pos2(ui.min_rect().left(), song_y + total_spacing / 2.0),
                                 egui::Align2::LEFT_TOP,
                                 "[loading...]",
                                 egui::TextStyle::Body.resolve(ui.style()),

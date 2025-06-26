@@ -1,6 +1,6 @@
 use crate::{
     bc::{state::Song, util},
-    ui::style,
+    ui::{style, util as ui_util},
 };
 
 pub fn track_length_str_width(song: &Song, ui: &egui::Ui) -> f32 {
@@ -28,9 +28,9 @@ pub fn ui(
     album_artist: &str,
     params: SongParams,
 ) -> SongResponse {
-    // Add proper spacing to match egui's default item spacing
-    let spacing = ui.spacing().item_spacing.y;
-    let actual_row_height = params.song_row_height + spacing;
+    // Use shared spacing calculation
+    let total_spacing = ui_util::track_spacing(ui);
+    let actual_row_height = params.song_row_height + total_spacing;
 
     // Create a rect for this song with proper spacing
     let song_rect = egui::Rect::from_min_size(

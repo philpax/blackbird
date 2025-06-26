@@ -261,9 +261,7 @@ impl eframe::App for Ui {
                     };
                     ui.style_mut().visuals.extreme_bg_color = config_read.style.background();
 
-                    let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                    let spacing = ui.spacing().item_spacing.y;
-                    let spaced_row_height = row_height + spacing;
+                    let spaced_row_height = util::spaced_row_height(ui);
                     let group_margin_bottom_row_count = 1;
 
                     // Get total rows for virtual rendering
