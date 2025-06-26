@@ -39,7 +39,7 @@ pub fn ui(
     );
 
     // Check for interactions with this song area
-    let song_response = ui.allocate_rect(song_rect, egui::Sense::click_and_drag());
+    let song_response = ui.allocate_rect(song_rect, egui::Sense::click());
 
     // Get track information
     let track = song.track.unwrap_or(0);
