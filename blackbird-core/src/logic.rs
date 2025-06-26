@@ -451,7 +451,7 @@ impl Logic {
                             (
                                 id.clone(),
                                 (
-                                    album.artist.clone(),
+                                    album.artist.to_lowercase(),
                                     album.year.unwrap_or_default(),
                                     album.name.clone(),
                                     song.disc_number.unwrap_or_default(),
