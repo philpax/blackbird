@@ -71,9 +71,13 @@ impl Ui {
 
         let _repaint_thread = std::thread::spawn({
             let egui_ctx = cc.egui_ctx.clone();
+            let logic = logic.clone();
             move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                egui_ctx.request_repaint();
+                // Only repaint if music is currently playing
+                if logic.get_playing_info().is_some() {
+                    egui_ctx.request_repaint();
+                }
             }
         });
 
