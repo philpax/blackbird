@@ -166,34 +166,54 @@ impl Logic {
     ) -> VisibleGroupSet {
         let state = self.read_state();
         let mut current_row = 0;
-        let mut visible_groups = Vec::new();
-        // We'll set this to the actual start row of first visible album
-        let mut start_row = 0;
-        let mut first_visible_found = false;
+        let visible_groups = Vec::new();
 
-        for group in &state.groups {
+        // Add buffer albums before and after visible range
+        const BUFFER_ALBUMS: usize = 3;
+
+        // First pass: find albums that intersect with visible range
+        let mut intersecting_album_indices = Vec::new();
+        for (album_index, group) in state.groups.iter().enumerate() {
             let group_lines = group_line_count_getter(group) + group_margin_bottom_row_count;
             let group_range = current_row..(current_row + group_lines);
 
-            // If this album starts after the visible range, we can break out
-            if group_range.start >= visible_row_range.end {
-                break;
+            // Check if this album intersects with visible range
+            if group_range.start < visible_row_range.end
+                && group_range.end > visible_row_range.start
+            {
+                intersecting_album_indices.push(album_index);
             }
 
-            // If this album is completely above the visible range, skip it
-            if group_range.end <= visible_row_range.start {
-                current_row += group_lines;
-                continue;
-            }
-
-            // Found first visible album - record its starting row
-            if !first_visible_found {
-                start_row = current_row;
-                first_visible_found = true;
-            }
-
-            visible_groups.push(group.clone());
             current_row += group_lines;
+        }
+
+        if intersecting_album_indices.is_empty() {
+            return VisibleGroupSet {
+                groups: visible_groups,
+                start_row: 0,
+            };
+        }
+
+        // Determine the range of albums to include with buffer
+        let first_intersecting = intersecting_album_indices[0];
+        let last_intersecting = intersecting_album_indices[intersecting_album_indices.len() - 1];
+
+        let start_album_index = first_intersecting.saturating_sub(BUFFER_ALBUMS);
+        let end_album_index = (last_intersecting + BUFFER_ALBUMS + 1).min(state.groups.len());
+
+        // Calculate start_row for the first album we'll include
+        current_row = 0;
+        for i in 0..start_album_index {
+            let group = &state.groups[i];
+            let group_lines = group_line_count_getter(group) + group_margin_bottom_row_count;
+            current_row += group_lines;
+        }
+        let start_row = current_row;
+
+        // Include the selected range of albums
+        let mut visible_groups = Vec::new();
+        for i in start_album_index..end_album_index {
+            visible_groups.push(state.groups[i].clone());
         }
 
         VisibleGroupSet {
