@@ -12,15 +12,15 @@ pub fn seconds_to_hms_string(seconds: u32, pad_first: bool) -> String {
     #[allow(clippy::collapsible_else_if)]
     if hours > 0 {
         if pad_first {
-            format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+            format!("{hours:02}:{minutes:02}:{seconds:02}")
         } else {
-            format!("{}:{:02}:{:02}", hours, minutes, seconds)
+            format!("{hours}:{minutes:02}:{seconds:02}")
         }
     } else {
         if pad_first {
-            format!("{:02}:{:02}", minutes, seconds)
+            format!("{minutes:02}:{seconds:02}")
         } else {
-            format!("{}:{:02}", minutes, seconds)
+            format!("{minutes}:{seconds:02}")
         }
     }
 }

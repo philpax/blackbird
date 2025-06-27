@@ -68,7 +68,7 @@ pub fn ui<'a>(
                             );
                             if let Some(year) = group.year {
                                 layout_job.append(
-                                    format!(" ({})", year).as_str(),
+                                    format!(" ({year})").as_str(),
                                     0.0,
                                     egui::TextFormat {
                                         color: style.album_year(),

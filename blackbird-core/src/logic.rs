@@ -443,10 +443,10 @@ impl Logic {
                                 panic!("Song not found in song map: {id}");
                             });
                             let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                                panic!("Album ID not found in song: {:?}", song);
+                                panic!("Album ID not found in song: {song:?}");
                             });
                             let album = state.albums.get(album_id).unwrap_or_else(|| {
-                                panic!("Album not found in state: {:?}", album_id);
+                                panic!("Album not found in state: {album_id:?}");
                             });
                             (
                                 id.clone(),
@@ -473,10 +473,10 @@ impl Logic {
                         panic!("Song not found in song map: {song_id}");
                     });
                     let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                        panic!("Album ID not found in song: {:?}", song);
+                        panic!("Album ID not found in song: {song:?}");
                     });
                     let album = state.albums.get(album_id).unwrap_or_else(|| {
-                        panic!("Album not found in state: {:?}", album_id);
+                        panic!("Album not found in state: {album_id:?}");
                     });
 
                     if current_group.is_none() || matches!(&current_group, Some(group) if !(group.artist == album.artist && group.album == album.name && group.year == album.year)) {
