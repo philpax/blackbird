@@ -2,6 +2,7 @@
 members = [
     "blackbird",
     "blackbird-core",
+    "blackbird-id3mover",
     "blackbird-shared",
     "blackbird-spotcheck",
     "blackbird-subsonic",

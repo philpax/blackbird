@@ -1,0 +1,12 @@
+[package]
+name = "blackbird-id3mover"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = { workspace = true }
+
+clap = { version = "4.5.40", features = ["derive"] }
+id3 = "1.16.3"
+sanitize-filename = "0.6.0"
+walkdir = "2.5.0"

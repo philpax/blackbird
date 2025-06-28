@@ -1,0 +1,252 @@
+use std::{
+    collections::HashSet,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
+
+use anyhow::{Context, Result};
+use clap::Parser;
+use id3::{Tag, TagLike};
+use sanitize_filename::sanitize;
+use walkdir::WalkDir;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Directory containing music files to organize
+    directory: PathBuf,
+
+    /// Show what would be moved without actually moving files
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Copy files instead of moving them
+    #[arg(long)]
+    copy: bool,
+
+    /// Write file operation report to the specified file
+    #[arg(long)]
+    output_report: Option<PathBuf>,
+}
+
+fn main() {
+    let args = Args::parse();
+
+    if !args.directory.exists() {
+        eprintln!(
+            "Error: Directory '{}' does not exist",
+            args.directory.display()
+        );
+        std::process::exit(1);
+    }
+
+    let output_dir = args.directory.join("output");
+
+    let operation = if args.copy { "Copying" } else { "Moving" };
+    let operation_lower = if args.copy { "copying" } else { "moving" };
+
+    if args.dry_run {
+        println!("DRY RUN MODE - No files will be {operation_lower}");
+        println!("Output directory: {}", output_dir.display());
+        println!();
+    } else {
+        println!("{operation} files to: {}", output_dir.display());
+        println!();
+    }
+
+    // Open report file if specified
+    let mut report_file = if let Some(ref report_path) = args.output_report {
+        match fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(report_path)
+        {
+            Ok(file) => {
+                println!("Writing report to: {}", report_path.display());
+                println!();
+                Some(file)
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error: Failed to create report file '{}': {e}",
+                    report_path.display()
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
+    let music_extensions: HashSet<&str> = ["mp3", "flac", "m4a", "aac", "ogg", "wav", "wma", "mp4"]
+        .iter()
+        .cloned()
+        .collect();
+
+    match process_directory(
+        &args.directory,
+        &output_dir,
+        &music_extensions,
+        args.dry_run,
+        args.copy,
+        &mut report_file,
+    ) {
+        Ok(count) => {
+            if args.dry_run {
+                println!("\nDry run complete. {count} files would be processed.");
+            } else {
+                let operation_past = if args.copy { "copied" } else { "moved" };
+                println!("\nProcessing complete. {count} files {operation_past}.");
+            }
+        }
+        Err(e) => {
+            eprintln!("Error: {e:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn process_directory(
+    input_dir: &Path,
+    output_dir: &Path,
+    music_extensions: &HashSet<&str>,
+    dry_run: bool,
+    copy: bool,
+    report_file: &mut Option<fs::File>,
+) -> Result<usize> {
+    let mut processed_count = 0;
+
+    for entry in WalkDir::new(input_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        let file_path = entry.path();
+
+        // Skip files in the output directory to avoid moving already processed files
+        if file_path.starts_with(output_dir) {
+            continue;
+        }
+
+        // Check if it's a music file
+        let Some(extension) = file_path.extension() else {
+            continue;
+        };
+        let Some(ext_str) = extension.to_str() else {
+            continue;
+        };
+        if !music_extensions.contains(ext_str.to_lowercase().as_str()) {
+            continue;
+        }
+        match process_music_file(file_path, input_dir, output_dir, dry_run, copy, report_file) {
+            Ok(true) => processed_count += 1,
+            Ok(false) => {} // File skipped (missing tags)
+            Err(e) => {
+                eprintln!("Warning: Failed to process {}: {e:?}", file_path.display())
+            }
+        }
+    }
+
+    Ok(processed_count)
+}
+
+fn process_music_file(
+    file_path: &Path,
+    input_dir: &Path,
+    output_dir: &Path,
+    dry_run: bool,
+    copy: bool,
+    report_file: &mut Option<fs::File>,
+) -> Result<bool> {
+    // Display the file path for error messages
+    let file_path_display = file_path.display();
+
+    // Read ID3 tags
+    let tag = Tag::read_from_path(file_path)
+        .with_context(|| format!("Failed to read ID3 tags from {file_path_display}"))?;
+
+    // Extract required tags
+    let album_artist = tag
+        .album_artist()
+        .or_else(|| tag.artist())
+        .with_context(|| format!("Missing album artist/artist tag in {file_path_display}"))?;
+
+    let album = tag
+        .album()
+        .with_context(|| format!("Missing album tag in {file_path_display}"))?;
+
+    let track_title = tag
+        .title()
+        .with_context(|| format!("Missing title tag in {file_path_display}"))?;
+
+    // Get track number (pad to 2 digits)
+    let track_num = tag
+        .track()
+        .map(|t| format!("{t:02}"))
+        .unwrap_or_else(|| "00".to_string());
+
+    // Get file extension
+    let file_extension = file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .with_context(|| format!("Missing file extension for {file_path_display}"))?;
+
+    // Build filename with optional disc number
+    let filename = if let Some(disc_num) = tag.disc() {
+        format!("{track_num} - {track_title} [{disc_num}].{file_extension}")
+    } else {
+        format!("{track_num} - {track_title}.{file_extension}")
+    };
+
+    // Build target path with sanitized names
+    let target_dir = output_dir
+        .join(sanitize(album_artist))
+        .join(sanitize(album));
+
+    let target_path = target_dir.join(sanitize(&filename));
+    let target_path_display = target_path.display();
+
+    // Format the movement report
+    let operation_arrow = if copy { "=>" } else { "->" };
+    let report_line = format!(
+        "{} {} {}",
+        file_path
+            .strip_prefix(input_dir)
+            .unwrap_or(file_path)
+            .display(),
+        operation_arrow,
+        target_path
+            .strip_prefix(output_dir)
+            .unwrap_or(&target_path)
+            .display()
+    );
+
+    // Print to console
+    println!("{report_line}");
+
+    // Write to report file if specified
+    if let Some(file) = report_file {
+        writeln!(file, "{report_line}").with_context(|| "Failed to write to report file")?;
+    }
+
+    if !dry_run {
+        // Create target directory
+        fs::create_dir_all(&target_dir)
+            .with_context(|| format!("Failed to create directory {target_dir:?}"))?;
+
+        // Copy or move the file
+        if copy {
+            fs::copy(file_path, &target_path).with_context(|| {
+                format!("Failed to copy {file_path_display} to {target_path_display}")
+            })?;
+        } else {
+            fs::rename(file_path, &target_path).with_context(|| {
+                format!("Failed to move {file_path_display} to {target_path_display}")
+            })?;
+        }
+    }
+
+    Ok(true)
+}
