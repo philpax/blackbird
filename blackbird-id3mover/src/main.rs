@@ -7,8 +7,14 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use id3::{Tag, TagLike};
 use sanitize_filename::sanitize;
+use symphonia::core::{
+    formats::FormatOptions,
+    io::MediaSourceStream,
+    meta::{MetadataOptions, StandardTagKey},
+    probe::Hint,
+};
+use symphonia::default::get_probe;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -163,27 +169,30 @@ fn process_music_file(
     // Display the file path for error messages
     let file_path_display = file_path.display();
 
-    // Read ID3 tags
-    let tag = Tag::read_from_path(file_path)
-        .with_context(|| format!("Failed to read ID3 tags from {file_path_display}"))?;
+    // Read metadata using Symphonia
+    let metadata = read_metadata_with_symphonia(file_path)
+        .with_context(|| format!("Failed to read metadata from {file_path_display}"))?;
 
     // Extract required tags
-    let album_artist = tag
-        .album_artist()
-        .or_else(|| tag.artist())
+    let album_artist = metadata
+        .album_artist
+        .as_ref()
+        .or(metadata.artist.as_ref())
         .with_context(|| format!("Missing album artist/artist tag in {file_path_display}"))?;
 
-    let album = tag
-        .album()
+    let album = metadata
+        .album
+        .as_ref()
         .with_context(|| format!("Missing album tag in {file_path_display}"))?;
 
-    let track_title = tag
-        .title()
+    let track_title = metadata
+        .title
+        .as_ref()
         .with_context(|| format!("Missing title tag in {file_path_display}"))?;
 
     // Get track number (pad to 2 digits)
-    let track_num = tag
-        .track()
+    let track_num = metadata
+        .track_number
         .map(|t| format!("{t:02}"))
         .unwrap_or_else(|| "00".to_string());
 
@@ -194,7 +203,7 @@ fn process_music_file(
         .with_context(|| format!("Missing file extension for {file_path_display}"))?;
 
     // Build filename with optional disc number
-    let filename = if let Some(disc_num) = tag.disc() {
+    let filename = if let Some(disc_num) = metadata.disc_number {
         format!("{track_num} - {track_title} [{disc_num}].{file_extension}")
     } else {
         format!("{track_num} - {track_title}.{file_extension}")
@@ -249,4 +258,88 @@ fn process_music_file(
     }
 
     Ok(true)
+}
+
+#[derive(Debug)]
+struct AudioMetadata {
+    album_artist: Option<String>,
+    artist: Option<String>,
+    album: Option<String>,
+    title: Option<String>,
+    track_number: Option<u32>,
+    disc_number: Option<u32>,
+}
+
+fn read_metadata_with_symphonia(file_path: &Path) -> Result<AudioMetadata> {
+    // Open the file
+    let file = std::fs::File::open(file_path)
+        .with_context(|| format!("Failed to open file: {}", file_path.display()))?;
+
+    // Create a media source stream
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    // Create a hint to help the probe detect the format
+    let mut hint = Hint::new();
+    if let Some(extension) = file_path.extension() {
+        if let Some(ext_str) = extension.to_str() {
+            hint.with_extension(ext_str.to_lowercase().as_str());
+        }
+    }
+
+    // Get the default probe
+    let probe = get_probe();
+
+    // Probe the media source
+    let mut format_reader = probe
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .with_context(|| format!("Failed to probe format for: {}", file_path.display()))?
+        .format;
+
+    // Initialize metadata structure
+    let mut metadata = AudioMetadata {
+        album_artist: None,
+        artist: None,
+        album: None,
+        title: None,
+        track_number: None,
+        disc_number: None,
+    };
+
+    // Read metadata from the format reader
+    if let Some(metadata_rev) = format_reader.metadata().current() {
+        for tag in metadata_rev.tags() {
+            match tag.std_key {
+                Some(StandardTagKey::AlbumArtist) => {
+                    metadata.album_artist = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Artist) => {
+                    metadata.artist = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Album) => {
+                    metadata.album = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::TrackTitle) => {
+                    metadata.title = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::TrackNumber) => {
+                    if let Ok(track_num) = tag.value.to_string().parse::<u32>() {
+                        metadata.track_number = Some(track_num);
+                    }
+                }
+                Some(StandardTagKey::DiscNumber) => {
+                    if let Ok(disc_num) = tag.value.to_string().parse::<u32>() {
+                        metadata.disc_number = Some(disc_num);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(metadata)
 }
