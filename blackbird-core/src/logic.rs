@@ -117,6 +117,16 @@ impl Logic {
                             LogicThreadMessage::StopPlayback => {
                                 sink.clear();
                             }
+                            LogicThreadMessage::Seek(position) => {
+                                if let Err(e) = sink.try_seek(position) {
+                                    // Log error but don't crash - seeking may fail for various reasons
+                                    tracing::warn!(
+                                        "Failed to seek to position {:?}: {}",
+                                        position,
+                                        e
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -309,6 +319,12 @@ impl Logic {
     pub fn stop_playback(&self) {
         self.playback_thread_tx
             .send(LogicThreadMessage::StopPlayback)
+            .unwrap();
+    }
+
+    pub fn seek(&self, position: Duration) {
+        self.playback_thread_tx
+            .send(LogicThreadMessage::Seek(position))
             .unwrap();
     }
 
@@ -537,6 +553,7 @@ enum LogicThreadMessage {
     PlaySong(Vec<u8>),
     TogglePlayback,
     StopPlayback,
+    Seek(Duration),
 }
 
 #[derive(Clone)]

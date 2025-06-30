@@ -1,4 +1,5 @@
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 
 mod group;
 mod song;
@@ -151,19 +152,6 @@ impl eframe::App for Ui {
                                             )
                                             .selectable(false),
                                         );
-                                        let [position_hms, duration_hms] =
-                                            [pi.song_position, pi.song_duration]
-                                                .map(|d| d.as_secs() as u32)
-                                                .map(|s| seconds_to_hms_string(s, true));
-                                        ui.add(
-                                            egui::Label::new(
-                                                egui::RichText::new(format!(
-                                                    " {position_hms} / {duration_hms}"
-                                                ))
-                                                .color(config_read.style.track_duration()),
-                                            )
-                                            .selectable(false),
-                                        );
                                     });
                                     ui.horizontal(|ui| {
                                         ui.add(
@@ -211,6 +199,43 @@ impl eframe::App for Ui {
                             }
                         });
                     });
+
+                    // Add position slider if a song is playing
+                    if let Some(pi) = self.logic.get_playing_info() {
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            // Convert durations to seconds for the slider
+                            let position_secs = pi.song_position.as_secs_f32();
+                            let duration_secs = pi.song_duration.as_secs_f32();
+                            let mut slider_position = position_secs;
+
+                            // Add position/duration text on the right
+                            let [position_hms, duration_hms] = [pi.song_position, pi.song_duration]
+                                .map(|d| d.as_secs() as u32)
+                                .map(|s| seconds_to_hms_string(s, true));
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(format!("{position_hms} / {duration_hms}"))
+                                        .color(config_read.style.track_duration()),
+                                )
+                                .selectable(false),
+                            );
+
+                            // Add a slider for scrubbing - takes up available horizontal space
+                            let slider_response = ui.add_sized(
+                                [ui.available_width(), ui.spacing().interact_size.y], // Leave space for time text
+                                egui::Slider::new(&mut slider_position, 0.0..=duration_secs)
+                                    .show_value(false)
+                                    .handle_shape(egui::style::HandleShape::Circle),
+                            );
+
+                            // If the user interacted with the slider, seek to that position
+                            if slider_response.changed() {
+                                let seek_position = Duration::from_secs_f32(slider_position);
+                                self.logic.seek(seek_position);
+                            }
+                        });
+                    }
 
                     if self.logic.is_song_loaded() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
