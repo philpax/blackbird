@@ -7,14 +7,8 @@ use std::{
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use lofty::{file::TaggedFileExt, read_from_path};
 use sanitize_filename::sanitize;
-use symphonia::core::{
-    formats::FormatOptions,
-    io::MediaSourceStream,
-    meta::{MetadataOptions, StandardTagKey},
-    probe::Hint,
-};
-use symphonia::default::get_probe;
 use walkdir::WalkDir;
 
 #[derive(Parser)]
@@ -169,8 +163,8 @@ fn process_music_file(
     // Display the file path for error messages
     let file_path_display = file_path.display();
 
-    // Read metadata using Symphonia
-    let metadata = read_metadata_with_symphonia(file_path)
+    // Read metadata using Lofty
+    let metadata = read_metadata_with_lofty(file_path)
         .with_context(|| format!("Failed to read metadata from {file_path_display}"))?;
 
     // Extract required tags
@@ -270,37 +264,18 @@ struct AudioMetadata {
     disc_number: Option<u32>,
 }
 
-fn read_metadata_with_symphonia(file_path: &Path) -> Result<AudioMetadata> {
-    // Open the file
-    let file = std::fs::File::open(file_path)
-        .with_context(|| format!("Failed to open file: {}", file_path.display()))?;
+fn read_metadata_with_lofty(file_path: &Path) -> Result<AudioMetadata> {
+    // Read the file using lofty
+    let tagged_file = read_from_path(file_path)
+        .with_context(|| format!("Failed to read file: {}", file_path.display()))?;
 
-    // Create a media source stream
-    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    // Get the primary tag or first available tag
+    let tag = tagged_file
+        .primary_tag()
+        .or_else(|| tagged_file.first_tag())
+        .with_context(|| format!("No tags found in file: {}", file_path.display()))?;
 
-    // Create a hint to help the probe detect the format
-    let mut hint = Hint::new();
-    if let Some(extension) = file_path.extension() {
-        if let Some(ext_str) = extension.to_str() {
-            hint.with_extension(ext_str.to_lowercase().as_str());
-        }
-    }
-
-    // Get the default probe
-    let probe = get_probe();
-
-    // Probe the media source
-    let mut format_reader = probe
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .with_context(|| format!("Failed to probe format for: {}", file_path.display()))?
-        .format;
-
-    // Initialize metadata structure
+    // Extract metadata using a more direct approach
     let mut metadata = AudioMetadata {
         album_artist: None,
         artist: None,
@@ -310,34 +285,39 @@ fn read_metadata_with_symphonia(file_path: &Path) -> Result<AudioMetadata> {
         disc_number: None,
     };
 
-    // Read metadata from the format reader
-    if let Some(metadata_rev) = format_reader.metadata().current() {
-        for tag in metadata_rev.tags() {
-            match tag.std_key {
-                Some(StandardTagKey::AlbumArtist) => {
-                    metadata.album_artist = Some(tag.value.to_string());
+    // Try to get basic metadata using common tag names
+    for item in tag.items() {
+        let key_str = format!("{:?}", item.key()).to_lowercase();
+        let value = item.value().text().unwrap_or("").trim();
+
+        if value.is_empty() {
+            continue;
+        }
+
+        match key_str.as_str() {
+            k if k.contains("albumartist") || k.contains("album_artist") => {
+                metadata.album_artist = Some(value.to_string());
                 }
-                Some(StandardTagKey::Artist) => {
-                    metadata.artist = Some(tag.value.to_string());
+            k if k.contains("artist") && !k.contains("album") => {
+                metadata.artist = Some(value.to_string());
                 }
-                Some(StandardTagKey::Album) => {
-                    metadata.album = Some(tag.value.to_string());
+            k if k.contains("album") && !k.contains("artist") => {
+                metadata.album = Some(value.to_string());
                 }
-                Some(StandardTagKey::TrackTitle) => {
-                    metadata.title = Some(tag.value.to_string());
+            k if k.contains("title") && !k.contains("album") => {
+                metadata.title = Some(value.to_string());
                 }
-                Some(StandardTagKey::TrackNumber) => {
-                    if let Ok(track_num) = tag.value.to_string().parse::<u32>() {
+            k if k.contains("track") => {
+                if let Ok(track_num) = value.parse::<u32>() {
                         metadata.track_number = Some(track_num);
                     }
                 }
-                Some(StandardTagKey::DiscNumber) => {
-                    if let Ok(disc_num) = tag.value.to_string().parse::<u32>() {
+            k if k.contains("disc") => {
+                if let Ok(disc_num) = value.parse::<u32>() {
                         metadata.disc_number = Some(disc_num);
                     }
                 }
                 _ => {}
-            }
         }
     }
 
