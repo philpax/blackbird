@@ -168,11 +168,18 @@ fn process_music_file(
         .with_context(|| format!("Failed to read metadata from {file_path_display}"))?;
 
     // Extract required tags
-    let album_artist = metadata
-        .album_artist
-        .as_ref()
-        .or(metadata.artist.as_ref())
-        .with_context(|| format!("Missing album artist/artist tag in {file_path_display}"))?;
+    let album_artist = if let Some(album_artist) = &metadata.album_artist {
+        album_artist
+    } else if let Some(artist) = &metadata.artist {
+        eprintln!(
+            "Warning: No album artist tag found in {file_path_display}, using artist tag instead"
+        );
+        artist
+    } else {
+        return Err(anyhow::anyhow!(
+            "Missing both album artist and artist tags in {file_path_display}"
+        ));
+    };
 
     let album = metadata
         .album
@@ -297,27 +304,27 @@ fn read_metadata_with_lofty(file_path: &Path) -> Result<AudioMetadata> {
         match key_str.as_str() {
             k if k.contains("albumartist") || k.contains("album_artist") => {
                 metadata.album_artist = Some(value.to_string());
-                }
+            }
             k if k.contains("artist") && !k.contains("album") => {
                 metadata.artist = Some(value.to_string());
-                }
+            }
             k if k.contains("album") && !k.contains("artist") => {
                 metadata.album = Some(value.to_string());
-                }
+            }
             k if k.contains("title") && !k.contains("album") => {
                 metadata.title = Some(value.to_string());
-                }
+            }
             k if k.contains("track") => {
                 if let Ok(track_num) = value.parse::<u32>() {
-                        metadata.track_number = Some(track_num);
-                    }
+                    metadata.track_number = Some(track_num);
                 }
+            }
             k if k.contains("disc") => {
                 if let Ok(disc_num) = value.parse::<u32>() {
-                        metadata.disc_number = Some(disc_num);
-                    }
+                    metadata.disc_number = Some(disc_num);
                 }
-                _ => {}
+            }
+            _ => {}
         }
     }
 
