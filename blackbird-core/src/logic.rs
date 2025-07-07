@@ -81,10 +81,19 @@ impl Logic {
         let playback_thread_handle = std::thread::spawn({
             let state = state.clone();
             move || {
-                let (_output_stream, output_stream_handle) =
-                    rodio::OutputStream::try_default().unwrap();
-                let sink = rodio::Sink::try_new(&output_stream_handle).unwrap();
+                let stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
+                let sink = rodio::Sink::connect_new(stream_handle.mixer());
                 sink.set_volume(1.0);
+
+                fn build_decoder(
+                    data: Vec<u8>,
+                ) -> rodio::decoder::Decoder<std::io::Cursor<Vec<u8>>> {
+                    rodio::decoder::DecoderBuilder::new()
+                        .with_byte_len(data.len() as u64)
+                        .with_data(std::io::Cursor::new(data))
+                        .build()
+                        .unwrap()
+                }
 
                 let mut last_data = None;
                 loop {
@@ -94,9 +103,7 @@ impl Logic {
                             LogicThreadMessage::PlaySong(data) => {
                                 sink.clear();
                                 last_data = Some(data.clone());
-                                sink.append(
-                                    rodio::Decoder::new(std::io::Cursor::new(data)).unwrap(),
-                                );
+                                sink.append(build_decoder(data));
                                 sink.play();
                             }
                             LogicThreadMessage::TogglePlayback => {
@@ -106,10 +113,7 @@ impl Logic {
                                 }
                                 if sink.empty() {
                                     if let Some(data) = last_data.clone() {
-                                        sink.append(
-                                            rodio::Decoder::new(std::io::Cursor::new(data))
-                                                .unwrap(),
-                                        );
+                                        sink.append(build_decoder(data));
                                     }
                                 }
                                 sink.play();
@@ -120,11 +124,7 @@ impl Logic {
                             LogicThreadMessage::Seek(position) => {
                                 if let Err(e) = sink.try_seek(position) {
                                     // Log error but don't crash - seeking may fail for various reasons
-                                    tracing::warn!(
-                                        "Failed to seek to position {:?}: {}",
-                                        position,
-                                        e
-                                    );
+                                    tracing::warn!("Failed to seek to position {position:?}: {e}");
                                 }
                             }
                         }

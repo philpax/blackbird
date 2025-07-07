@@ -10,4 +10,4 @@ tracing = { workspace = true }
 
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 
-rodio = "0.20.1"
+rodio = { git = "https://github.com/RustAudio/rodio.git", rev = "27251f42108e7ec1186a6145bb786d6af3220059" }
