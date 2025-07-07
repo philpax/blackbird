@@ -130,6 +130,12 @@ impl Logic {
                         }
                     }
 
+                    if sink.empty() {
+                        if let Some(data) = last_data.clone() {
+                            sink.append(build_decoder(data));
+                        }
+                    }
+
                     {
                         let mut state = state.write().unwrap();
                         if let Some(playing_song) = state.playing_song.as_mut() {
