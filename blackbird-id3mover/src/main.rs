@@ -158,7 +158,7 @@ fn process_directory(
             Ok(true) => processed_count += 1,
             Ok(false) => {} // File skipped (missing tags)
             Err(e) => {
-                eprintln!("Warning: Failed to process {}: {e:?}", file_path.display())
+                eprintln!("Error: Failed to process {}: {e:?}", file_path.display())
             }
         }
     }
@@ -196,15 +196,15 @@ fn process_music_file(
         ));
     };
 
-    let album = metadata
-        .album
-        .as_ref()
-        .with_context(|| format!("Missing album tag in {file_path_display}"))?;
-
     let track_title = metadata
         .title
         .as_ref()
         .with_context(|| format!("Missing title tag in {file_path_display}"))?;
+
+    let album = metadata.album.as_ref().unwrap_or_else(|| {
+        eprintln!("Warning: No album tag found in {file_path_display}, using track title instead");
+        track_title
+    });
 
     // Get track number (pad to 2 digits)
     let track_num = metadata
