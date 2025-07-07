@@ -25,6 +25,10 @@ struct Args {
     #[arg(long)]
     copy: bool,
 
+    /// Show verbose output with all file operations
+    #[arg(short, long)]
+    verbose: bool,
+
     /// Write file operation report to the specified file
     #[arg(long)]
     output_report: Option<PathBuf>,
@@ -91,6 +95,7 @@ fn main() {
         &music_extensions,
         args.dry_run,
         args.copy,
+        args.verbose,
         &mut report_file,
     ) {
         Ok(count) => {
@@ -114,6 +119,7 @@ fn process_directory(
     music_extensions: &HashSet<&str>,
     dry_run: bool,
     copy: bool,
+    verbose: bool,
     report_file: &mut Option<fs::File>,
 ) -> Result<usize> {
     let mut processed_count = 0;
@@ -140,7 +146,15 @@ fn process_directory(
         if !music_extensions.contains(ext_str.to_lowercase().as_str()) {
             continue;
         }
-        match process_music_file(file_path, input_dir, output_dir, dry_run, copy, report_file) {
+        match process_music_file(
+            file_path,
+            input_dir,
+            output_dir,
+            dry_run,
+            copy,
+            verbose,
+            report_file,
+        ) {
             Ok(true) => processed_count += 1,
             Ok(false) => {} // File skipped (missing tags)
             Err(e) => {
@@ -158,6 +172,7 @@ fn process_music_file(
     output_dir: &Path,
     dry_run: bool,
     copy: bool,
+    verbose: bool,
     report_file: &mut Option<fs::File>,
 ) -> Result<bool> {
     // Display the file path for error messages
@@ -234,7 +249,9 @@ fn process_music_file(
     );
 
     // Print to console
-    println!("{report_line}");
+    if verbose {
+        println!("{report_line}");
+    }
 
     // Write to report file if specified
     if let Some(file) = report_file {
