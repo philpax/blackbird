@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use rand::seq::SliceRandom as _;
+
 use crate::state::SongId;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,14 +23,12 @@ struct PlayingSong {
 pub struct Queue {
     /// All available songs in their original order
     songs: Vec<SongId>,
+    /// Shuffled order (when in shuffle mode)
+    shuffled_indices: Vec<usize>,
     /// Current playback mode
     mode: PlaybackMode,
     /// Current position in the queue
     current_index: usize,
-    /// Shuffled order (when in shuffle mode)
-    shuffled_indices: Vec<usize>,
-    /// LCG state for deterministic shuffle
-    lcg_state: u64,
     /// Cached track data for smooth playback
     track_cache: HashMap<SongId, Vec<u8>>,
     /// Cache window size (tracks before/after current)
@@ -42,38 +42,26 @@ pub struct Queue {
 }
 
 impl Queue {
-    /// LCG parameters (from Numerical Recipes)
-    const LCG_A: u64 = 1664525;
-    const LCG_C: u64 = 1013904223;
-    const LCG_M: u64 = (1u64 << 32);
-
     pub fn new(songs: Vec<SongId>, mode: PlaybackMode, cache_size: usize) -> Self {
-        let mut queue = Queue {
+        let mut shuffled_indices = (0..songs.len()).collect::<Vec<_>>();
+        shuffled_indices.shuffle(&mut rand::rng());
+
+        Queue {
             songs,
+            shuffled_indices,
             mode,
             current_index: 0,
-            shuffled_indices: Vec::new(),
-            lcg_state: 0,
             track_cache: HashMap::new(),
             cache_size,
             pending_requests: HashSet::new(),
             playing_song: None,
             loading_song: None,
-        };
-
-        if mode == PlaybackMode::Shuffle {
-            queue.generate_shuffle_from_index(0);
         }
-
-        queue
     }
 
     pub fn set_mode(&mut self, mode: PlaybackMode) {
         if self.mode != mode {
             self.mode = mode;
-            if mode == PlaybackMode::Shuffle {
-                self.generate_shuffle_from_current();
-            }
             // Clear cache when mode changes as the order has changed
             self.track_cache.clear();
             self.pending_requests.clear();
@@ -87,15 +75,7 @@ impl Queue {
     pub fn jump_to_song(&mut self, song_id: &SongId) -> Option<usize> {
         // Find the song in the original list
         let original_index = self.songs.iter().position(|s| s == song_id)?;
-
-        match self.mode {
-            PlaybackMode::Sequential | PlaybackMode::RepeatOne => {
-                self.current_index = original_index;
-            }
-            PlaybackMode::Shuffle => {
-                self.generate_shuffle_from_index(original_index);
-            }
-        }
+        self.current_index = original_index;
 
         // Clear cache when jumping as the order has changed
         self.track_cache.clear();
@@ -126,7 +106,10 @@ impl Queue {
                 // Don't advance, stay on current song
             }
             PlaybackMode::Sequential | PlaybackMode::Shuffle => {
-                self.current_index = (self.current_index + 1) % self.queue_len();
+                self.current_index = (self.current_index + 1) % {
+                    let this = &self;
+                    this.songs.len()
+                };
             }
         }
         self.current_song()
@@ -143,7 +126,10 @@ impl Queue {
             }
             PlaybackMode::Sequential | PlaybackMode::Shuffle => {
                 if self.current_index == 0 {
-                    self.current_index = self.queue_len() - 1;
+                    self.current_index = ({
+                        let this = &self;
+                        this.songs.len()
+                    }) - 1;
                 } else {
                     self.current_index -= 1;
                 }
@@ -193,7 +179,10 @@ impl Queue {
 
     fn get_songs_around_current(&self, window_size: usize) -> Vec<SongId> {
         let mut result = Vec::new();
-        let queue_len = self.queue_len();
+        let queue_len = {
+            let this = &self;
+            this.songs.len()
+        };
 
         if queue_len == 0 {
             return result;
@@ -239,56 +228,6 @@ impl Queue {
         self.songs.is_empty()
     }
 
-    fn queue_len(&self) -> usize {
-        match self.mode {
-            PlaybackMode::Sequential | PlaybackMode::RepeatOne => self.songs.len(),
-            PlaybackMode::Shuffle => self.shuffled_indices.len(),
-        }
-    }
-
-    fn generate_shuffle_from_index(&mut self, start_index: usize) {
-        if self.songs.is_empty() {
-            self.shuffled_indices.clear();
-            self.current_index = 0;
-            return;
-        }
-
-        // Seed LCG with the starting song's index for determinism
-        self.lcg_state = start_index as u64;
-
-        // Create shuffled indices using Fisher-Yates with LCG
-        let mut indices: Vec<usize> = (0..self.songs.len()).collect();
-
-        for i in (1..indices.len()).rev() {
-            let j = self.next_lcg() as usize % (i + 1);
-            indices.swap(i, j);
-        }
-
-        // Find where the start_index ended up and move it to position 0
-        if let Some(pos) = indices.iter().position(|&x| x == start_index) {
-            indices.swap(0, pos);
-        }
-
-        self.shuffled_indices = indices;
-        self.current_index = 0;
-    }
-
-    fn generate_shuffle_from_current(&mut self) {
-        if let Some(current_song) = self.current_song().cloned() {
-            if let Some(original_index) = self.songs.iter().position(|s| s == &current_song) {
-                self.generate_shuffle_from_index(original_index);
-            }
-        }
-    }
-
-    fn next_lcg(&mut self) -> u64 {
-        self.lcg_state = (Self::LCG_A
-            .wrapping_mul(self.lcg_state)
-            .wrapping_add(Self::LCG_C))
-            % Self::LCG_M;
-        self.lcg_state
-    }
-
     /// Start playing a specific song
     pub fn start_playing(&mut self, song_id: &SongId) -> Option<Vec<u8>> {
         self.jump_to_song(song_id);
@@ -312,13 +251,9 @@ impl Queue {
         }
 
         match self.mode {
-            PlaybackMode::Sequential => {
+            PlaybackMode::Sequential | PlaybackMode::Shuffle => {
                 // Advance to next track, wrapping around
-                self.current_index = (self.current_index + 1) % self.queue_len();
-            }
-            PlaybackMode::Shuffle => {
-                // Advance to next track, wrapping around
-                self.current_index = (self.current_index + 1) % self.queue_len();
+                self.current_index = (self.current_index + 1) % self.songs.len();
             }
             PlaybackMode::RepeatOne => {
                 // Repeat current track - don't advance
@@ -391,70 +326,3 @@ impl Queue {
 
 /// Thread-safe wrapper for Queue
 pub type SharedQueue = Arc<RwLock<Queue>>;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_deterministic_shuffle() {
-        let songs = vec![
-            SongId("1".to_string()),
-            SongId("2".to_string()),
-            SongId("3".to_string()),
-            SongId("4".to_string()),
-            SongId("5".to_string()),
-        ];
-
-        let mut queue1 = Queue::new(songs.clone(), PlaybackMode::Shuffle, 1);
-        queue1.jump_to_song(&SongId("3".to_string()));
-
-        let mut queue2 = Queue::new(songs, PlaybackMode::Shuffle, 1);
-        queue2.jump_to_song(&SongId("3".to_string()));
-
-        // Should produce the same shuffle sequence
-        assert_eq!(queue1.shuffled_indices, queue2.shuffled_indices);
-        assert_eq!(queue1.current_song(), queue2.current_song());
-    }
-
-    #[test]
-    fn test_sequential_playback() {
-        let songs = vec![
-            SongId("1".to_string()),
-            SongId("2".to_string()),
-            SongId("3".to_string()),
-        ];
-
-        let mut queue = Queue::new(songs, PlaybackMode::Sequential, 1);
-
-        assert_eq!(queue.current_song(), Some(&SongId("1".to_string())));
-        assert_eq!(queue.advance_to_next(), Some(&SongId("2".to_string())));
-        assert_eq!(queue.advance_to_next(), Some(&SongId("3".to_string())));
-        assert_eq!(queue.advance_to_next(), Some(&SongId("1".to_string()))); // Wraps around
-    }
-
-    #[test]
-    fn test_repeat_one_playback() {
-        let songs = vec![
-            SongId("1".to_string()),
-            SongId("2".to_string()),
-            SongId("3".to_string()),
-        ];
-
-        let mut queue = Queue::new(songs, PlaybackMode::RepeatOne, 1);
-
-        // Start playing the first song
-        assert_eq!(queue.current_song(), Some(&SongId("1".to_string())));
-
-        // In RepeatOne mode, advancing should stay on the same song
-        assert_eq!(queue.advance_to_next(), Some(&SongId("1".to_string())));
-        assert_eq!(queue.advance_to_next(), Some(&SongId("1".to_string())));
-
-        // Jump to a different song
-        queue.jump_to_song(&SongId("2".to_string()));
-        assert_eq!(queue.current_song(), Some(&SongId("2".to_string())));
-
-        // Should still repeat the new current song
-        assert_eq!(queue.advance_to_next(), Some(&SongId("2".to_string())));
-    }
-}

@@ -613,6 +613,7 @@ name = "blackbird-core"
 version = "0.1.0"
 dependencies = [
  "blackbird-subsonic",
+ "rand 0.9.1",
  "rodio",
  "serde",
  "tokio",
