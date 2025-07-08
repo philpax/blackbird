@@ -7,9 +7,13 @@ mod style;
 mod util;
 
 use blackbird_core::util::seconds_to_hms_string;
+use blackbird_core::PlaybackMode;
 pub use style::Style;
 
 use crate::{bc, config::Config};
+
+// UI Constants
+const CONTROL_BUTTON_SIZE: f32 = 28.0;
 
 pub struct Ui {
     config: Arc<RwLock<Config>>,
@@ -206,31 +210,65 @@ impl eframe::App for Ui {
                     if self.logic.is_song_loaded() {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.style_mut().visuals.override_text_color = None;
-                            if ui
-                                .add(
-                                    egui::Label::new(
-                                        egui::RichText::new(egui_phosphor::regular::STOP)
-                                            .size(32.0),
-                                    )
-                                    .selectable(false)
-                                    .sense(egui::Sense::click()),
-                                )
-                                .clicked()
-                            {
+
+                            // Stop button
+                            if control_button(ui, egui_phosphor::regular::STOP, None, false) {
                                 self.logic.stop_playback();
                             }
-                            if ui
-                                .add(
-                                    egui::Label::new(
-                                        egui::RichText::new(egui_phosphor::regular::PLAY_PAUSE)
-                                            .size(32.0),
-                                    )
-                                    .selectable(false)
-                                    .sense(egui::Sense::click()),
-                                )
-                                .clicked()
-                            {
+
+                            // Play/Pause button
+                            if control_button(ui, egui_phosphor::regular::PLAY_PAUSE, None, false) {
                                 self.logic.toggle_playback();
+                            }
+
+                            // Next track button
+                            if control_button(ui, egui_phosphor::regular::SKIP_FORWARD, None, false)
+                            {
+                                self.logic.next_track();
+                            }
+
+                            // Previous track button
+                            if control_button(ui, egui_phosphor::regular::SKIP_BACK, None, false) {
+                                self.logic.previous_track();
+                            }
+
+                            ui.add_space(16.0);
+
+                            // Playback mode buttons (Sequential, Shuffle, Repeat One)
+                            let current_mode = self.logic.get_playback_mode();
+                            let mode_colors = Some((
+                                config_read.style.track_name_playing(),
+                                config_read.style.text(),
+                            ));
+
+                            // Sequential button
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::LIST,
+                                mode_colors,
+                                current_mode == PlaybackMode::Sequential,
+                            ) {
+                                self.logic.set_playback_mode(PlaybackMode::Sequential);
+                            }
+
+                            // Shuffle button
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::SHUFFLE,
+                                mode_colors,
+                                current_mode == PlaybackMode::Shuffle,
+                            ) {
+                                self.logic.set_playback_mode(PlaybackMode::Shuffle);
+                            }
+
+                            // Repeat One button
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::REPEAT_ONCE,
+                                mode_colors,
+                                current_mode == PlaybackMode::RepeatOne,
+                            ) {
+                                self.logic.set_playback_mode(PlaybackMode::RepeatOne);
                             }
                         });
                     }
@@ -405,4 +443,32 @@ impl eframe::App for Ui {
                 });
             });
     }
+}
+
+/// Helper function to create a control button with optional color override
+/// Returns true if the button was clicked
+fn control_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    color_override: Option<(egui::Color32, egui::Color32)>,
+    is_active: bool,
+) -> bool {
+    let mut rich_text = egui::RichText::new(icon).size(CONTROL_BUTTON_SIZE);
+
+    // Apply color if override is provided
+    if let Some((active_color, inactive_color)) = color_override {
+        let color = if is_active {
+            active_color
+        } else {
+            inactive_color
+        };
+        rich_text = rich_text.color(color);
+    }
+
+    ui.add(
+        egui::Label::new(rich_text)
+            .selectable(false)
+            .sense(egui::Sense::click()),
+    )
+    .clicked()
 }

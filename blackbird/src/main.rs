@@ -20,10 +20,19 @@ fn main() {
     let username = config.server.username.clone();
     let password = config.server.password.clone();
     let transcode = config.server.transcode;
+    let cache_size = config.general.track_cache_size;
+    let default_shuffle = config.general.default_shuffle;
 
     // Now wrap config in Arc<RwLock> after using it for client creation
     let config = Arc::new(RwLock::new(config));
-    let logic = Arc::new(bc::Logic::new(base_url, username, password, transcode));
+    let logic = Arc::new(bc::Logic::new(
+        base_url,
+        username,
+        password,
+        transcode,
+        cache_size,
+        default_shuffle,
+    ));
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(

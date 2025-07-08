@@ -47,12 +47,16 @@ impl Config {
 pub struct General {
     pub album_art_enabled: bool,
     pub repaint_secs: f32,
+    pub track_cache_size: usize,
+    pub default_shuffle: bool,
 }
 impl Default for General {
     fn default() -> Self {
         Self {
             album_art_enabled: true,
             repaint_secs: 1.0,
+            track_cache_size: 5,
+            default_shuffle: false,
         }
     }
 }

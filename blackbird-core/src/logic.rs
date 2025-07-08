@@ -8,6 +8,7 @@ use std::{
 
 use crate::{
     bs,
+    queue::{PlaybackMode, Queue, SharedQueue},
     state::{Album, AlbumId, Group, Song, SongId, SongMap},
 };
 
@@ -19,7 +20,10 @@ pub struct Logic {
     client: Arc<bs::Client>,
     playback_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
     _playback_thread_handle: std::thread::JoinHandle<()>,
+    queue: SharedQueue,
     transcode: bool,
+    cache_size: usize,
+    default_shuffle: bool,
 }
 
 pub struct PlayingInfo {
@@ -40,7 +44,14 @@ impl Logic {
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
-    pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
+    pub fn new(
+        base_url: String,
+        username: String,
+        password: String,
+        transcode: bool,
+        cache_size: usize,
+        default_shuffle: bool,
+    ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             songs: vec![],
             groups: vec![],
@@ -48,8 +59,6 @@ impl Logic {
             cover_art_cache: HashMap::new(),
             pending_cover_art_requests: HashSet::new(),
             has_loaded_all_songs: false,
-            is_loading_song: false,
-            playing_song: None,
             error: None,
         }));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
@@ -77,10 +86,21 @@ impl Logic {
             });
         });
 
+        // Create the shared queue
+        let queue = Arc::new(std::sync::RwLock::new(Queue::new(
+            vec![],
+            if default_shuffle {
+                PlaybackMode::Shuffle
+            } else {
+                PlaybackMode::Sequential
+            },
+            cache_size,
+        )));
+
         // Initialize audio output in the playback thread
         let (playback_thread_tx, playback_thread_rx) = std::sync::mpsc::channel();
         let playback_thread_handle = std::thread::spawn({
-            let state = state.clone();
+            let queue = queue.clone();
             move || {
                 let stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
                 let sink = rodio::Sink::connect_new(stream_handle.mixer());
@@ -100,6 +120,7 @@ impl Logic {
 
                 let mut last_data = None;
                 let mut last_seek_time = std::time::Instant::now();
+
                 loop {
                     // Process all available messages without blocking
                     while let Ok(msg) = playback_thread_rx.try_recv() {
@@ -141,17 +162,31 @@ impl Logic {
                         }
                     }
 
+                    // Check if we should auto-advance to next track
                     if sink.empty() {
-                        if let Some(data) = last_data.clone() {
-                            sink.append(build_decoder(data));
+                        let should_advance = { queue.read().unwrap().is_playing() };
+
+                        if should_advance {
+                            // Pull next track from queue
+                            if let Ok(mut queue_guard) = queue.write() {
+                                if let Some((_next_song_id, cached_audio)) =
+                                    queue_guard.get_next_track_with_audio()
+                                {
+                                    last_data = Some(cached_audio.clone());
+                                    drop(queue_guard); // Release queue lock
+
+                                    sink.clear(); // Clear any existing state
+                                    sink.append(build_decoder(cached_audio));
+                                    sink.play();
+                                }
+                            }
                         }
                     }
 
+                    // Update playing position in queue
                     {
-                        let mut state = state.write().unwrap();
-                        if let Some(playing_song) = state.playing_song.as_mut() {
-                            playing_song.position = sink.get_pos();
-                        }
+                        let mut queue_guard = queue.write().unwrap();
+                        queue_guard.update_playing_position(sink.get_pos());
                     }
 
                     // Sleep for 10ms between iterations
@@ -168,7 +203,10 @@ impl Logic {
             client,
             playback_thread_tx,
             _playback_thread_handle: playback_thread_handle,
+            queue: queue.clone(),
             transcode,
+            cache_size,
+            default_shuffle,
         };
         logic.initial_fetch();
         logic
@@ -297,42 +335,6 @@ impl Logic {
         });
     }
 
-    pub fn play_song(&self, song_id: &SongId) {
-        let client = self.client.clone();
-        let state = self.state.clone();
-        let song_id = song_id.clone();
-        let logic_tx = self.playback_thread_tx.clone();
-        let transcode = self.transcode;
-
-        self.spawn(async move {
-            state.write().unwrap().is_loading_song = true;
-            let response = client
-                .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
-                .await;
-
-            match response {
-                Ok(data) => {
-                    // Update the state to reflect the new playing song
-                    {
-                        let mut state = state.write().unwrap();
-                        state.playing_song = Some(PlayingSong {
-                            song_id: song_id.clone(),
-                            position: Duration::from_secs(0),
-                        });
-                        state.is_loading_song = false;
-                    }
-
-                    // Send the data to the logic thread to play
-                    logic_tx.send(LogicThreadMessage::PlaySong(data)).unwrap();
-                }
-                Err(e) => {
-                    let mut state = state.write().unwrap();
-                    state.error = Some(e.to_string());
-                }
-            }
-        });
-    }
-
     pub fn toggle_playback(&self) {
         self.playback_thread_tx
             .send(LogicThreadMessage::TogglePlayback)
@@ -340,6 +342,7 @@ impl Logic {
     }
 
     pub fn stop_playback(&self) {
+        self.queue.write().unwrap().stop_playing();
         self.playback_thread_tx
             .send(LogicThreadMessage::StopPlayback)
             .unwrap();
@@ -364,25 +367,26 @@ impl Logic {
     }
 
     pub fn get_playing_song_id(&self) -> Option<SongId> {
-        self.read_state()
-            .playing_song
-            .as_ref()
-            .map(|s| s.song_id.clone())
+        self.queue
+            .read()
+            .unwrap()
+            .get_playing_song()
+            .map(|(song_id, _)| song_id)
     }
 
     pub fn is_song_loaded(&self) -> bool {
-        self.read_state().playing_song.is_some()
+        self.queue.read().unwrap().is_playing()
     }
 
     pub fn is_song_loading(&self) -> bool {
-        self.read_state().is_loading_song
+        self.queue.read().unwrap().is_loading_song()
     }
 
     pub fn get_playing_info(&self) -> Option<PlayingInfo> {
-        let state = self.read_state();
         let song_map = self.song_map.read().unwrap();
-        let playing_song = state.playing_song.as_ref()?;
-        let song = song_map.get(&playing_song.song_id)?;
+        let (song_id, song_position) = self.queue.read().unwrap().get_playing_song()?;
+        let song = song_map.get(&song_id)?;
+        let state = self.read_state();
         let album = state.albums.get(song.album_id.as_ref()?)?;
         Some(PlayingInfo {
             album_name: album.name.clone(),
@@ -390,7 +394,7 @@ impl Logic {
             song_title: song.title.clone(),
             song_artist: song.artist.clone(),
             song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
-            song_position: playing_song.position,
+            song_position,
         })
     }
 
@@ -409,6 +413,172 @@ impl Logic {
 
     pub fn clear_error(&self) {
         self.write_state().error = None;
+    }
+
+    // Queue and playback management methods
+    pub fn set_playback_mode(&self, mode: PlaybackMode) {
+        let mut queue = self.queue.write().unwrap();
+        queue.set_mode(mode);
+    }
+
+    pub fn get_playback_mode(&self) -> PlaybackMode {
+        self.queue.read().unwrap().get_mode()
+    }
+
+    pub fn next_track(&self) {
+        let next_song_id = {
+            let mut queue = self.queue.write().unwrap();
+            queue.advance_to_next().cloned()
+        };
+
+        if let Some(song_id) = next_song_id {
+            self.play_song_from_cache(&song_id);
+        }
+    }
+
+    pub fn previous_track(&self) {
+        let prev_song_id = {
+            let mut queue = self.queue.write().unwrap();
+            queue.advance_to_previous().cloned()
+        };
+
+        if let Some(song_id) = prev_song_id {
+            self.play_song_from_cache(&song_id);
+        }
+    }
+
+    pub fn play_song(&self, song_id: &SongId) {
+        // Initialize queue with all songs when a song is selected
+        let songs = self.read_state().songs.clone();
+
+        {
+            let mut queue = self.queue.write().unwrap();
+
+            // Use default shuffle mode when starting fresh, otherwise preserve current mode
+            let mode = if queue.is_empty() {
+                if self.default_shuffle {
+                    PlaybackMode::Shuffle
+                } else {
+                    PlaybackMode::Sequential
+                }
+            } else {
+                queue.get_mode()
+            };
+
+            *queue = Queue::new(songs, mode, self.cache_size);
+            queue.jump_to_song(song_id);
+        }
+
+        // Start cache maintenance
+        self.update_track_cache();
+
+        // Play the song
+        self.play_song_from_cache(song_id);
+    }
+
+    fn play_song_from_cache(&self, song_id: &SongId) {
+        // Try to start playing from cache using the queue
+        let cached_data = {
+            let mut queue = self.queue.write().unwrap();
+            queue.start_playing(song_id)
+        };
+
+        if let Some(cached_data) = cached_data {
+            // Send cached data to playback thread - clear sink first
+            self.playback_thread_tx
+                .send(LogicThreadMessage::StopPlayback)
+                .unwrap();
+            self.playback_thread_tx
+                .send(LogicThreadMessage::PlaySong(cached_data))
+                .unwrap();
+
+            // Update cache window
+            self.update_track_cache();
+            return;
+        }
+
+        // Song not cached, load it normally
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let queue = self.queue.clone();
+        let song_id = song_id.clone();
+        let logic_tx = self.playback_thread_tx.clone();
+        let transcode = self.transcode;
+
+        self.spawn(async move {
+            queue.write().unwrap().start_loading_song(song_id.clone());
+            let response = client
+                .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
+                .await;
+
+            match response {
+                Ok(data) => {
+                    // Finish loading and start playing
+                    {
+                        let mut queue_guard = queue.write().unwrap();
+                        queue_guard.finish_loading_song();
+                        queue_guard.cache_track(song_id.clone(), data.clone());
+                        queue_guard.start_playing(&song_id);
+                    }
+
+                    // Clear sink and send the data to the logic thread to play
+                    logic_tx.send(LogicThreadMessage::StopPlayback).unwrap();
+                    logic_tx.send(LogicThreadMessage::PlaySong(data)).unwrap();
+                }
+                Err(e) => {
+                    queue.write().unwrap().finish_loading_song();
+                    let mut state = state.write().unwrap();
+                    state.error = Some(e.to_string());
+                }
+            }
+        });
+    }
+
+    fn update_track_cache(&self) {
+        // Get songs that need caching from the queue
+        let songs_needing_cache = {
+            let queue = self.queue.read().unwrap();
+            if queue.can_start_more_requests() {
+                queue.get_songs_needing_cache()
+            } else {
+                Vec::new()
+            }
+        };
+
+        // Start loading tracks that aren't cached yet
+        for song_id in songs_needing_cache {
+            self.cache_track(song_id);
+        }
+    }
+
+    fn cache_track(&self, song_id: SongId) {
+        // Mark as pending in the queue
+        self.queue
+            .write()
+            .unwrap()
+            .mark_track_pending(song_id.clone());
+
+        self.spawn({
+            let client = self.client.clone();
+            let queue = self.queue.clone();
+            let transcode = self.transcode;
+
+            async move {
+                match client
+                    .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
+                    .await
+                {
+                    Ok(data) => {
+                        queue.write().unwrap().cache_track(song_id.clone(), data);
+                    }
+                    Err(e) => {
+                        queue.write().unwrap().remove_pending_request(&song_id);
+                        // Don't set error for cache failures, just log
+                        tracing::warn!("Failed to cache track {}: {}", song_id, e);
+                    }
+                }
+            }
+        });
     }
 }
 impl Logic {
@@ -593,14 +763,7 @@ struct AppState {
     pending_cover_art_requests: HashSet<String>,
     has_loaded_all_songs: bool,
 
-    is_loading_song: bool,
-    playing_song: Option<PlayingSong>,
     error: Option<String>,
-}
-
-struct PlayingSong {
-    song_id: SongId,
-    position: Duration,
 }
 
 enum LogicThreadMessage {
