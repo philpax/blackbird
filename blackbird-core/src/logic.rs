@@ -426,6 +426,7 @@ impl Logic {
                 return;
             }
 
+            // Fetch all albums.
             match Album::fetch_all(&client).await {
                 Ok(albums) => {
                     let mut state = state.write().unwrap();
@@ -436,6 +437,7 @@ impl Logic {
                 }
             };
 
+            // Fetch all songs.
             let mut offset = 0;
             loop {
                 let response = client
@@ -466,6 +468,31 @@ impl Logic {
                 offset += song_count as u32;
             }
 
+            // Rename all [Unknown Album] single-track albums to be the song title.
+            {
+                let song_map = song_map.read().unwrap();
+                let mut state = state.write().unwrap();
+
+                let mut albums_to_rewrite = HashSet::new();
+                for album in state.albums.values_mut() {
+                    if album.name == "[Unknown Album]" && album.song_count == 1 {
+                        albums_to_rewrite.insert(album.id.clone());
+                    }
+                }
+
+                for song in song_map.values() {
+                    let Some(album_id) = song.album_id.as_ref() else {
+                        continue;
+                    };
+                    if albums_to_rewrite.contains(album_id) {
+                        if let Some(album) = state.albums.get_mut(album_id) {
+                            album.name = song.title.clone();
+                        }
+                    }
+                }
+            }
+
+            // Build groups.
             {
                 let song_map = song_map.read().unwrap();
                 let mut state = state.write().unwrap();
@@ -518,7 +545,11 @@ impl Logic {
                         panic!("Album not found in state: {album_id:?}");
                     });
 
-                    if current_group.is_none() || matches!(&current_group, Some(group) if !(group.artist == album.artist && group.album == album.name && group.year == album.year)) {
+                    if !current_group.as_ref().is_some_and(|group| {
+                        group.artist == album.artist
+                            && group.album == album.name
+                            && group.year == album.year
+                    }) {
                         if let Some(group) = current_group.take() {
                             new_groups.push(Arc::new(group));
                         }

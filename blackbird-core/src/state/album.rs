@@ -1,4 +1,4 @@
-use crate::{bs, state::SongId};
+use crate::bs;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AlbumId(pub String);
@@ -21,8 +21,6 @@ pub struct Album {
     pub cover_art_id: Option<String>,
     /// The number of songs in the album
     pub song_count: u32,
-    /// The songs in the album
-    pub songs: Option<Vec<SongId>>,
     /// The total duration of the album in seconds
     pub duration: u32,
     /// The release year of the album
@@ -38,7 +36,6 @@ impl From<bs::AlbumID3> for Album {
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
             cover_art_id: album.cover_art,
             song_count: album.song_count,
-            songs: None,
             duration: album.duration,
             year: album.year,
             _genre: album.genre,
