@@ -164,22 +164,8 @@ impl Logic {
 
                     // Check if we should auto-advance to next track
                     if sink.empty() {
-                        let should_advance = { queue.read().unwrap().is_playing() };
-
-                        if should_advance {
-                            // Pull next track from queue
-                            if let Ok(mut queue_guard) = queue.write() {
-                                if let Some((_next_song_id, cached_audio)) =
-                                    queue_guard.get_next_track_with_audio()
-                                {
-                                    last_data = Some(cached_audio.clone());
-                                    drop(queue_guard); // Release queue lock
-
-                                    sink.clear(); // Clear any existing state
-                                    sink.append(build_decoder(cached_audio));
-                                    sink.play();
-                                }
-                            }
+                        if let Some(data) = last_data.clone() {
+                            sink.append(build_decoder(data));
                         }
                     }
 
