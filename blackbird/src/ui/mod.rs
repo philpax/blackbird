@@ -284,6 +284,8 @@ impl eframe::App for Ui {
                     // to 0, but egui doesn't allow that for solid scroll bars.
                     ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
                         bar_inner_margin: scroll_margin.into(),
+                        bar_width: 12.0,
+                        handle_min_length: 24.0,
                         ..egui::style::ScrollStyle::solid()
                     };
                     ui.style_mut().visuals.extreme_bg_color = config_read.style.background();
