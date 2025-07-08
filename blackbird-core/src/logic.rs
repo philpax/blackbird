@@ -95,7 +95,10 @@ impl Logic {
                         .unwrap()
                 }
 
+                const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
+
                 let mut last_data = None;
+                let mut last_seek_time = std::time::Instant::now();
                 loop {
                     // Process all available messages without blocking
                     while let Ok(msg) = playback_thread_rx.try_recv() {
@@ -122,10 +125,17 @@ impl Logic {
                                 sink.clear();
                             }
                             LogicThreadMessage::Seek(position) => {
-                                if let Err(e) = sink.try_seek(position) {
-                                    // Log error but don't crash - seeking may fail for various reasons
-                                    tracing::warn!("Failed to seek to position {position:?}: {e}");
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_seek_time) >= SEEK_DEBOUNCE_DURATION {
+                                    last_seek_time = now;
+                                    if let Err(e) = sink.try_seek(position) {
+                                        // Log error but don't crash - seeking may fail for various reasons
+                                        tracing::warn!(
+                                            "Failed to seek to position {position:?}: {e}"
+                                        );
+                                    }
                                 }
+                                // Drop seeks that come in too soon
                             }
                         }
                     }
