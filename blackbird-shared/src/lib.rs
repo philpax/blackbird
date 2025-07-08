@@ -7,6 +7,7 @@ pub mod config {
         pub base_url: String,
         pub username: String,
         pub password: String,
+        pub transcode: bool,
     }
     impl Default for Server {
         fn default() -> Self {
@@ -14,6 +15,7 @@ pub mod config {
                 base_url: "http://localhost:4533".to_string(),
                 username: "YOUR_USERNAME".to_string(),
                 password: "YOUR_PASSWORD".to_string(),
+                transcode: true,
             }
         }
     }

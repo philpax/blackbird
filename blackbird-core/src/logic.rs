@@ -19,6 +19,7 @@ pub struct Logic {
     client: Arc<bs::Client>,
     playback_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
     _playback_thread_handle: std::thread::JoinHandle<()>,
+    transcode: bool,
 }
 
 pub struct PlayingInfo {
@@ -39,7 +40,7 @@ impl Logic {
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
-    pub fn new(base_url: String, username: String, password: String) -> Self {
+    pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             songs: vec![],
             groups: vec![],
@@ -167,6 +168,7 @@ impl Logic {
             client,
             playback_thread_tx,
             _playback_thread_handle: playback_thread_handle,
+            transcode,
         };
         logic.initial_fetch();
         logic
@@ -300,10 +302,17 @@ impl Logic {
         let state = self.state.clone();
         let song_id = song_id.clone();
         let logic_tx = self.playback_thread_tx.clone();
+        let transcode = self.transcode;
 
         self.spawn(async move {
             state.write().unwrap().is_loading_song = true;
-            match client.download(&song_id.0).await {
+            let response = if transcode {
+                client.stream(&song_id.0, "mp3".to_string(), None).await
+            } else {
+                client.download(&song_id.0).await
+            };
+
+            match response {
                 Ok(data) => {
                     // Update the state to reflect the new playing song
                     {

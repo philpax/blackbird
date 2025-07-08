@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::{Client, ClientResult};
+
 /// Represents a child item (file or directory) in the Subsonic API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -94,4 +96,31 @@ pub struct Child {
     /// The original height of the media
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_height: Option<u32>,
+}
+
+impl Client {
+    /// Download a file from the server.
+    pub async fn download(&self, id: impl Into<String>) -> ClientResult<Vec<u8>> {
+        Self::check_for_subsonic_error_in_bytes(
+            self.request_raw("download", &[("id", id.into())]).await?,
+        )
+    }
+
+    /// Stream (?) a transcoded file from the server.
+    pub async fn stream(
+        &self,
+        id: impl Into<String>,
+        format: impl Into<Option<String>>,
+        max_bitrate_kbps: impl Into<Option<u32>>,
+    ) -> ClientResult<Vec<u8>> {
+        let mut parameters = vec![("id", id.into())];
+        if let Some(format) = format.into() {
+            parameters.push(("format", format));
+        }
+        if let Some(max_bitrate_kbps) = max_bitrate_kbps.into() {
+            parameters.push(("maxBitRate", max_bitrate_kbps.to_string()));
+        }
+
+        Self::check_for_subsonic_error_in_bytes(self.request_raw("stream", &parameters).await?)
+    }
 }

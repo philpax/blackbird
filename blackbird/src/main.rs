@@ -19,10 +19,11 @@ fn main() {
     let base_url = config.server.base_url.clone();
     let username = config.server.username.clone();
     let password = config.server.password.clone();
+    let transcode = config.server.transcode;
 
     // Now wrap config in Arc<RwLock> after using it for client creation
     let config = Arc::new(RwLock::new(config));
-    let logic = Arc::new(bc::Logic::new(base_url, username, password));
+    let logic = Arc::new(bc::Logic::new(base_url, username, password, transcode));
 
     let native_options = eframe::NativeOptions::default();
     eframe::run_native(
