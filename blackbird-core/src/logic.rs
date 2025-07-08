@@ -306,11 +306,9 @@ impl Logic {
 
         self.spawn(async move {
             state.write().unwrap().is_loading_song = true;
-            let response = if transcode {
-                client.stream(&song_id.0, "mp3".to_string(), None).await
-            } else {
-                client.download(&song_id.0).await
-            };
+            let response = client
+                .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
+                .await;
 
             match response {
                 Ok(data) => {

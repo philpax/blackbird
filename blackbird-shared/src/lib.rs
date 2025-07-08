@@ -15,7 +15,7 @@ pub mod config {
                 base_url: "http://localhost:4533".to_string(),
                 username: "YOUR_USERNAME".to_string(),
                 password: "YOUR_PASSWORD".to_string(),
-                transcode: true,
+                transcode: false,
             }
         }
     }
