@@ -1,9 +1,12 @@
+#[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
+#[allow(unused_imports)]
 use crate::{AlbumID3, ArtistID3, Child, Client, ClientResult};
 
 /// A request to the `search3` endpoint.
 #[derive(Debug, Clone, Default)]
+#[cfg(feature = "opensubsonic")]
 pub struct Search3Request {
     /// The search query.
     pub query: String,
@@ -26,6 +29,7 @@ pub struct Search3Request {
 /// A response from the `search3` endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[cfg(feature = "opensubsonic")]
 pub struct Search3Response {
     /// The artists found.
     #[serde(default)]
@@ -41,6 +45,7 @@ pub struct Search3Response {
 /// Search-related functionality.
 impl Client {
     /// Search for an album.
+    #[cfg(feature = "opensubsonic")]
     pub async fn search3(&self, request: &Search3Request) -> ClientResult<Search3Response> {
         let mut parameters = vec![("query", request.query.clone())];
         if let Some(artist_count) = request.artist_count {

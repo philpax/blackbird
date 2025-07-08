@@ -14,6 +14,7 @@ mod song;
 pub use song::*;
 
 mod search;
+#[allow(unused_imports)]
 pub use search::*;
 
 mod misc;
