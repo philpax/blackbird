@@ -4,16 +4,19 @@ use serde::{Deserialize, Serialize};
 macro_rules! style_fields {
     ($(($field:ident, $fn_name:ident, $default:expr)),* $(,)?) => {
         #[derive(Debug, Serialize, Deserialize, PartialEq)]
+        #[serde(default)]
         pub struct Style {
             $(
                 #[doc = concat!("Colour for ", stringify!($field))]
                 $field: [f32; 3],
             )*
+            pub scroll_multiplier: f32,
         }
         impl Default for Style {
             fn default() -> Self {
                 Self {
                     $($field: $default,)*
+                    scroll_multiplier: 50.0,
                 }
             }
         }

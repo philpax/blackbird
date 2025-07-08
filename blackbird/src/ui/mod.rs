@@ -32,8 +32,9 @@ impl Ui {
                 style.visuals.panel_fill = config_read.style.background();
                 style.visuals.override_text_color = Some(config_read.style.text());
             });
-            cc.egui_ctx
-                .options_mut(|options| options.line_scroll_speed = 100.0);
+            cc.egui_ctx.options_mut(|options| {
+                options.line_scroll_speed = config_read.style.scroll_multiplier
+            });
         }
 
         let mut fonts = egui::FontDefinitions::default();

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::ui;
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
 pub struct Config {
     #[serde(default)]
     pub general: General,
@@ -42,6 +43,7 @@ impl Config {
 }
 
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct General {
     pub album_art_enabled: bool,
     pub repaint_secs: f32,
