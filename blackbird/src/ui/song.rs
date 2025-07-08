@@ -96,7 +96,8 @@ pub fn ui(
         .as_ref()
         .filter(|artist| *artist != album_artist)
     {
-        let artist_x = ui.max_rect().right() - params.max_track_length_width - 40.0; // Leave space for duration
+        // Leave space for duration
+        let artist_x = ui.max_rect().right() - params.max_track_length_width - 6.0;
         ui.painter().text(
             egui::pos2(artist_x, text_y),
             egui::Align2::RIGHT_TOP,
