@@ -211,24 +211,46 @@ impl eframe::App for Ui {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.style_mut().visuals.override_text_color = None;
 
+                            let default_color = config_read.style.text();
+                            let active_color = config_read.style.track_name_playing();
+
                             // Stop button
-                            if control_button(ui, egui_phosphor::regular::STOP, None, false) {
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::STOP,
+                                default_color,
+                                active_color,
+                            ) {
                                 self.logic.stop_playback();
                             }
 
                             // Play/Pause button
-                            if control_button(ui, egui_phosphor::regular::PLAY_PAUSE, None, false) {
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::PLAY_PAUSE,
+                                default_color,
+                                active_color,
+                            ) {
                                 self.logic.toggle_playback();
                             }
 
                             // Next track button
-                            if control_button(ui, egui_phosphor::regular::SKIP_FORWARD, None, false)
-                            {
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::SKIP_FORWARD,
+                                default_color,
+                                active_color,
+                            ) {
                                 self.logic.next_track();
                             }
 
                             // Previous track button
-                            if control_button(ui, egui_phosphor::regular::SKIP_BACK, None, false) {
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::SKIP_BACK,
+                                default_color,
+                                active_color,
+                            ) {
                                 self.logic.previous_track();
                             }
 
@@ -236,17 +258,17 @@ impl eframe::App for Ui {
 
                             // Playback mode buttons (Sequential, Shuffle, Repeat One)
                             let current_mode = self.logic.get_playback_mode();
-                            let mode_colors = Some((
-                                config_read.style.track_name_playing(),
-                                config_read.style.text(),
-                            ));
 
                             // Sequential button
                             if control_button(
                                 ui,
                                 egui_phosphor::regular::LIST,
-                                mode_colors,
-                                current_mode == PlaybackMode::Sequential,
+                                if current_mode == PlaybackMode::Sequential {
+                                    active_color
+                                } else {
+                                    default_color
+                                },
+                                active_color,
                             ) {
                                 self.logic.set_playback_mode(PlaybackMode::Sequential);
                             }
@@ -255,8 +277,12 @@ impl eframe::App for Ui {
                             if control_button(
                                 ui,
                                 egui_phosphor::regular::SHUFFLE,
-                                mode_colors,
-                                current_mode == PlaybackMode::Shuffle,
+                                if current_mode == PlaybackMode::Shuffle {
+                                    active_color
+                                } else {
+                                    default_color
+                                },
+                                active_color,
                             ) {
                                 self.logic.set_playback_mode(PlaybackMode::Shuffle);
                             }
@@ -265,8 +291,12 @@ impl eframe::App for Ui {
                             if control_button(
                                 ui,
                                 egui_phosphor::regular::REPEAT_ONCE,
-                                mode_colors,
-                                current_mode == PlaybackMode::RepeatOne,
+                                if current_mode == PlaybackMode::RepeatOne {
+                                    active_color
+                                } else {
+                                    default_color
+                                },
+                                active_color,
                             ) {
                                 self.logic.set_playback_mode(PlaybackMode::RepeatOne);
                             }
@@ -450,25 +480,20 @@ impl eframe::App for Ui {
 fn control_button(
     ui: &mut egui::Ui,
     icon: &str,
-    color_override: Option<(egui::Color32, egui::Color32)>,
-    is_active: bool,
+    text_color: egui::Color32,
+    hover_color: egui::Color32,
 ) -> bool {
-    let mut rich_text = egui::RichText::new(icon).size(CONTROL_BUTTON_SIZE);
-
-    // Apply color if override is provided
-    if let Some((active_color, inactive_color)) = color_override {
-        let color = if is_active {
-            active_color
-        } else {
-            inactive_color
-        };
-        rich_text = rich_text.color(color);
-    }
-
-    ui.add(
-        egui::Label::new(rich_text)
-            .selectable(false)
-            .sense(egui::Sense::click()),
-    )
-    .clicked()
+    ui.scope(|ui| {
+        let visuals = &mut ui.style_mut().visuals;
+        visuals.widgets.inactive.fg_stroke.color = text_color;
+        visuals.widgets.hovered.fg_stroke.color = hover_color;
+        visuals.widgets.active.fg_stroke.color = hover_color;
+        ui.add(
+            egui::Label::new(egui::RichText::new(icon).size(CONTROL_BUTTON_SIZE))
+                .selectable(false)
+                .sense(egui::Sense::click()),
+        )
+        .clicked()
+    })
+    .inner
 }
