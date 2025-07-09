@@ -214,14 +214,14 @@ impl eframe::App for Ui {
                             let default_color = config_read.style.text();
                             let active_color = config_read.style.track_name_playing();
 
-                            // Stop button
+                            // Next track button
                             if control_button(
                                 ui,
-                                egui_phosphor::regular::STOP,
+                                egui_phosphor::regular::SKIP_FORWARD,
                                 default_color,
                                 active_color,
                             ) {
-                                self.logic.stop_playback();
+                                self.logic.next_track();
                             }
 
                             // Play/Pause button
@@ -234,16 +234,6 @@ impl eframe::App for Ui {
                                 self.logic.toggle_playback();
                             }
 
-                            // Next track button
-                            if control_button(
-                                ui,
-                                egui_phosphor::regular::SKIP_FORWARD,
-                                default_color,
-                                active_color,
-                            ) {
-                                self.logic.next_track();
-                            }
-
                             // Previous track button
                             if control_button(
                                 ui,
@@ -254,7 +244,17 @@ impl eframe::App for Ui {
                                 self.logic.previous_track();
                             }
 
-                            ui.add_space(16.0);
+                            // Stop button
+                            if control_button(
+                                ui,
+                                egui_phosphor::regular::STOP,
+                                default_color,
+                                active_color,
+                            ) {
+                                self.logic.stop_playback();
+                            }
+
+                            ui.add_space(24.0);
 
                             // Playback mode buttons (Sequential, Shuffle, Repeat One)
                             let current_mode = self.logic.get_playback_mode();
