@@ -332,7 +332,8 @@ impl eframe::App for Ui {
                     let slider_duration = duration_secs.max(1.0);
 
                     // Add a slider for scrubbing - takes up available horizontal space
-                    ui.style_mut().spacing.slider_width = ui.available_width();
+                    ui.style_mut().spacing.slider_width =
+                        ui.available_width() - ui.style().spacing.window_margin.right as f32;
                     let slider_response = ui.add(
                         egui::Slider::new(&mut slider_position, 0.0..=slider_duration)
                             .show_value(false)
