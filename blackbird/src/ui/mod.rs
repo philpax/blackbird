@@ -20,6 +20,7 @@ pub struct Ui {
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
     logic: Arc<bc::Logic>,
+    current_window_size: Option<egui::Rect>,
 }
 
 impl Ui {
@@ -93,6 +94,7 @@ impl Ui {
             _config_reload_thread,
             _repaint_thread,
             logic,
+            current_window_size: None,
         }
     }
 }
@@ -100,6 +102,13 @@ impl Ui {
 impl eframe::App for Ui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let config_read = self.config.read().unwrap();
+
+        // Update current window size
+        ctx.input(|i| {
+            if let Some(inner_rect) = i.viewport().inner_rect {
+                self.current_window_size = Some(inner_rect);
+            }
+        });
 
         if let Some(error) = self.logic.get_error() {
             let mut open = true;
@@ -473,6 +482,16 @@ impl eframe::App for Ui {
                         });
                 });
             });
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        let Some(inner_rect) = self.current_window_size else {
+            return;
+        };
+        let mut config = self.config.write().unwrap();
+        config.general.window_width = inner_rect.width();
+        config.general.window_height = inner_rect.height();
+        config.save();
     }
 }
 
