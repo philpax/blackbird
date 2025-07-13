@@ -383,7 +383,7 @@ fn strip_album_parentheses(album_name: &str) -> String {
     if let Some(idx) = trimmed.rfind('(') {
         let before = &trimmed[..idx];
         let after = &trimmed[idx..];
-        if after.ends_with(')') && before.chars().last().map_or(true, |c| c.is_whitespace()) {
+        if after.ends_with(')') && before.chars().last().is_none_or(|c| c.is_whitespace()) {
             return before.trim_end().to_string();
         }
     }
