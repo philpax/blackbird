@@ -94,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
         let exact_key = format!(
             "{} - {}",
             artist.to_lowercase(),
-            strip_album_parentheses(&album_name).to_lowercase()
+            normalize_album_name(&album_name)
         );
         exact_album_matches.insert(exact_key);
 
@@ -103,7 +103,7 @@ async fn main() -> anyhow::Result<()> {
         normalized_artist_albums
             .entry(normalized_artist)
             .or_default()
-            .push((artist.to_string(), strip_album_parentheses(&album_name)));
+            .push((artist.to_string(), normalize_album_name(&album_name)));
     }
 
     // Pre-compute normalized Subsonic artist names for faster lookup
@@ -147,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
                     let exact_key = format!(
                         "{} - {}",
                         spotify_artist.to_lowercase(),
-                        strip_album_parentheses(spotify_album).to_lowercase()
+                        normalize_album_name(spotify_album)
                     );
                     if exact_album_matches.contains(&exact_key) {
                         return (global_idx, album, Some("exact"));
@@ -163,7 +163,7 @@ async fn main() -> anyhow::Result<()> {
                             if let Some(albums) = normalized_artist_albums.get(subsonic_artist) {
                                 for (_, subsonic_album_name) in albums {
                                     let album_similarity = fuzzy_match(
-                                        &strip_album_parentheses(spotify_album),
+                                        &normalize_album_name(spotify_album),
                                         subsonic_album_name,
                                     );
                                     if album_similarity > 0.8 {
@@ -390,6 +390,85 @@ fn strip_album_parentheses(album_name: &str) -> String {
     album_name.to_string()
 }
 
+/// Removes common superfluous words from album names.
+/// Only removes whole words to avoid partial matches.
+/// For example: "Album Name Deluxe Edition" becomes "Album Name"
+fn strip_superfluous_words(album_name: &str) -> String {
+    const SUPERFLUOUS_WORDS: &[&str] = &[
+        "edition",
+        "deluxe",
+        "remaster",
+        "remastered",
+        "ep",
+        "lp",
+        "single",
+        "live",
+        "acoustic",
+        "unplugged",
+        "studio",
+        "original",
+        "classic",
+        "anniversary",
+        "special",
+        "limited",
+        "expanded",
+        "complete",
+        "full",
+        "extended",
+        "bonus",
+        "extra",
+        "plus",
+        "reissue",
+        "import",
+        "international",
+        "uk",
+        "us",
+        "european",
+        "american",
+        "version",
+        "remix",
+        "explicit",
+        "clean",
+        "instrumental",
+        "vocal",
+        "demo",
+        "rough",
+        "alternate",
+        "alternative",
+        "take",
+        "outtake",
+        "part",
+        "chapter",
+        "volume",
+        "vol",
+        "disc",
+        "cd",
+        "vinyl",
+        "digital",
+        "streaming",
+        "download",
+        "online",
+        "internet",
+        "web",
+        "physical",
+        "hardcopy",
+    ];
+
+    album_name
+        .split_whitespace()
+        .filter(|word| !SUPERFLUOUS_WORDS.contains(word))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Normalizes album names by removing parentheses and superfluous words.
+/// This is the main function to use for album name processing.
+fn normalize_album_name(album_name: &str) -> String {
+    let lowercased = album_name.to_lowercase();
+    let stripped = strip_album_parentheses(&lowercased);
+    strip_superfluous_words(&stripped)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,5 +519,55 @@ mod tests {
             strip_album_parentheses("Album Name Remaster)"),
             "Album Name Remaster)"
         );
+    }
+
+    #[test]
+    fn test_strip_superfluous_words() {
+        // Single word removals
+        assert_eq!(strip_superfluous_words("album name edition"), "album name");
+        assert_eq!(strip_superfluous_words("album name ep"), "album name");
+        assert_eq!(strip_superfluous_words("album name deluxe"), "album name");
+        assert_eq!(strip_superfluous_words("album name remaster"), "album name");
+
+        // Multi-word phrase removals (these should no longer work since we simplified)
+        assert_eq!(
+            strip_superfluous_words("album name greatest hits"),
+            "album name greatest hits"
+        );
+        assert_eq!(
+            strip_superfluous_words("album name best of"),
+            "album name best of"
+        );
+        assert_eq!(
+            strip_superfluous_words("album name radio edit"),
+            "album name radio edit"
+        );
+
+        // Mixed cases
+        assert_eq!(
+            strip_superfluous_words("album name deluxe edition remaster"),
+            "album name"
+        );
+        assert_eq!(
+            strip_superfluous_words("album name greatest hits deluxe edition"),
+            "album name greatest hits"
+        );
+
+        // Cases that should NOT be changed
+        assert_eq!(strip_superfluous_words("album name"), "album name");
+        assert_eq!(strip_superfluous_words("replace"), "replace"); // Should not become "rlace"
+        assert_eq!(strip_superfluous_words("editionary"), "editionary"); // Should not become "ary"
+        assert_eq!(strip_superfluous_words("my ep collection"), "my collection");
+
+        // Edge cases
+        assert_eq!(strip_superfluous_words(""), "");
+        assert_eq!(strip_superfluous_words("edition"), "");
+        assert_eq!(strip_superfluous_words("   edition   "), "");
+        assert_eq!(strip_superfluous_words("edition album"), "album");
+
+        // Case sensitivity (now expects lowercase input)
+        assert_eq!(strip_superfluous_words("album name edition"), "album name"); // Lowercase input
+        assert_eq!(strip_superfluous_words("album name edition"), "album name"); // Lowercase input
+        assert_eq!(strip_superfluous_words("album name edition"), "album name"); // Lowercase input
     }
 }
