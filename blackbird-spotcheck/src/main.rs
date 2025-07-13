@@ -83,7 +83,12 @@ async fn main() -> anyhow::Result<()> {
 
     for album in &all_albums {
         let artist = album.artist.as_deref().unwrap_or_default();
-        let album_name = &album.name;
+        let mut album_name = album.name.clone();
+
+        if (album_name.is_empty() || album_name == "[Unknown Album]") && album.song_count == 1 {
+            let full_album = client.get_album_with_songs(&album.id).await?;
+            album_name = full_album.song[0].title.clone();
+        }
 
         // Store exact match for fast lookup
         let exact_key = format!("{} - {}", artist.to_lowercase(), album_name.to_lowercase());
@@ -94,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
         normalized_artist_albums
             .entry(normalized_artist)
             .or_default()
-            .push((artist.to_string(), album_name.to_string()));
+            .push((artist.to_string(), album_name));
     }
 
     // Pre-compute normalized Subsonic artist names for faster lookup
