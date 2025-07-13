@@ -90,16 +90,20 @@ async fn main() -> anyhow::Result<()> {
             album_name = full_album.song[0].title.clone();
         }
 
-        // Store exact match for fast lookup
-        let exact_key = format!("{} - {}", artist.to_lowercase(), album_name.to_lowercase());
+        // Store exact match for fast lookup (using stripped version)
+        let exact_key = format!(
+            "{} - {}",
+            artist.to_lowercase(),
+            strip_album_parentheses(&album_name).to_lowercase()
+        );
         exact_album_matches.insert(exact_key);
 
-        // Store normalized version for fuzzy matching
+        // Store normalized version for fuzzy matching (using stripped version)
         let normalized_artist = normalize_artist_name(artist);
         normalized_artist_albums
             .entry(normalized_artist)
             .or_default()
-            .push((artist.to_string(), album_name));
+            .push((artist.to_string(), strip_album_parentheses(&album_name)));
     }
 
     // Pre-compute normalized Subsonic artist names for faster lookup
@@ -143,7 +147,7 @@ async fn main() -> anyhow::Result<()> {
                     let exact_key = format!(
                         "{} - {}",
                         spotify_artist.to_lowercase(),
-                        spotify_album.to_lowercase()
+                        strip_album_parentheses(spotify_album).to_lowercase()
                     );
                     if exact_album_matches.contains(&exact_key) {
                         return (global_idx, album, Some("exact"));
@@ -158,8 +162,10 @@ async fn main() -> anyhow::Result<()> {
                             // Found a similar artist, now check their albums
                             if let Some(albums) = normalized_artist_albums.get(subsonic_artist) {
                                 for (_, subsonic_album_name) in albums {
-                                    let album_similarity =
-                                        fuzzy_match(spotify_album, subsonic_album_name);
+                                    let album_similarity = fuzzy_match(
+                                        &strip_album_parentheses(spotify_album),
+                                        subsonic_album_name,
+                                    );
                                     if album_similarity > 0.8 {
                                         return (global_idx, album, Some("fuzzy"));
                                     }
@@ -368,4 +374,71 @@ fn normalize_artist_name(artist: &str) -> String {
         .chars()
         .filter(|c| c.is_alphanumeric())
         .collect()
+}
+
+/// Strips parenthesized content from the end of album names.
+/// For example: "Visions (2017 Remaster)" becomes "Visions"
+fn strip_album_parentheses(album_name: &str) -> String {
+    let trimmed = album_name.trim_end();
+    if let Some(idx) = trimmed.rfind('(') {
+        let before = &trimmed[..idx];
+        let after = &trimmed[idx..];
+        if after.ends_with(')') && before.chars().last().map_or(true, |c| c.is_whitespace()) {
+            return before.trim_end().to_string();
+        }
+    }
+    album_name.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_album_parentheses() {
+        // Basic cases
+        assert_eq!(
+            strip_album_parentheses("Visions (2017 Remaster)"),
+            "Visions"
+        );
+        assert_eq!(
+            strip_album_parentheses("Album Name (Deluxe Edition)"),
+            "Album Name"
+        );
+        assert_eq!(strip_album_parentheses("Test (2023)"), "Test");
+
+        // Cases that should now be stripped
+        assert_eq!(strip_album_parentheses("Album Name"), "Album Name");
+        assert_eq!(strip_album_parentheses("Album (Name)"), "Album");
+        assert_eq!(
+            strip_album_parentheses("Album Name (Remaster) (2023)"),
+            "Album Name (Remaster)"
+        );
+        assert_eq!(
+            strip_album_parentheses("Album Name (Remaster) - Bonus"),
+            "Album Name (Remaster) - Bonus"
+        );
+
+        // Edge cases
+        assert_eq!(strip_album_parentheses(""), "");
+        assert_eq!(strip_album_parentheses("(Remaster)"), "");
+        assert_eq!(strip_album_parentheses("Album Name ()"), "Album Name");
+        assert_eq!(strip_album_parentheses("Album Name ( )"), "Album Name");
+
+        // Multiple spaces
+        assert_eq!(
+            strip_album_parentheses("Album Name   (Remaster)   "),
+            "Album Name"
+        );
+
+        // Unbalanced parentheses
+        assert_eq!(
+            strip_album_parentheses("Album Name (Remaster"),
+            "Album Name (Remaster"
+        );
+        assert_eq!(
+            strip_album_parentheses("Album Name Remaster)"),
+            "Album Name Remaster)"
+        );
+    }
 }
