@@ -10,7 +10,7 @@ use blackbird_core::util::seconds_to_hms_string;
 use blackbird_core::PlaybackMode;
 pub use style::Style;
 
-use crate::{bc, config::Config};
+use crate::{bc, config::Config, media_controls};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -88,6 +88,15 @@ impl Ui {
                 }
             }
         });
+
+        match media_controls::setup(logic.clone(), Some(cc)) {
+            Ok(()) => {
+                tracing::info!("Media controls initialized successfully");
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize media controls: {:?}", e);
+            }
+        }
 
         Ui {
             config,

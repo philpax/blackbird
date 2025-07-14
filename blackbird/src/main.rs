@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 mod config;
+mod media_controls;
 mod ui;
 
 use blackbird_core as bc;

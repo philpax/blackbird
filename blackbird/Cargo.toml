@@ -21,3 +21,5 @@ image = { version = "0.25", default-features = false, features = [
     "png",
 ] }
 egui-phosphor = "0.9.0"
+souvlaki = "0.8.3"
+raw-window-handle = "0.6"
