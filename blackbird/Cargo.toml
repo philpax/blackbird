@@ -13,13 +13,13 @@ tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 
-egui = "0.31.0"
-eframe = "0.31.0"
-egui_extras = { version = "0.31.0", features = ["image"] }
+egui = "0.32.0"
+eframe = "0.32.0"
+egui_extras = { version = "0.32.0", features = ["image"] }
 image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "png",
 ] }
-egui-phosphor = "0.9.0"
+egui-phosphor = "0.10.0"
 souvlaki = "0.8.3"
 raw-window-handle = "0.6"

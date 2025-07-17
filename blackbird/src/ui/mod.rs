@@ -38,7 +38,7 @@ impl Ui {
                 style.visuals.override_text_color = Some(config_read.style.text());
             });
             cc.egui_ctx.options_mut(|options| {
-                options.line_scroll_speed = config_read.style.scroll_multiplier
+                options.input_options.line_scroll_speed = config_read.style.scroll_multiplier
             });
         }
 
@@ -458,7 +458,7 @@ impl eframe::App for Ui {
 
                                 // Display the complete group
                                 let group_response = ui
-                                    .allocate_new_ui(
+                                    .scope_builder(
                                         egui::UiBuilder::new().max_rect(positioned_rect),
                                         |ui| {
                                             // Show the entire group (no row range filtering)
