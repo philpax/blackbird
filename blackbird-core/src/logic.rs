@@ -168,10 +168,10 @@ impl Logic {
                                     );
                                     continue;
                                 }
-                                if sink.empty() {
-                                    if let Some(data) = last_data.clone() {
-                                        sink.append(build_decoder(data));
-                                    }
+                                if sink.empty()
+                                    && let Some(data) = last_data.clone()
+                                {
+                                    sink.append(build_decoder(data));
                                 }
                                 sink.play();
                                 let _ = track_change_tx_for_thread.send(
@@ -179,10 +179,10 @@ impl Logic {
                                 );
                             }
                             LogicThreadMessage::Play => {
-                                if sink.empty() {
-                                    if let Some(data) = last_data.clone() {
-                                        sink.append(build_decoder(data));
-                                    }
+                                if sink.empty()
+                                    && let Some(data) = last_data.clone()
+                                {
+                                    sink.append(build_decoder(data));
                                 }
                                 sink.play();
                                 let _ = track_change_tx_for_thread.send(
@@ -216,10 +216,10 @@ impl Logic {
                     }
 
                     // Check if we should auto-advance to next track
-                    if sink.empty() {
-                        if let Some(data) = last_data.clone() {
-                            sink.append(build_decoder(data));
-                        }
+                    if sink.empty()
+                        && let Some(data) = last_data.clone()
+                    {
+                        sink.append(build_decoder(data));
                     }
 
                     // Update playing position in queue
@@ -499,7 +499,7 @@ impl Logic {
         self.read_state().error.clone()
     }
 
-    pub fn get_song_map(&self) -> RwLockReadGuard<SongMap> {
+    pub fn get_song_map(&'_ self) -> RwLockReadGuard<'_, SongMap> {
         self.song_map.read().unwrap()
     }
 
@@ -753,10 +753,10 @@ impl Logic {
                     let Some(album_id) = song.album_id.as_ref() else {
                         continue;
                     };
-                    if albums_to_rewrite.contains(album_id) {
-                        if let Some(album) = state.albums.get_mut(album_id) {
-                            album.name = song.title.clone();
-                        }
+                    if albums_to_rewrite.contains(album_id)
+                        && let Some(album) = state.albums.get_mut(album_id)
+                    {
+                        album.name = song.title.clone();
                     }
                 }
             }
@@ -845,11 +845,11 @@ impl Logic {
         })
     }
 
-    fn write_state(&self) -> RwLockWriteGuard<AppState> {
+    fn write_state(&'_ self) -> RwLockWriteGuard<'_, AppState> {
         self.state.write().unwrap()
     }
 
-    fn read_state(&self) -> RwLockReadGuard<AppState> {
+    fn read_state(&'_ self) -> RwLockReadGuard<'_, AppState> {
         self.state.read().unwrap()
     }
 }
