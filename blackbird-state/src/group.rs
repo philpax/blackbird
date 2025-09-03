@@ -1,4 +1,4 @@
-use crate::state::SongId;
+use crate::SongId;
 
 /// An grouping of tracks.
 #[derive(Debug, Clone)]

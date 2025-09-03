@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use crate::{bs, state::AlbumId};
+use crate::{AlbumId, bs};
 
+/// A map of song IDs to songs
 pub type SongMap = HashMap<SongId, Song>;
 
+/// A song ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SongId(pub String);
 impl std::fmt::Display for SongId {
@@ -12,8 +14,8 @@ impl std::fmt::Display for SongId {
     }
 }
 
-#[derive(Debug, Clone)]
 /// A song, as `blackbird` cares about it
+#[derive(Debug, Clone)]
 pub struct Song {
     /// The song ID
     pub id: SongId,

@@ -11,7 +11,7 @@ use tokio::sync::broadcast;
 use crate::{
     bs,
     queue::{PlaybackMode, Queue, SharedQueue},
-    state::{Album, AlbumId, Group, Song, SongId, SongMap},
+    state::{self, Album, AlbumId, Group, SongId, SongMap},
 };
 
 pub struct Logic {
@@ -690,157 +690,35 @@ impl Logic {
         let state = self.state.clone();
         let song_map = self.song_map.clone();
         self.spawn(async move {
-            if let Err(e) = client.ping().await {
-                state.write().unwrap().error = Some(e.to_string());
-                return;
-            }
+            let future = {
+                let state = state.clone();
+                async move {
+                    client.ping().await?;
 
-            // Fetch all albums.
-            match Album::fetch_all(&client).await {
-                Ok(albums) => {
-                    let mut state = state.write().unwrap();
-                    state.albums = albums.into_iter().map(|a| (a.id.clone(), a)).collect();
-                }
-                Err(e) => {
-                    state.write().unwrap().error = Some(e.to_string());
+                    let result = state::fetch_all(&client, |batch_count, total_count| {
+                        tracing::info!("Fetched {batch_count} songs, total {total_count} songs");
+                    })
+                    .await?;
+
+                    {
+                        let mut state = state.write().unwrap();
+                        state.albums = result.albums;
+                        state.songs = result.songs.keys().cloned().collect();
+                        state.groups = result.groups;
+                        state.has_loaded_all_songs = true;
+                    }
+
+                    {
+                        let mut song_map = song_map.write().unwrap();
+                        *song_map = result.songs;
+                    }
+
+                    bs::ClientResult::Ok(())
                 }
             };
 
-            // Fetch all songs.
-            let mut offset = 0;
-            loop {
-                let response = client
-                    .search3(&bs::Search3Request {
-                        query: "".to_string(),
-                        artist_count: Some(0),
-                        album_count: Some(0),
-                        song_count: Some(10000),
-                        song_offset: Some(offset),
-                        ..Default::default()
-                    })
-                    .await
-                    .unwrap();
-
-                if response.song.is_empty() {
-                    break;
-                }
-
-                let song_count = response.song.len();
-                {
-                    let mut song_map = song_map.write().unwrap();
-                    for song in response.song {
-                        let song = Song::from(song);
-                        song_map.insert(song.id.clone(), song);
-                    }
-                }
-                tracing::info!("Fetched {song_count} songs");
-                offset += song_count as u32;
-            }
-
-            // Rename all [Unknown Album] single-track albums to be the song title.
-            {
-                let song_map = song_map.read().unwrap();
-                let mut state = state.write().unwrap();
-
-                let mut albums_to_rewrite = HashSet::new();
-                for album in state.albums.values_mut() {
-                    if album.name == "[Unknown Album]" && album.song_count == 1 {
-                        albums_to_rewrite.insert(album.id.clone());
-                    }
-                }
-
-                for song in song_map.values() {
-                    let Some(album_id) = song.album_id.as_ref() else {
-                        continue;
-                    };
-                    if albums_to_rewrite.contains(album_id)
-                        && let Some(album) = state.albums.get_mut(album_id)
-                    {
-                        album.name = song.title.clone();
-                    }
-                }
-            }
-
-            // Build groups.
-            {
-                let song_map = song_map.read().unwrap();
-                let mut state = state.write().unwrap();
-                // Get all song IDs.
-                state.songs = song_map.keys().cloned().collect();
-                // This is all mad ineffcient but cbf doing it better.
-                // Sort songs.
-                {
-                    let song_data: HashMap<SongId, _> = state
-                        .songs
-                        .iter()
-                        .map(|id| {
-                            let song = song_map.get(id).unwrap_or_else(|| {
-                                panic!("Song not found in song map: {id}");
-                            });
-                            let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                                panic!("Album ID not found in song: {song:?}");
-                            });
-                            let album = state.albums.get(album_id).unwrap_or_else(|| {
-                                panic!("Album not found in state: {album_id:?}");
-                            });
-                            (
-                                id.clone(),
-                                (
-                                    album.artist.to_lowercase(),
-                                    album.year.unwrap_or_default(),
-                                    album.name.clone(),
-                                    song.disc_number.unwrap_or_default(),
-                                    song.track.unwrap_or_default(),
-                                    song.title.clone(),
-                                ),
-                            )
-                        })
-                        .collect();
-                    state
-                        .songs
-                        .sort_by_cached_key(|id| song_data.get(id).unwrap());
-                }
-                // Build groups.
-                let mut new_groups = vec![];
-                let mut current_group: Option<Group> = None;
-                for song_id in &state.songs {
-                    let song = song_map.get(song_id).unwrap_or_else(|| {
-                        panic!("Song not found in song map: {song_id}");
-                    });
-                    let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                        panic!("Album ID not found in song: {song:?}");
-                    });
-                    let album = state.albums.get(album_id).unwrap_or_else(|| {
-                        panic!("Album not found in state: {album_id:?}");
-                    });
-
-                    if !current_group.as_ref().is_some_and(|group| {
-                        group.artist == album.artist
-                            && group.album == album.name
-                            && group.year == album.year
-                    }) {
-                        if let Some(group) = current_group.take() {
-                            new_groups.push(Arc::new(group));
-                        }
-
-                        current_group = Some(Group {
-                            artist: album.artist.clone(),
-                            album: album.name.clone(),
-                            year: album.year,
-                            duration: album.duration,
-                            songs: vec![],
-                            cover_art_id: album.cover_art_id.clone(),
-                        });
-                    }
-
-                    current_group.as_mut().unwrap().songs.push(song_id.clone());
-                }
-                if let Some(group) = current_group.take() {
-                    new_groups.push(Arc::new(group));
-                }
-                state.groups = new_groups;
-
-                state.has_loaded_all_songs = true;
+            if let Err(e) = future.await {
+                state.write().unwrap().error = Some(e.to_string());
             }
         })
     }

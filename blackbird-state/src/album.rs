@@ -1,5 +1,6 @@
 use crate::bs;
 
+/// An album ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AlbumId(pub String);
 impl std::fmt::Display for AlbumId {

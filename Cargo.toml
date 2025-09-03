@@ -4,7 +4,7 @@ members = [
     "blackbird-core",
     "blackbird-id3mover",
     "blackbird-shared",
-    "blackbird-spotcheck",
+    "blackbird-spotcheck", "blackbird-state",
     "blackbird-subsonic",
 ]
 resolver = "2"
