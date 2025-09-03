@@ -3,7 +3,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use blackbird_subsonic as bs;
 use serde::Deserialize;
 
 use crate::common::{Albums, Ndjson as _, Tracks};
@@ -61,7 +60,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     tracing::info!("Connecting to Subsonic server...");
-    let client = blackbird_subsonic::Client::new(
+    let client = blackbird_state::bs::Client::new(
         config.server.base_url,
         config.server.username,
         config.server.password,
@@ -69,8 +68,11 @@ async fn main() -> anyhow::Result<()> {
     );
 
     tracing::info!("Fetching all albums from Subsonic...");
-    let all_albums = fetch_all_albums(&client).await?;
-    tracing::info!("Found {} albums in Subsonic", all_albums.len());
+    let fetched = blackbird_state::fetch_all(&client, |batch_count, total_count| {
+        tracing::info!("Fetched {batch_count} tracks, total {total_count} tracks");
+    })
+    .await?;
+    tracing::info!("Found {} albums in Subsonic", fetched.albums.len());
 
     // Create a more efficient lookup structure
     // 1. Exact matches for fast lookup
@@ -81,29 +83,21 @@ async fn main() -> anyhow::Result<()> {
     let mut normalized_artist_albums: std::collections::HashMap<String, Vec<(String, String)>> =
         std::collections::HashMap::new();
 
-    for album in &all_albums {
-        let artist = album.artist.as_deref().unwrap_or_default();
-        let mut album_name = album.name.clone();
-
-        if (album_name.is_empty() || album_name == "[Unknown Album]") && album.song_count == 1 {
-            let full_album = client.get_album_with_songs(&album.id).await?;
-            album_name = full_album.song[0].title.clone();
-        }
-
+    for album in fetched.albums.values() {
         // Store exact match for fast lookup (using stripped version)
         let exact_key = format!(
             "{} - {}",
-            artist.to_lowercase(),
-            normalize_album_name(&album_name)
+            album.artist.to_lowercase(),
+            normalize_album_name(&album.name)
         );
         exact_album_matches.insert(exact_key);
 
         // Store normalized version for fuzzy matching (using stripped version)
-        let normalized_artist = normalize_artist_name(artist);
+        let normalized_artist = normalize_artist_name(&album.artist);
         normalized_artist_albums
             .entry(normalized_artist)
             .or_default()
-            .push((artist.to_string(), normalize_album_name(&album_name)));
+            .push((album.artist.to_string(), normalize_album_name(&album.name)));
     }
 
     // Pre-compute normalized Subsonic artist names for faster lookup
@@ -228,28 +222,6 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("blackbird-spotcheck completed successfully!");
     Ok(())
-}
-
-async fn fetch_all_albums(client: &bs::Client) -> bs::ClientResult<Vec<bs::AlbumID3>> {
-    let mut all_albums = vec![];
-    let mut offset = 0;
-    loop {
-        let albums = client
-            .get_album_list_2(
-                bs::AlbumListType::AlphabeticalByArtist,
-                Some(500),
-                Some(offset),
-            )
-            .await?;
-        let album_count = albums.len();
-
-        offset += album_count;
-        all_albums.extend(albums);
-        if album_count < 500 {
-            break;
-        }
-    }
-    Ok(all_albums)
 }
 
 fn fuzzy_match(a: &str, b: &str) -> f64 {

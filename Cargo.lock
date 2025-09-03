@@ -631,7 +631,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "blackbird-shared",
- "blackbird-subsonic",
+ "blackbird-state",
  "chrono",
  "futures",
  "serde",
