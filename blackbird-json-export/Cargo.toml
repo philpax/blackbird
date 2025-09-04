@@ -1,0 +1,15 @@
+[package]
+name = "blackbird-json-export"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+blackbird-shared = { path = "../blackbird-shared" }
+blackbird-state = { path = "../blackbird-state" }
+blackbird-json-export-types = { path = "../blackbird-json-export-types" }
+
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tokio = { workspace = true }

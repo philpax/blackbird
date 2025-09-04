@@ -3,8 +3,11 @@ members = [
     "blackbird",
     "blackbird-core",
     "blackbird-id3mover",
+    "blackbird-json-export",
+    "blackbird-json-export-types",
     "blackbird-shared",
-    "blackbird-spotcheck", "blackbird-state",
+    "blackbird-spotcheck",
+    "blackbird-state",
     "blackbird-subsonic",
 ]
 resolver = "2"

@@ -619,6 +619,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "blackbird-json-export"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blackbird-json-export-types",
+ "blackbird-shared",
+ "blackbird-state",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "blackbird-json-export-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "blackbird-shared"
 version = "0.1.0"
 dependencies = [
