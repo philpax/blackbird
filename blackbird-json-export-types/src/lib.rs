@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct OutputSong {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -15,7 +15,7 @@ pub struct OutputSong {
     pub disc_number: Option<u32>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct OutputGroup {
     pub artist: String,
     pub album: String,
@@ -24,3 +24,5 @@ pub struct OutputGroup {
     pub duration: u32,
     pub songs: Vec<OutputSong>,
 }
+
+pub type Output = Vec<OutputGroup>;

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 
-use blackbird_json_export_types::{OutputGroup, OutputSong};
+use blackbird_json_export_types::{Output, OutputGroup, OutputSong};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -30,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
     })
     .await?;
 
-    let mut output = vec![];
+    let mut output = Output::new();
     for group in fetched.groups {
         output.push(OutputGroup {
             artist: group.artist.clone(),
