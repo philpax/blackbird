@@ -46,7 +46,7 @@ impl Ui {
         fonts.font_data.insert(
             "GoNoto".into(),
             Arc::new(egui::FontData::from_static(include_bytes!(
-                "../../assets/GoNotoCurrent-Regular.ttf"
+                "../../assets/GoNotoKurrent-Regular.ttf"
             ))),
         );
         fonts
