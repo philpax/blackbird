@@ -87,11 +87,21 @@ pub async fn fetch_all(
                 let album = albums.get(album_id).unwrap_or_else(|| {
                     panic!("Album not found in state: {album_id:?}");
                 });
+                let album_artist = album.artist.to_lowercase();
+                let is_various_artists = album_artist == "various artists";
                 (
                     id.clone(),
                     (
-                        album.artist.to_lowercase(),
-                        album.year.unwrap_or_default(),
+                        album_artist,
+                        album
+                            .year
+                            .filter(|_| {
+                                // HACK: We want to ignore the date for Various Artists albums;
+                                // these should be sorted entirely by name, as there's no
+                                // connecting tissue between them.
+                                !is_various_artists
+                            })
+                            .unwrap_or_default(),
                         album.name.clone(),
                         song.disc_number.unwrap_or_default(),
                         song.track.unwrap_or_default(),
