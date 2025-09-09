@@ -323,7 +323,7 @@ fn library(
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
         // to 0, but egui doesn't allow that for solid scroll bars.
         ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
-            bar_inner_margin: scroll_margin.into(),
+            bar_inner_margin: scroll_margin,
             bar_width: 20.0,
             handle_min_length: 36.0,
             ..egui::style::ScrollStyle::solid()
