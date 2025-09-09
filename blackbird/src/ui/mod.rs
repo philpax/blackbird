@@ -10,7 +10,7 @@ use blackbird_core::util::seconds_to_hms_string;
 use blackbird_core::PlaybackMode;
 pub use style::Style;
 
-use crate::{bc, config::Config, media_controls};
+use crate::{bc, config::Config, controls};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -19,7 +19,8 @@ pub struct Ui {
     config: Arc<RwLock<Config>>,
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
-    logic: Arc<bc::Logic>,
+    controls: controls::Controls,
+    logic: bc::Logic,
     current_window_size: Option<egui::Rect>,
 }
 
@@ -27,7 +28,7 @@ impl Ui {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         config: Arc<RwLock<Config>>,
-        logic: Arc<bc::Logic>,
+        logic: bc::Logic,
     ) -> Self {
         {
             let config_read = config.read().unwrap();
@@ -79,29 +80,24 @@ impl Ui {
 
         let _repaint_thread = std::thread::spawn({
             let egui_ctx = cc.egui_ctx.clone();
-            let logic = logic.clone();
             move || loop {
                 std::thread::sleep(std::time::Duration::from_millis(500));
-                // Only repaint if music is currently playing
-                if logic.get_playing_info().is_some() {
-                    egui_ctx.request_repaint();
-                }
+                egui_ctx.request_repaint();
             }
         });
 
-        match media_controls::setup(logic.clone(), Some(cc)) {
-            Ok(()) => {
-                tracing::info!("Media controls initialized successfully");
-            }
-            Err(e) => {
-                tracing::warn!("Failed to initialize media controls: {:?}", e);
-            }
-        }
+        let controls = controls::Controls::new(
+            Some(cc),
+            logic.subscribe_to_playback_events(),
+            logic.request_handle(),
+        )
+        .expect("Failed to initialize media controls");
 
         Ui {
             config,
             _config_reload_thread,
             _repaint_thread,
+            controls,
             logic,
             current_window_size: None,
         }
@@ -110,6 +106,9 @@ impl Ui {
 
 impl eframe::App for Ui {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.controls.update();
+        self.logic.update();
+
         let config_read = self.config.read().unwrap();
 
         // Update current window size
@@ -249,7 +248,7 @@ impl eframe::App for Ui {
                                 default_color,
                                 active_color,
                             ) {
-                                self.logic.toggle_playback();
+                                self.logic.toggle_current();
                             }
 
                             // Previous track button
@@ -269,7 +268,7 @@ impl eframe::App for Ui {
                                 default_color,
                                 active_color,
                             ) {
-                                self.logic.stop_playback();
+                                self.logic.stop_current();
                             }
 
                             ui.add_space(24.0);
@@ -361,7 +360,7 @@ impl eframe::App for Ui {
                     // If the user interacted with the slider, seek to that position
                     if slider_response.changed() {
                         let seek_position = Duration::from_secs_f32(slider_position);
-                        self.logic.seek(seek_position);
+                        self.logic.seek_current(seek_position);
                     }
                 });
 
@@ -483,7 +482,7 @@ impl eframe::App for Ui {
 
                                 // Handle song selection
                                 if let Some(song_id) = group_response.clicked_song {
-                                    self.logic.play_song(song_id);
+                                    self.logic.request_play_song(song_id);
                                 }
 
                                 current_row += group_lines;
