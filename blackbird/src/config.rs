@@ -47,16 +47,20 @@ impl Config {
 pub struct General {
     pub album_art_enabled: bool,
     pub repaint_secs: f32,
-    pub window_width: f32,
-    pub window_height: f32,
+    pub window_position_x: i32,
+    pub window_position_y: i32,
+    pub window_width: u32,
+    pub window_height: u32,
 }
 impl Default for General {
     fn default() -> Self {
         Self {
             album_art_enabled: true,
             repaint_secs: 1.0,
-            window_width: 640.0,
-            window_height: 1280.0,
+            window_position_x: 0,
+            window_position_y: 0,
+            window_width: 640,
+            window_height: 1280,
         }
     }
 }

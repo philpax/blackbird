@@ -25,7 +25,14 @@ fn main() {
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_inner_size([config.general.window_width, config.general.window_height]),
+            .with_position([
+                config.general.window_position_x as f32,
+                config.general.window_position_y as f32,
+            ])
+            .with_inner_size([
+                config.general.window_width as f32,
+                config.general.window_height as f32,
+            ]),
         ..eframe::NativeOptions::default()
     };
 
@@ -45,7 +52,8 @@ pub struct App {
     _repaint_thread: std::thread::JoinHandle<()>,
     controls: controls::Controls,
     logic: bc::Logic,
-    current_window_size: Option<egui::Rect>,
+    current_window_position: Option<(i32, i32)>,
+    current_window_size: Option<(u32, u32)>,
 }
 impl App {
     pub fn new(
@@ -93,6 +101,7 @@ impl App {
             _repaint_thread,
             controls,
             logic,
+            current_window_position: None,
             current_window_size: None,
         }
     }
@@ -104,8 +113,11 @@ impl eframe::App for App {
 
         // Update current window size
         ctx.input(|i| {
-            if let Some(inner_rect) = i.viewport().inner_rect {
-                self.current_window_size = Some(inner_rect);
+            if let Some(rect) = i.viewport().outer_rect {
+                self.current_window_position = Some((rect.left() as i32, rect.top() as i32));
+            }
+            if let Some(rect) = i.viewport().inner_rect {
+                self.current_window_size = Some((rect.width() as u32, rect.height() as u32));
             }
         });
 
@@ -113,12 +125,15 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let Some(inner_rect) = self.current_window_size else {
-            return;
-        };
         let mut config = self.config.write().unwrap();
-        config.general.window_width = inner_rect.width();
-        config.general.window_height = inner_rect.height();
+        if let Some((x, y)) = self.current_window_position {
+            config.general.window_position_x = x;
+            config.general.window_position_y = y;
+        }
+        if let Some((width, height)) = self.current_window_size {
+            config.general.window_width = width;
+            config.general.window_height = height;
+        }
         config.save();
     }
 }
