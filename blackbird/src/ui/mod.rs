@@ -239,7 +239,7 @@ impl eframe::App for Ui {
                                 default_color,
                                 active_color,
                             ) {
-                                self.logic.next_track();
+                                todo!()
                             }
 
                             // Play/Pause button
@@ -259,7 +259,7 @@ impl eframe::App for Ui {
                                 default_color,
                                 active_color,
                             ) {
-                                self.logic.previous_track();
+                                todo!()
                             }
 
                             // Stop button

@@ -47,8 +47,6 @@ impl Config {
 pub struct General {
     pub album_art_enabled: bool,
     pub repaint_secs: f32,
-    pub track_cache_size: usize,
-    pub default_shuffle: bool,
     pub window_width: f32,
     pub window_height: f32,
 }
@@ -57,8 +55,6 @@ impl Default for General {
         Self {
             album_art_enabled: true,
             repaint_secs: 1.0,
-            track_cache_size: 5,
-            default_shuffle: false,
             window_width: 640.0,
             window_height: 1280.0,
         }

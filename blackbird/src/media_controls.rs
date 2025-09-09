@@ -36,10 +36,10 @@ pub fn setup(
                 logic.toggle_playback();
             }
             MediaControlEvent::Next => {
-                logic.next_track();
+                todo!()
             }
             MediaControlEvent::Previous => {
-                logic.previous_track();
+                todo!()
             }
             MediaControlEvent::Stop => {
                 logic.stop_playback();
@@ -85,7 +85,7 @@ pub fn setup(
             let mut track_change_rx = track_change_rx;
             while let Ok(event) = track_change_rx.recv().await {
                 let result = match event {
-                    bc::TrackChangeEvent::TrackStarted(playing_info) => {
+                    bc::PlaybackToLogicMessage::TrackStarted(playing_info) => {
                         controls.set_metadata(MediaMetadata {
                             title: Some(&playing_info.song_title),
                             artist: Some(&playing_info.album_artist),
@@ -94,7 +94,7 @@ pub fn setup(
                             ..Default::default()
                         })
                     }
-                    bc::TrackChangeEvent::PlaybackStateChanged(state) => {
+                    bc::PlaybackToLogicMessage::PlaybackStateChanged(state) => {
                         use souvlaki::MediaPlayback;
                         let playback_status = match state {
                             bc::PlaybackState::Playing => MediaPlayback::Playing { progress: None },
@@ -107,7 +107,7 @@ pub fn setup(
                         };
                         controls.set_playback(playback_status)
                     }
-                    bc::TrackChangeEvent::PositionChanged(position) => {
+                    bc::PlaybackToLogicMessage::PositionChanged(position) => {
                         use souvlaki::MediaPlayback;
                         controls.set_playback(MediaPlayback::Playing {
                             progress: Some(souvlaki::MediaPosition(position)),

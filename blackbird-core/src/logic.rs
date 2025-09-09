@@ -6,11 +6,8 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::broadcast;
-
 use crate::{
     bs,
-    queue::{PlaybackMode, Queue, SharedQueue},
     state::{self, Album, AlbumId, Group, SongId, SongMap},
 };
 
@@ -20,17 +17,16 @@ pub struct Logic {
     state: Arc<RwLock<AppState>>,
     song_map: Arc<RwLock<SongMap>>,
     client: Arc<bs::Client>,
-    playback_thread_tx: std::sync::mpsc::Sender<LogicThreadMessage>,
+
+    logic_to_playback_tx: std::sync::mpsc::Sender<LogicToPlaybackMessage>,
     _playback_thread_handle: std::thread::JoinHandle<()>,
-    queue: SharedQueue,
+    playback_to_logic_rx: tokio::sync::broadcast::Receiver<PlaybackToLogicMessage>,
+
     transcode: bool,
-    cache_size: usize,
-    default_shuffle: bool,
-    track_change_tx: broadcast::Sender<TrackChangeEvent>,
 }
 
 #[derive(Debug, Clone)]
-pub enum TrackChangeEvent {
+pub enum PlaybackToLogicMessage {
     TrackStarted(PlayingInfo),
     PlaybackStateChanged(PlaybackState),
     PositionChanged(Duration),
@@ -58,18 +54,18 @@ pub struct VisibleGroupSet {
     pub start_row: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaybackMode {
+    Sequential,
+    Shuffle,
+    RepeatOne,
+}
+
 impl Logic {
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
-    pub fn new(
-        base_url: String,
-        username: String,
-        password: String,
-        transcode: bool,
-        cache_size: usize,
-        default_shuffle: bool,
-    ) -> Self {
+    pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             songs: vec![],
             groups: vec![],
@@ -78,6 +74,9 @@ impl Logic {
             pending_cover_art_requests: HashSet::new(),
             has_loaded_all_songs: false,
             error: None,
+            playing_song: None,
+            next_song: None,
+            playback_mode: PlaybackMode::Sequential,
         }));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
 
@@ -104,24 +103,14 @@ impl Logic {
             });
         });
 
-        // Create the shared queue
-        let queue = Arc::new(std::sync::RwLock::new(Queue::new(
-            vec![],
-            if default_shuffle {
-                PlaybackMode::Shuffle
-            } else {
-                PlaybackMode::Sequential
-            },
-            cache_size,
-        )));
-
-        let (track_change_tx, _) = broadcast::channel::<TrackChangeEvent>(100);
+        let (playback_to_logic_tx, playback_to_logic_rx) =
+            tokio::sync::broadcast::channel::<PlaybackToLogicMessage>(100);
 
         // Initialize audio output in the playback thread
-        let (playback_thread_tx, playback_thread_rx) = std::sync::mpsc::channel();
+        let (logic_to_playback_tx, logic_to_playback_rx) = std::sync::mpsc::channel();
         let playback_thread_handle = std::thread::spawn({
-            let queue = queue.clone();
-            let track_change_tx_for_thread = track_change_tx.clone();
+            let playback_to_logic_tx = playback_to_logic_tx.clone();
+            let state = state.clone();
             move || {
                 let stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
                 let sink = rodio::Sink::connect_new(stream_handle.mixer());
@@ -145,24 +134,26 @@ impl Logic {
 
                 loop {
                     // Process all available messages without blocking
-                    while let Ok(msg) = playback_thread_rx.try_recv() {
+                    while let Ok(msg) = logic_to_playback_rx.try_recv() {
                         match msg {
-                            LogicThreadMessage::PlaySong(data, playing_info) => {
+                            LogicToPlaybackMessage::PlaySong(data, playing_info) => {
                                 sink.clear();
                                 last_data = Some(data.clone());
                                 sink.append(build_decoder(data));
                                 sink.play();
-                                let _ = track_change_tx_for_thread
-                                    .send(TrackChangeEvent::TrackStarted(playing_info));
-                                let _ = track_change_tx_for_thread.send(
-                                    TrackChangeEvent::PlaybackStateChanged(PlaybackState::Playing),
+                                let _ = playback_to_logic_tx
+                                    .send(PlaybackToLogicMessage::TrackStarted(playing_info));
+                                let _ = playback_to_logic_tx.send(
+                                    PlaybackToLogicMessage::PlaybackStateChanged(
+                                        PlaybackState::Playing,
+                                    ),
                                 );
                             }
-                            LogicThreadMessage::TogglePlayback => {
+                            LogicToPlaybackMessage::TogglePlayback => {
                                 if !sink.is_paused() {
                                     sink.pause();
-                                    let _ = track_change_tx_for_thread.send(
-                                        TrackChangeEvent::PlaybackStateChanged(
+                                    let _ = playback_to_logic_tx.send(
+                                        PlaybackToLogicMessage::PlaybackStateChanged(
                                             PlaybackState::Paused,
                                         ),
                                     );
@@ -174,34 +165,42 @@ impl Logic {
                                     sink.append(build_decoder(data));
                                 }
                                 sink.play();
-                                let _ = track_change_tx_for_thread.send(
-                                    TrackChangeEvent::PlaybackStateChanged(PlaybackState::Playing),
+                                let _ = playback_to_logic_tx.send(
+                                    PlaybackToLogicMessage::PlaybackStateChanged(
+                                        PlaybackState::Playing,
+                                    ),
                                 );
                             }
-                            LogicThreadMessage::Play => {
+                            LogicToPlaybackMessage::Play => {
                                 if sink.empty()
                                     && let Some(data) = last_data.clone()
                                 {
                                     sink.append(build_decoder(data));
                                 }
                                 sink.play();
-                                let _ = track_change_tx_for_thread.send(
-                                    TrackChangeEvent::PlaybackStateChanged(PlaybackState::Playing),
+                                let _ = playback_to_logic_tx.send(
+                                    PlaybackToLogicMessage::PlaybackStateChanged(
+                                        PlaybackState::Playing,
+                                    ),
                                 );
                             }
-                            LogicThreadMessage::Pause => {
+                            LogicToPlaybackMessage::Pause => {
                                 sink.pause();
-                                let _ = track_change_tx_for_thread.send(
-                                    TrackChangeEvent::PlaybackStateChanged(PlaybackState::Paused),
+                                let _ = playback_to_logic_tx.send(
+                                    PlaybackToLogicMessage::PlaybackStateChanged(
+                                        PlaybackState::Paused,
+                                    ),
                                 );
                             }
-                            LogicThreadMessage::StopPlayback => {
+                            LogicToPlaybackMessage::StopPlayback => {
                                 sink.clear();
-                                let _ = track_change_tx_for_thread.send(
-                                    TrackChangeEvent::PlaybackStateChanged(PlaybackState::Stopped),
+                                let _ = playback_to_logic_tx.send(
+                                    PlaybackToLogicMessage::PlaybackStateChanged(
+                                        PlaybackState::Stopped,
+                                    ),
                                 );
                             }
-                            LogicThreadMessage::Seek(position) => {
+                            LogicToPlaybackMessage::Seek(position) => {
                                 let now = std::time::Instant::now();
                                 if now.duration_since(last_seek_time) >= SEEK_DEBOUNCE_DURATION {
                                     last_seek_time = now;
@@ -224,9 +223,8 @@ impl Logic {
 
                     // Update playing position in queue
                     let current_position = sink.get_pos();
-                    {
-                        let mut queue_guard = queue.write().unwrap();
-                        queue_guard.update_playing_position(current_position);
+                    if let Some(playing_song) = &mut state.write().unwrap().playing_song {
+                        playing_song.position = current_position;
                     }
 
                     // Send position updates every second
@@ -234,8 +232,8 @@ impl Logic {
                     if now.duration_since(last_position_update) >= Duration::from_secs(1) {
                         last_position_update = now;
                         if !sink.empty() && !sink.is_paused() {
-                            let _ = track_change_tx_for_thread
-                                .send(TrackChangeEvent::PositionChanged(current_position));
+                            let _ = playback_to_logic_tx
+                                .send(PlaybackToLogicMessage::PositionChanged(current_position));
                         }
                     }
 
@@ -251,13 +249,10 @@ impl Logic {
             state,
             song_map,
             client,
-            playback_thread_tx,
+            logic_to_playback_tx,
             _playback_thread_handle: playback_thread_handle,
-            queue: queue.clone(),
+            playback_to_logic_rx,
             transcode,
-            cache_size,
-            default_shuffle,
-            track_change_tx,
         };
         logic.initial_fetch();
         logic
@@ -387,42 +382,39 @@ impl Logic {
     }
 
     pub fn toggle_playback(&self) {
-        self.playback_thread_tx
-            .send(LogicThreadMessage::TogglePlayback)
+        self.logic_to_playback_tx
+            .send(LogicToPlaybackMessage::TogglePlayback)
             .unwrap();
     }
 
     pub fn play(&self) {
-        self.playback_thread_tx
-            .send(LogicThreadMessage::Play)
+        self.logic_to_playback_tx
+            .send(LogicToPlaybackMessage::Play)
             .unwrap();
     }
 
     pub fn pause(&self) {
-        self.playback_thread_tx
-            .send(LogicThreadMessage::Pause)
+        self.logic_to_playback_tx
+            .send(LogicToPlaybackMessage::Pause)
             .unwrap();
     }
 
     pub fn stop_playback(&self) {
-        self.queue.write().unwrap().stop_playing();
-        self.playback_thread_tx
-            .send(LogicThreadMessage::StopPlayback)
+        self.logic_to_playback_tx
+            .send(LogicToPlaybackMessage::StopPlayback)
             .unwrap();
     }
 
     pub fn seek(&self, position: Duration) {
-        self.playback_thread_tx
-            .send(LogicThreadMessage::Seek(position))
+        self.logic_to_playback_tx
+            .send(LogicToPlaybackMessage::Seek(position))
             .unwrap();
     }
 
-    pub fn subscribe_to_track_changes(&self) -> broadcast::Receiver<TrackChangeEvent> {
-        self.track_change_tx.subscribe()
-    }
-
-    fn get_playing_info_for_song(&self, song_id: &SongId) -> Option<PlayingInfo> {
-        create_playing_info_for_song(song_id, &self.song_map, &self.state)
+    pub fn subscribe_to_track_changes(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<PlaybackToLogicMessage> {
+        self.playback_to_logic_rx.resubscribe()
     }
 }
 
@@ -459,27 +451,29 @@ impl Logic {
     }
 
     pub fn get_playing_song_id(&self) -> Option<SongId> {
-        self.queue
-            .read()
-            .unwrap()
-            .get_playing_song()
-            .map(|(song_id, _)| song_id)
+        self.read_state()
+            .playing_song
+            .as_ref()
+            .map(|playing_song| playing_song.song_id.clone())
     }
 
     pub fn is_song_loaded(&self) -> bool {
-        self.queue.read().unwrap().is_playing()
+        self.read_state().playing_song.is_some()
     }
 
     pub fn is_song_loading(&self) -> bool {
-        self.queue.read().unwrap().is_loading_song()
+        self.read_state().next_song.is_some()
     }
 
     pub fn get_playing_info(&self) -> Option<PlayingInfo> {
         let song_map = self.song_map.read().unwrap();
-        let (song_id, song_position) = self.queue.read().unwrap().get_playing_song()?;
-        let song = song_map.get(&song_id)?;
         let state = self.read_state();
+
+        let playing_song = state.playing_song.as_ref()?;
+        let song = song_map.get(&playing_song.song_id)?;
+        let song_position = playing_song.position;
         let album = state.albums.get(song.album_id.as_ref()?)?;
+
         Some(PlayingInfo {
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
@@ -509,174 +503,50 @@ impl Logic {
 
     // Queue and playback management methods
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
-        let mut queue = self.queue.write().unwrap();
-        queue.set_mode(mode);
+        self.write_state().playback_mode = mode;
     }
 
     pub fn get_playback_mode(&self) -> PlaybackMode {
-        self.queue.read().unwrap().get_mode()
-    }
-
-    pub fn next_track(&self) {
-        let next_song_id = {
-            let mut queue = self.queue.write().unwrap();
-            queue.advance_to_next().cloned()
-        };
-
-        if let Some(song_id) = next_song_id {
-            self.play_song_from_cache(&song_id);
-        }
-    }
-
-    pub fn previous_track(&self) {
-        let prev_song_id = {
-            let mut queue = self.queue.write().unwrap();
-            queue.advance_to_previous().cloned()
-        };
-
-        if let Some(song_id) = prev_song_id {
-            self.play_song_from_cache(&song_id);
-        }
+        self.read_state().playback_mode
     }
 
     pub fn play_song(&self, song_id: &SongId) {
-        // Initialize queue with all songs when a song is selected
-        let songs = self.read_state().songs.clone();
-
-        {
-            let mut queue = self.queue.write().unwrap();
-
-            // Use default shuffle mode when starting fresh, otherwise preserve current mode
-            let mode = if queue.is_empty() {
-                if self.default_shuffle {
-                    PlaybackMode::Shuffle
-                } else {
-                    PlaybackMode::Sequential
-                }
-            } else {
-                queue.get_mode()
-            };
-
-            *queue = Queue::new(songs, mode, self.cache_size);
-            queue.jump_to_song(song_id);
-        }
-
-        // Start cache maintenance
-        self.update_track_cache();
-
-        // Play the song
-        self.play_song_from_cache(song_id);
-    }
-
-    fn play_song_from_cache(&self, song_id: &SongId) {
-        // Try to start playing from cache using the queue
-        let cached_data = {
-            let mut queue = self.queue.write().unwrap();
-            queue.start_playing(song_id)
-        };
-
-        if let Some(cached_data) = cached_data {
-            self.playback_thread_tx
-                .send(LogicThreadMessage::StopPlayback)
-                .unwrap();
-
-            if let Some(playing_info) = self.get_playing_info_for_song(song_id) {
-                self.playback_thread_tx
-                    .send(LogicThreadMessage::PlaySong(cached_data, playing_info))
-                    .unwrap();
-            }
-
-            self.update_track_cache();
-            return;
-        }
-
-        // Song not cached, load it normally
         let client = self.client.clone();
         let state = self.state.clone();
-        let queue = self.queue.clone();
         let song_id = song_id.clone();
-        let logic_tx = self.playback_thread_tx.clone();
+        let logic_tx = self.logic_to_playback_tx.clone();
         let transcode = self.transcode;
         let song_map = self.song_map.clone();
 
+        state.write().unwrap().next_song = Some(song_id.clone());
+
         self.spawn(async move {
-            queue.write().unwrap().start_loading_song(song_id.clone());
             let response = client
                 .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
                 .await;
 
             match response {
                 Ok(data) => {
-                    {
-                        let mut queue_guard = queue.write().unwrap();
-                        queue_guard.finish_loading_song();
-                        queue_guard.cache_track(song_id.clone(), data.clone());
-                        queue_guard.start_playing(&song_id);
-                    }
+                    logic_tx.send(LogicToPlaybackMessage::StopPlayback).unwrap();
 
-                    logic_tx.send(LogicThreadMessage::StopPlayback).unwrap();
-
-                    if let Some(playing_info) =
-                        create_playing_info_for_song(&song_id, &song_map, &state)
-                    {
-                        logic_tx
-                            .send(LogicThreadMessage::PlaySong(data, playing_info))
-                            .unwrap();
-                    }
+                    let playing_info = create_playing_info_for_song(&song_id, &song_map, &state)
+                        .unwrap_or_else(|| {
+                            panic!("Failed to create playing info for song {song_id}")
+                        });
+                    logic_tx
+                        .send(LogicToPlaybackMessage::PlaySong(data, playing_info))
+                        .unwrap();
+                    state.write().unwrap().playing_song = Some(PlayingSong {
+                        song_id,
+                        position: Duration::from_secs(0),
+                    });
                 }
                 Err(e) => {
-                    queue.write().unwrap().finish_loading_song();
                     let mut state = state.write().unwrap();
                     state.error = Some(e.to_string());
                 }
             }
-        });
-    }
-
-    fn update_track_cache(&self) {
-        // Get songs that need caching from the queue
-        let songs_needing_cache = {
-            let queue = self.queue.read().unwrap();
-            if queue.can_start_more_requests() {
-                queue.get_songs_needing_cache()
-            } else {
-                Vec::new()
-            }
-        };
-
-        // Start loading tracks that aren't cached yet
-        for song_id in songs_needing_cache {
-            self.cache_track(song_id);
-        }
-    }
-
-    fn cache_track(&self, song_id: SongId) {
-        // Mark as pending in the queue
-        self.queue
-            .write()
-            .unwrap()
-            .mark_track_pending(song_id.clone());
-
-        self.spawn({
-            let client = self.client.clone();
-            let queue = self.queue.clone();
-            let transcode = self.transcode;
-
-            async move {
-                match client
-                    .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
-                    .await
-                {
-                    Ok(data) => {
-                        queue.write().unwrap().cache_track(song_id.clone(), data);
-                    }
-                    Err(e) => {
-                        queue.write().unwrap().remove_pending_request(&song_id);
-                        // Don't set error for cache failures, just log
-                        tracing::warn!("Failed to cache track {}: {}", song_id, e);
-                    }
-                }
-            }
+            state.write().unwrap().next_song = None;
         });
     }
 }
@@ -740,10 +610,20 @@ struct AppState {
     pending_cover_art_requests: HashSet<String>,
     has_loaded_all_songs: bool,
 
+    playing_song: Option<PlayingSong>,
+    next_song: Option<SongId>,
+    playback_mode: PlaybackMode,
+
     error: Option<String>,
 }
 
-enum LogicThreadMessage {
+#[derive(Debug, Clone)]
+struct PlayingSong {
+    song_id: SongId,
+    position: Duration,
+}
+
+enum LogicToPlaybackMessage {
     PlaySong(Vec<u8>, PlayingInfo),
     TogglePlayback,
     Play,
