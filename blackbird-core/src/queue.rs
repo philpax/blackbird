@@ -331,17 +331,52 @@ fn compute_neighbors(
             };
             match dir {
                 Neighbor::Prev => {
-                    let start = idx.saturating_sub(count);
-                    // from closest to farthest: idx-1, idx-2, ...
                     let mut v = Vec::new();
-                    for i in (start..idx).rev() {
-                        v.push(ordered_songs[i].clone());
+                    let mut remaining = count;
+                    let mut current_idx = idx;
+
+                    // Wrap around from the end if we need more songs
+                    while remaining > 0 && !ordered_songs.is_empty() {
+                        current_idx = if current_idx == 0 {
+                            ordered_songs.len() - 1
+                        } else {
+                            current_idx - 1
+                        };
+
+                        // Don't include the center song itself
+                        if current_idx != idx {
+                            v.push(ordered_songs[current_idx].clone());
+                            remaining -= 1;
+                        }
+
+                        // Prevent infinite loop if there's only one song
+                        if current_idx == idx && remaining > 0 {
+                            break;
+                        }
                     }
                     v
                 }
                 Neighbor::Next => {
-                    let end = (idx + 1 + count).min(ordered_songs.len());
-                    ordered_songs[idx + 1..end].to_vec()
+                    let mut v = Vec::new();
+                    let mut remaining = count;
+                    let mut current_idx = idx;
+
+                    // Wrap around from the beginning if we need more songs
+                    while remaining > 0 && !ordered_songs.is_empty() {
+                        current_idx = (current_idx + 1) % ordered_songs.len();
+
+                        // Don't include the center song itself
+                        if current_idx != idx {
+                            v.push(ordered_songs[current_idx].clone());
+                            remaining -= 1;
+                        }
+
+                        // Prevent infinite loop if there's only one song
+                        if current_idx == idx && remaining > 0 {
+                            break;
+                        }
+                    }
+                    v
                 }
             }
         }
