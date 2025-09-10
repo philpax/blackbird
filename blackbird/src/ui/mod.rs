@@ -105,7 +105,7 @@ fn playing_track_info(
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
             ui.horizontal(|ui| {
-                if logic.is_song_loading() {
+                if logic.should_show_loading_indicator() {
                     ui.add(egui::Spinner::new());
                     ui.add_space(16.0);
                 }

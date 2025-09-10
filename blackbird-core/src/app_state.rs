@@ -19,7 +19,7 @@ pub struct AppState {
     pub has_loaded_all_songs: bool,
 
     pub current_track_and_position: Option<TrackAndPosition>,
-    pub is_loading_track: bool,
+    pub started_loading_track: Option<std::time::Instant>,
     pub playback_mode: PlaybackMode,
     pub queue: QueueState,
 

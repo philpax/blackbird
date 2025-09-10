@@ -68,7 +68,7 @@ impl Logic {
         // Set target and show loading indicator
         let req_id = {
             let mut st = self.write_state();
-            st.is_loading_track = true;
+            st.started_loading_track = Some(std::time::Instant::now());
             st.queue.current_target = Some(song_id.clone());
             st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
 

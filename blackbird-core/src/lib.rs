@@ -152,7 +152,7 @@ impl Logic {
 
                     let mut st = self.write_state();
                     st.current_track_and_position = Some(track_and_duration);
-                    st.is_loading_track = false;
+                    st.started_loading_track = None;
                 }
                 PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
                     self.write_state().current_track_and_position = Some(track_and_duration);
@@ -320,8 +320,10 @@ impl Logic {
     pub fn is_song_loaded(&self) -> bool {
         self.read_state().current_track_and_position.is_some()
     }
-    pub fn is_song_loading(&self) -> bool {
-        self.read_state().is_loading_track
+    pub fn should_show_loading_indicator(&self) -> bool {
+        self.read_state()
+            .started_loading_track
+            .is_some_and(|t| t.elapsed() > Duration::from_millis(100))
     }
     pub fn has_loaded_all_songs(&self) -> bool {
         self.read_state().has_loaded_all_songs
