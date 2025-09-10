@@ -18,6 +18,7 @@ pub enum PlaybackToLogicMessage {
     TrackStarted(PlayingInfo),
     PlaybackStateChanged(PlaybackState),
     PositionChanged(Duration),
+    TrackEnded,
 }
 #[derive(Debug, Clone)]
 pub enum LogicToPlaybackMessage {
@@ -29,7 +30,7 @@ pub enum LogicToPlaybackMessage {
     Seek(Duration),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Playing,
     Paused,
@@ -101,6 +102,16 @@ impl PlaybackThread {
         let mut last_seek_time = std::time::Instant::now();
         let mut last_position_update = std::time::Instant::now();
 
+        let mut state = PlaybackState::Stopped;
+        fn update_and_send_state(
+            logic_tx: &tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
+            state: &mut PlaybackState,
+            new_state: PlaybackState,
+        ) {
+            *state = new_state;
+            let _ = logic_tx.send(PTLM::PlaybackStateChanged(*state));
+        }
+
         loop {
             // Process all available messages without blocking
             while let Ok(msg) = playback_rx.try_recv() {
@@ -111,13 +122,12 @@ impl PlaybackThread {
                         sink.append(build_decoder(data));
                         sink.play();
                         let _ = logic_tx.send(PTLM::TrackStarted(playing_info));
-                        let _ = logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Playing));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::TogglePlayback => {
                         if !sink.is_paused() {
                             sink.pause();
-                            let _ =
-                                logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Paused));
+                            update_and_send_state(&logic_tx, &mut state, PlaybackState::Paused);
                             continue;
                         }
                         if sink.empty()
@@ -126,7 +136,7 @@ impl PlaybackThread {
                             sink.append(build_decoder(data));
                         }
                         sink.play();
-                        let _ = logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Playing));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::Play => {
                         if sink.empty()
@@ -135,15 +145,15 @@ impl PlaybackThread {
                             sink.append(build_decoder(data));
                         }
                         sink.play();
-                        let _ = logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Playing));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::Pause => {
                         sink.pause();
-                        let _ = logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Paused));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Paused);
                     }
                     LTPM::StopPlayback => {
                         sink.clear();
-                        let _ = logic_tx.send(PTLM::PlaybackStateChanged(PlaybackState::Stopped));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
                     }
                     LTPM::Seek(position) => {
                         let now = std::time::Instant::now();
@@ -159,10 +169,9 @@ impl PlaybackThread {
             }
 
             // Check if we should auto-advance to next track
-            if sink.empty()
-                && let Some(data) = last_data.clone()
-            {
-                sink.append(build_decoder(data));
+            if sink.empty() && state == PlaybackState::Playing {
+                update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
+                let _ = logic_tx.send(PTLM::TrackEnded);
             }
 
             // Send position updates every second

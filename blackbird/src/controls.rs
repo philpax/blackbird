@@ -102,6 +102,10 @@ impl Controls {
                         progress: Some(souvlaki::MediaPosition(position)),
                     })
                 }
+                PlaybackToLogicMessage::TrackEnded => {
+                    // PlaybackStateChanged will take care of this
+                    Ok(())
+                }
             };
             if let Err(e) = result {
                 tracing::warn!("Failed to update media controls: {:?}", e);
