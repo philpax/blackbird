@@ -70,6 +70,16 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
                 .fill(config.style.background()),
         )
         .show(ctx, |ui| {
+            ui.input(|i| {
+                if i.pointer.button_clicked(egui::PointerButton::Extra1) {
+                    logic.previous();
+                }
+
+                if i.pointer.button_clicked(egui::PointerButton::Extra2) {
+                    logic.next();
+                }
+            });
+
             playing_track_info(ui, logic, config, has_loaded_all_songs);
             scrub_bar(ui, logic, config);
 
@@ -179,7 +189,7 @@ fn playing_track_info(
                     default_color,
                     active_color,
                 ) {
-                    todo!()
+                    logic.next();
                 }
 
                 // Play/Pause button
@@ -199,7 +209,7 @@ fn playing_track_info(
                     default_color,
                     active_color,
                 ) {
-                    todo!()
+                    logic.previous();
                 }
 
                 // Stop button
