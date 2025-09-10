@@ -90,7 +90,6 @@ impl App {
             Some(cc),
             logic.subscribe_to_playback_events(),
             logic.request_handle(),
-            logic.get_song_map(),
             logic.get_state(),
         )
         .expect("Failed to initialize media controls");

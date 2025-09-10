@@ -153,7 +153,7 @@ fn playing_track_info(
                 } else {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            let song_count = logic.get_song_map().read().unwrap().len();
+                            let song_count = logic.get_state().read().unwrap().song_ids.len();
                             ui.add(
                                 egui::Label::new(format!(
                                     "Nothing playing | {}{} songs",
@@ -366,7 +366,7 @@ fn library(
                                     bytes: bytes.into(),
                                 }),
                                 config.general.album_art_enabled,
-                                logic.get_song_map(),
+                                logic.get_state(),
                                 playing_song_id.as_ref(),
                             )
                         })

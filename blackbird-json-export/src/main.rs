@@ -41,7 +41,7 @@ async fn main() -> anyhow::Result<()> {
                 .songs
                 .iter()
                 .map(|song_id| {
-                    let song = fetched.songs.get(song_id).unwrap();
+                    let song = fetched.song_map.get(song_id).unwrap();
                     OutputSong {
                         title: song.title.clone(),
                         artist: song.artist.clone(),

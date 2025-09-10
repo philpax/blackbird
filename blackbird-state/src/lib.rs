@@ -11,7 +11,7 @@ use std::{collections::HashMap, sync::Arc};
 
 pub use album::{Album, AlbumId};
 pub use group::Group;
-pub use song::{Song, SongId, SongMap};
+pub use song::{Song, SongId};
 
 pub use blackbird_subsonic as bs;
 
@@ -20,7 +20,7 @@ pub struct FetchAllOutput {
     /// The albums that were fetched.
     pub albums: HashMap<AlbumId, Album>,
     /// The songs that were fetched.
-    pub songs: HashMap<SongId, Song>,
+    pub song_map: HashMap<SongId, Song>,
     /// The sorted song IDs.
     pub song_ids: Vec<SongId>,
     /// The groups that were constructed.
@@ -44,7 +44,7 @@ pub async fn fetch_all(
 
     // Fetch all songs.
     let mut offset = 0;
-    let mut songs = SongMap::new();
+    let mut songs = HashMap::new();
     loop {
         let response = client
             .search3(&bs::Search3Request {
@@ -158,7 +158,7 @@ pub async fn fetch_all(
 
     Ok(FetchAllOutput {
         albums,
-        songs,
+        song_map: songs,
         song_ids,
         groups,
     })

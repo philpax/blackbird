@@ -1,7 +1,7 @@
 pub mod util;
 
 pub use blackbird_state;
-use blackbird_state::{SongId, SongMap};
+use blackbird_state::SongId;
 pub use blackbird_subsonic as bs;
 
 use std::{
@@ -34,7 +34,6 @@ pub struct Logic {
     logic_to_playback_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
 
     state: Arc<RwLock<AppState>>,
-    song_map: Arc<RwLock<SongMap>>,
     client: Arc<bs::Client>,
     transcode: bool,
 }
@@ -70,12 +69,10 @@ impl TrackDisplayDetails {
     pub fn from_song_id(
         song_id: &SongId,
         position: Duration,
-        song_map: &Arc<RwLock<SongMap>>,
         state: &Arc<RwLock<AppState>>,
     ) -> Option<TrackDisplayDetails> {
-        let song_map = song_map.read().unwrap();
-        let song = song_map.get(song_id)?;
         let state = state.read().unwrap();
+        let song = state.song_map.get(song_id)?;
         let album = state.albums.get(song.album_id.as_ref()?)?;
         Some(TrackDisplayDetails {
             album_name: album.name.clone(),
@@ -94,8 +91,6 @@ impl Logic {
 
     pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
         let state = Arc::new(RwLock::new(AppState::default()));
-        let song_map = Arc::new(RwLock::new(SongMap::new()));
-
         let client = Arc::new(bs::Client::new(
             base_url,
             username,
@@ -120,7 +115,6 @@ impl Logic {
             logic_to_playback_rx,
 
             state,
-            song_map,
             client,
             transcode,
         };
@@ -135,7 +129,6 @@ impl Logic {
                     let info = TrackDisplayDetails::from_song_id(
                         &track_and_duration.song_id,
                         track_and_duration.position,
-                        &self.song_map,
                         &self.state,
                     );
                     if let Some(info) = info {
@@ -334,7 +327,6 @@ impl Logic {
         TrackDisplayDetails::from_song_id(
             &track_and_position.song_id,
             track_and_position.position,
-            &self.song_map,
             &self.state,
         )
     }
@@ -344,10 +336,6 @@ impl Logic {
     }
     pub fn clear_error(&self) {
         self.write_state().error = None;
-    }
-
-    pub fn get_song_map(&self) -> Arc<RwLock<SongMap>> {
-        self.song_map.clone()
     }
 
     pub fn get_state(&self) -> Arc<RwLock<AppState>> {
@@ -377,7 +365,6 @@ impl Logic {
     fn initial_fetch(&self) {
         let client = self.client.clone();
         let state = self.state.clone();
-        let song_map = self.song_map.clone();
         self.tokio_thread.spawn(async move {
             let future = {
                 let state = state.clone();
@@ -392,14 +379,10 @@ impl Logic {
                     {
                         let mut state = state.write().unwrap();
                         state.albums = result.albums;
-                        state.songs = result.song_ids;
+                        state.song_map = result.song_map;
+                        state.song_ids = result.song_ids;
                         state.groups = result.groups;
                         state.has_loaded_all_songs = true;
-                    }
-
-                    {
-                        let mut song_map = song_map.write().unwrap();
-                        *song_map = result.songs;
                     }
 
                     bs::ClientResult::Ok(())

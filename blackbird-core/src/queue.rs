@@ -194,7 +194,7 @@ impl Logic {
     pub(super) fn compute_next_song_id(&self) -> Option<SongId> {
         let st = self.read_state();
         compute_neighbor(
-            &st.songs,
+            &st.song_ids,
             &st.current_track_and_position.as_ref()?.song_id,
             st.playback_mode,
             st.queue.shuffle_seed,
@@ -205,7 +205,7 @@ impl Logic {
     pub(super) fn compute_previous_song_id(&self) -> Option<SongId> {
         let st = self.read_state();
         compute_neighbor(
-            &st.songs,
+            &st.song_ids,
             &st.current_track_and_position.as_ref()?.song_id,
             st.playback_mode,
             st.queue.shuffle_seed,
@@ -217,7 +217,7 @@ impl Logic {
         let window = {
             let st = self.read_state();
             compute_window(
-                &st.songs,
+                &st.song_ids,
                 center,
                 st.playback_mode,
                 st.queue.shuffle_seed,

@@ -4,14 +4,15 @@ use std::{
     time::Duration,
 };
 
-use blackbird_state::{Album, AlbumId, Group, SongId};
+use blackbird_state::{Album, AlbumId, Group, Song, SongId};
 use serde::{Deserialize, Serialize};
 
 use crate::queue::QueueState;
 
 #[derive(Default)]
 pub struct AppState {
-    pub songs: Vec<SongId>,
+    pub song_ids: Vec<SongId>,
+    pub song_map: HashMap<SongId, Song>,
     pub groups: Vec<Arc<Group>>,
     pub albums: HashMap<AlbumId, Album>,
     pub cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,

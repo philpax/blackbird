@@ -1,8 +1,8 @@
 use std::sync::{Arc, RwLock};
 
 use blackbird_core::{
-    blackbird_state::SongMap, AppState, LogicRequestHandle, LogicRequestMessage, PlaybackState,
-    PlaybackToLogicMessage, PlaybackToLogicRx, TrackDisplayDetails,
+    AppState, LogicRequestHandle, LogicRequestMessage, PlaybackState, PlaybackToLogicMessage,
+    PlaybackToLogicRx, TrackDisplayDetails,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use souvlaki::{
@@ -12,7 +12,6 @@ use souvlaki::{
 pub struct Controls {
     controls: MediaControls,
     playback_to_logic_rx: PlaybackToLogicRx,
-    song_map: Arc<RwLock<SongMap>>,
     state: Arc<RwLock<AppState>>,
 }
 impl Controls {
@@ -20,7 +19,6 @@ impl Controls {
         window_handle: Option<&dyn HasWindowHandle>,
         playback_to_logic_rx: PlaybackToLogicRx,
         logic_request: LogicRequestHandle,
-        song_map: Arc<RwLock<SongMap>>,
         state: Arc<RwLock<AppState>>,
     ) -> Result<Self, souvlaki::Error> {
         let mut controls = MediaControls::new(PlatformConfig {
@@ -77,7 +75,6 @@ impl Controls {
         Ok(Self {
             controls,
             playback_to_logic_rx,
-            song_map,
             state,
         })
     }
@@ -89,7 +86,6 @@ impl Controls {
                     let display_details = TrackDisplayDetails::from_song_id(
                         &track_and_position.song_id,
                         track_and_position.position,
-                        &self.song_map,
                         &self.state,
                     );
                     if let Some(display_details) = display_details {

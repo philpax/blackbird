@@ -3,9 +3,11 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use blackbird_core::AppState;
+
 use crate::{
     bc::{
-        blackbird_state::{Group, SongId, SongMap},
+        blackbird_state::{Group, SongId},
         util,
     },
     ui::{song, style, util as ui_util},
@@ -23,7 +25,7 @@ pub fn ui<'a>(
     row_range: Range<usize>,
     album_art: Option<egui::ImageSource>,
     album_art_enabled: bool,
-    song_map: Arc<RwLock<SongMap>>,
+    state: Arc<RwLock<AppState>>,
     playing_song: Option<&SongId>,
 ) -> GroupResponse<'a> {
     let mut clicked_song = None;
@@ -122,7 +124,7 @@ pub fn ui<'a>(
                     return;
                 }
 
-                let song_map = song_map.read().unwrap();
+                let song_map = &state.read().unwrap().song_map;
 
                 // Do a pre-pass to calculate the maximum track length width for visible songs
                 let max_track_length_width = songs[start..end]

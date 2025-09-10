@@ -1,9 +1,4 @@
-use std::collections::HashMap;
-
 use crate::{AlbumId, bs};
-
-/// A map of song IDs to songs
-pub type SongMap = HashMap<SongId, Song>;
 
 /// A song ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
