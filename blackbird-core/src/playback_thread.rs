@@ -98,7 +98,6 @@ impl PlaybackThread {
 
         const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
 
-        let mut last_data = None;
         let mut last_seek_time = std::time::Instant::now();
         let mut last_position_update = std::time::Instant::now();
 
@@ -117,33 +116,25 @@ impl PlaybackThread {
             while let Ok(msg) = playback_rx.try_recv() {
                 match msg {
                     LTPM::PlaySong(data, playing_info) => {
-                        sink.clear();
-                        last_data = Some(data.clone());
+                        let need_to_skip = !sink.empty();
                         sink.append(build_decoder(data));
+                        if need_to_skip {
+                            sink.skip_one();
+                        }
                         sink.play();
                         let _ = logic_tx.send(PTLM::TrackStarted(playing_info));
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::TogglePlayback => {
-                        if !sink.is_paused() {
+                        if sink.is_paused() {
+                            sink.play();
+                            update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
+                        } else {
                             sink.pause();
                             update_and_send_state(&logic_tx, &mut state, PlaybackState::Paused);
-                            continue;
                         }
-                        if sink.empty()
-                            && let Some(data) = last_data.clone()
-                        {
-                            sink.append(build_decoder(data));
-                        }
-                        sink.play();
-                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::Play => {
-                        if sink.empty()
-                            && let Some(data) = last_data.clone()
-                        {
-                            sink.append(build_decoder(data));
-                        }
                         sink.play();
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
@@ -152,8 +143,15 @@ impl PlaybackThread {
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Paused);
                     }
                     LTPM::StopPlayback => {
-                        sink.clear();
+                        sink.pause();
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
+
+                        let position = Duration::ZERO;
+                        if let Err(e) = sink.try_seek(position) {
+                            tracing::warn!("Failed to seek to position {position:?}: {e}");
+                        } else {
+                            let _ = logic_tx.send(PTLM::PositionChanged(position));
+                        }
                     }
                     LTPM::Seek(position) => {
                         let now = std::time::Instant::now();
