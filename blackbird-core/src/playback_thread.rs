@@ -1,11 +1,15 @@
 use std::time::Duration;
 
+use blackbird_state::SongId;
+
+use crate::app_state::TrackAndPosition;
+
 pub struct PlaybackThread {
     logic_to_playback_tx: PlaybackThreadSendHandle,
     _playback_thread_handle: std::thread::JoinHandle<()>,
     playback_to_logic_rx: PlaybackToLogicRx,
 }
-pub type PlaybackToLogicRx = tokio::sync::broadcast::Receiver<PlaybackToLogicMessage>;
+
 #[derive(Clone)]
 pub struct PlaybackThreadSendHandle(std::sync::mpsc::Sender<LogicToPlaybackMessage>);
 impl PlaybackThreadSendHandle {
@@ -14,15 +18,8 @@ impl PlaybackThreadSendHandle {
     }
 }
 #[derive(Debug, Clone)]
-pub enum PlaybackToLogicMessage {
-    TrackStarted(PlayingInfo),
-    PlaybackStateChanged(PlaybackState),
-    PositionChanged(Duration),
-    TrackEnded,
-}
-#[derive(Debug, Clone)]
 pub enum LogicToPlaybackMessage {
-    PlaySong(Vec<u8>, PlayingInfo),
+    PlaySong(SongId, Vec<u8>),
     TogglePlayback,
     Play,
     Pause,
@@ -30,21 +27,20 @@ pub enum LogicToPlaybackMessage {
     Seek(Duration),
 }
 
+pub type PlaybackToLogicRx = tokio::sync::broadcast::Receiver<PlaybackToLogicMessage>;
+#[derive(Debug, Clone)]
+pub enum PlaybackToLogicMessage {
+    TrackStarted(TrackAndPosition),
+    PlaybackStateChanged(PlaybackState),
+    PositionChanged(TrackAndPosition),
+    TrackEnded,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaybackState {
     Playing,
     Paused,
     Stopped,
-}
-
-#[derive(Debug, Clone)]
-pub struct PlayingInfo {
-    pub album_name: String,
-    pub album_artist: String,
-    pub song_title: String,
-    pub song_artist: Option<String>,
-    pub song_duration: Duration,
-    pub song_position: Duration,
 }
 
 impl PlaybackThread {
@@ -88,16 +84,9 @@ impl PlaybackThread {
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(1.0);
 
-        fn build_decoder(data: Vec<u8>) -> rodio::decoder::Decoder<std::io::Cursor<Vec<u8>>> {
-            rodio::decoder::DecoderBuilder::new()
-                .with_byte_len(data.len() as u64)
-                .with_data(std::io::Cursor::new(data))
-                .build()
-                .unwrap()
-        }
-
         const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
 
+        let mut last_song_id = None;
         let mut last_seek_time = std::time::Instant::now();
         let mut last_position_update = std::time::Instant::now();
 
@@ -115,14 +104,32 @@ impl PlaybackThread {
             // Process all available messages without blocking
             while let Ok(msg) = playback_rx.try_recv() {
                 match msg {
-                    LTPM::PlaySong(data, playing_info) => {
+                    LTPM::PlaySong(song_id, data) => {
                         let need_to_skip = !sink.empty();
-                        sink.append(build_decoder(data));
+
+                        let decoder = rodio::decoder::DecoderBuilder::new()
+                            .with_byte_len(data.len() as u64)
+                            .with_data(std::io::Cursor::new(data))
+                            .build();
+
+                        let decoder = match decoder {
+                            Ok(decoder) => decoder,
+                            Err(err) => {
+                                // TODO: Auto-skip instead
+                                panic!("Failed to create decoder: {err}");
+                            }
+                        };
+
+                        sink.append(decoder);
                         if need_to_skip {
                             sink.skip_one();
                         }
                         sink.play();
-                        let _ = logic_tx.send(PTLM::TrackStarted(playing_info));
+                        last_song_id = Some(song_id.clone());
+                        let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
+                            song_id,
+                            position: Duration::from_secs(0),
+                        }));
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
                     }
                     LTPM::TogglePlayback => {
@@ -150,7 +157,10 @@ impl PlaybackThread {
                         if let Err(e) = sink.try_seek(position) {
                             tracing::warn!("Failed to seek to position {position:?}: {e}");
                         } else {
-                            let _ = logic_tx.send(PTLM::PositionChanged(position));
+                            let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                                song_id: last_song_id.clone().unwrap(),
+                                position,
+                            }));
                         }
                     }
                     LTPM::Seek(position) => {
@@ -160,7 +170,10 @@ impl PlaybackThread {
                             if let Err(e) = sink.try_seek(position) {
                                 tracing::warn!("Failed to seek to position {position:?}: {e}");
                             }
-                            let _ = logic_tx.send(PTLM::PositionChanged(position));
+                            let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                                song_id: last_song_id.clone().unwrap(),
+                                position,
+                            }));
                         }
                     }
                 }
@@ -178,7 +191,10 @@ impl PlaybackThread {
             if now.duration_since(last_position_update) >= Duration::from_millis(250) {
                 last_position_update = now;
                 if !sink.empty() && !sink.is_paused() {
-                    let _ = logic_tx.send(PTLM::PositionChanged(current_position));
+                    let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                        song_id: last_song_id.clone().unwrap(),
+                        position: current_position,
+                    }));
                 }
             }
 

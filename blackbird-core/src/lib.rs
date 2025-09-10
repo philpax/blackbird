@@ -1,25 +1,28 @@
 pub mod util;
 
-pub use blackbird_state as state;
+pub use blackbird_state;
+use blackbird_state::{SongId, SongMap};
 pub use blackbird_subsonic as bs;
 
 use std::{
-    collections::{HashMap, HashSet},
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
     time::Duration,
 };
-
-use state::{Album, AlbumId, Group, SongId, SongMap};
 
 mod render;
 pub use render::VisibleGroupSet;
 
 mod playback_thread;
 use playback_thread::{LogicToPlaybackMessage, PlaybackThread};
-pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogicRx, PlayingInfo};
+pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogicRx};
 
 mod tokio_thread;
 use tokio_thread::TokioThread;
+
+mod queue;
+
+mod app_state;
+pub use app_state::{AppState, PlaybackMode};
 
 pub struct Logic {
     tokio_thread: TokioThread,
@@ -34,12 +37,6 @@ pub struct Logic {
     song_map: Arc<RwLock<SongMap>>,
     client: Arc<bs::Client>,
     transcode: bool,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PlaybackMode {
-    Sequential,
-    Shuffle,
-    RepeatOne,
 }
 #[derive(Debug, Clone)]
 pub enum LogicRequestMessage {
@@ -59,23 +56,44 @@ impl LogicRequestHandle {
         self.0.send(message).unwrap();
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct TrackDisplayDetails {
+    pub album_name: String,
+    pub album_artist: String,
+    pub song_title: String,
+    pub song_artist: Option<String>,
+    pub song_duration: Duration,
+    pub song_position: Duration,
+}
+impl TrackDisplayDetails {
+    pub fn from_song_id(
+        song_id: &SongId,
+        position: Duration,
+        song_map: &Arc<RwLock<SongMap>>,
+        state: &Arc<RwLock<AppState>>,
+    ) -> Option<TrackDisplayDetails> {
+        let song_map = song_map.read().unwrap();
+        let song = song_map.get(song_id)?;
+        let state = state.read().unwrap();
+        let album = state.albums.get(song.album_id.as_ref()?)?;
+        Some(TrackDisplayDetails {
+            album_name: album.name.clone(),
+            album_artist: album.artist.clone(),
+            song_title: song.title.clone(),
+            song_artist: song.artist.clone(),
+            song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
+            song_position: position,
+        })
+    }
+}
+
 impl Logic {
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
     pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
-        let state = Arc::new(RwLock::new(AppState {
-            songs: vec![],
-            groups: vec![],
-            albums: HashMap::new(),
-            cover_art_cache: HashMap::new(),
-            pending_cover_art_requests: HashSet::new(),
-            has_loaded_all_songs: false,
-            error: None,
-            playing_song: None,
-            next_song: None,
-            playback_mode: PlaybackMode::Sequential,
-        }));
+        let state = Arc::new(RwLock::new(AppState::default()));
         let song_map = Arc::new(RwLock::new(SongMap::new()));
 
         let client = Arc::new(bs::Client::new(
@@ -112,11 +130,46 @@ impl Logic {
 
     pub fn update(&mut self) {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
-            if let PlaybackToLogicMessage::PositionChanged(position) = event
-                && let Some(playing_song) = &mut self.write_state().playing_song
-            {
-                playing_song.position = position;
+            match event {
+                PlaybackToLogicMessage::TrackStarted(track_and_duration) => {
+                    let info = TrackDisplayDetails::from_song_id(
+                        &track_and_duration.song_id,
+                        track_and_duration.position,
+                        &self.song_map,
+                        &self.state,
+                    );
+                    if let Some(info) = info {
+                        tracing::debug!(
+                            "TrackStarted: {} - {}",
+                            info.album_artist,
+                            info.song_title
+                        );
+                    } else {
+                        tracing::warn!("TrackStarted: no info for {}", track_and_duration.song_id);
+                    }
+
+                    self.ensure_cache_window(&track_and_duration.song_id);
+
+                    let mut st = self.write_state();
+                    st.current_track_and_position = Some(track_and_duration);
+                    st.is_loading_track = false;
+                }
+                PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
+                    self.write_state().current_track_and_position = Some(track_and_duration);
+                }
+                PlaybackToLogicMessage::TrackEnded => {
+                    tracing::debug!("TrackEnded: scheduling advance to next track");
+                    self.handle_track_end_advance();
+                }
+                PlaybackToLogicMessage::PlaybackStateChanged(_s) => {}
             }
+        }
+
+        // Handle deferred auto-skip after load error
+        let should_skip = self.read_state().queue.pending_skip_after_error;
+        if should_skip {
+            self.schedule_next_song();
+            self.write_state().queue.pending_skip_after_error = false;
         }
 
         while let Ok(event) = self.logic_to_playback_rx.try_recv() {
@@ -138,8 +191,14 @@ impl Logic {
                         current_position.saturating_sub(duration)
                     });
                 }
-                LogicRequestMessage::Next => self.next(),
-                LogicRequestMessage::Previous => self.previous(),
+                LogicRequestMessage::Next => {
+                    tracing::debug!("User requested Next");
+                    self.next()
+                }
+                LogicRequestMessage::Previous => {
+                    tracing::debug!("User requested Previous");
+                    self.previous()
+                }
             }
         }
     }
@@ -169,11 +228,17 @@ impl Logic {
     }
 
     pub fn next(&self) {
-        todo!()
+        let next_id = self.compute_next_song_id();
+        if let Some(id) = next_id {
+            self.schedule_play_song(&id);
+        }
     }
 
     pub fn previous(&self) {
-        todo!()
+        let prev_id = self.compute_previous_song_id();
+        if let Some(id) = prev_id {
+            self.schedule_play_song(&id);
+        }
     }
 }
 impl Logic {
@@ -247,38 +312,29 @@ impl Logic {
 impl Logic {
     pub fn get_playing_song_id(&self) -> Option<SongId> {
         self.read_state()
-            .playing_song
+            .current_track_and_position
             .as_ref()
             .map(|playing_song| playing_song.song_id.clone())
     }
 
     pub fn is_song_loaded(&self) -> bool {
-        self.read_state().playing_song.is_some()
+        self.read_state().current_track_and_position.is_some()
     }
     pub fn is_song_loading(&self) -> bool {
-        self.read_state().next_song.is_some()
+        self.read_state().is_loading_track
     }
     pub fn has_loaded_all_songs(&self) -> bool {
         self.read_state().has_loaded_all_songs
     }
 
-    pub fn get_playing_info(&self) -> Option<PlayingInfo> {
-        let song_map = self.song_map.read().unwrap();
-        let state = self.read_state();
-
-        let playing_song = state.playing_song.as_ref()?;
-        let song = song_map.get(&playing_song.song_id)?;
-        let song_position = playing_song.position;
-        let album = state.albums.get(song.album_id.as_ref()?)?;
-
-        Some(PlayingInfo {
-            album_name: album.name.clone(),
-            album_artist: album.artist.clone(),
-            song_title: song.title.clone(),
-            song_artist: song.artist.clone(),
-            song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
-            song_position,
-        })
+    pub fn get_playing_info(&self) -> Option<TrackDisplayDetails> {
+        let track_and_position = self.read_state().current_track_and_position.clone()?;
+        TrackDisplayDetails::from_song_id(
+            &track_and_position.song_id,
+            track_and_position.position,
+            &self.song_map,
+            &self.state,
+        )
     }
 
     pub fn get_error(&self) -> Option<String> {
@@ -288,12 +344,21 @@ impl Logic {
         self.write_state().error = None;
     }
 
-    pub fn get_song_map(&'_ self) -> RwLockReadGuard<'_, SongMap> {
-        self.song_map.read().unwrap()
+    pub fn get_song_map(&self) -> Arc<RwLock<SongMap>> {
+        self.song_map.clone()
+    }
+
+    pub fn get_state(&self) -> Arc<RwLock<AppState>> {
+        self.state.clone()
     }
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
+        tracing::debug!("Playback mode set to {mode:?}");
         self.write_state().playback_mode = mode;
+        // Rebase queue around current song and refresh cache window
+        if let Some(song_id) = self.get_playing_song_id() {
+            self.ensure_cache_window(&song_id);
+        }
     }
 
     pub fn get_playback_mode(&self) -> PlaybackMode {
@@ -302,42 +367,8 @@ impl Logic {
 }
 impl Logic {
     pub fn request_play_song(&self, song_id: &SongId) {
-        let client = self.client.clone();
-        let state = self.state.clone();
-        let song_id = song_id.clone();
-        let playback_tx = self.playback_thread.send_handle();
-        let transcode = self.transcode;
-        let song_map = self.song_map.clone();
-
-        state.write().unwrap().next_song = Some(song_id.clone());
-
-        self.tokio_thread.spawn(async move {
-            let response = client
-                .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
-                .await;
-
-            match response {
-                Ok(data) => {
-                    playback_tx.send(LogicToPlaybackMessage::StopPlayback);
-
-                    let playing_info = create_playing_info_for_song(&song_id, &song_map, &state)
-                        .unwrap_or_else(|| {
-                            panic!("Failed to create playing info for song {song_id}")
-                        });
-
-                    playback_tx.send(LogicToPlaybackMessage::PlaySong(data, playing_info));
-                    state.write().unwrap().playing_song = Some(PlayingSong {
-                        song_id,
-                        position: Duration::from_secs(0),
-                    });
-                }
-                Err(e) => {
-                    let mut state = state.write().unwrap();
-                    state.error = Some(e.to_string());
-                }
-            }
-            state.write().unwrap().next_song = None;
-        });
+        // Public API used by UI: keep current playing until new song is ready
+        self.schedule_play_song(song_id);
     }
 }
 impl Logic {
@@ -351,7 +382,7 @@ impl Logic {
                 async move {
                     client.ping().await?;
 
-                    let result = state::fetch_all(&client, |batch_count, total_count| {
+                    let result = blackbird_state::fetch_all(&client, |batch_count, total_count| {
                         tracing::info!("Fetched {batch_count} songs, total {total_count} songs");
                     })
                     .await?;
@@ -386,44 +417,4 @@ impl Logic {
     fn read_state(&'_ self) -> RwLockReadGuard<'_, AppState> {
         self.state.read().unwrap()
     }
-}
-
-fn create_playing_info_for_song(
-    song_id: &SongId,
-    song_map: &Arc<RwLock<SongMap>>,
-    state: &Arc<RwLock<AppState>>,
-) -> Option<PlayingInfo> {
-    let song_map = song_map.read().unwrap();
-    let song = song_map.get(song_id)?;
-    let state = state.read().unwrap();
-    let album = state.albums.get(song.album_id.as_ref()?)?;
-    Some(PlayingInfo {
-        album_name: album.name.clone(),
-        album_artist: album.artist.clone(),
-        song_title: song.title.clone(),
-        song_artist: song.artist.clone(),
-        song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
-        song_position: Duration::from_secs(0),
-    })
-}
-
-struct AppState {
-    songs: Vec<SongId>,
-    groups: Vec<Arc<Group>>,
-    albums: HashMap<AlbumId, Album>,
-    cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
-    pending_cover_art_requests: HashSet<String>,
-    has_loaded_all_songs: bool,
-
-    playing_song: Option<PlayingSong>,
-    next_song: Option<SongId>,
-    playback_mode: PlaybackMode,
-
-    error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct PlayingSong {
-    song_id: SongId,
-    position: Duration,
 }

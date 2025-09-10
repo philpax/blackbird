@@ -1,8 +1,11 @@
-use std::ops::Range;
+use std::{
+    ops::Range,
+    sync::{Arc, RwLock},
+};
 
 use crate::{
     bc::{
-        state::{Group, SongId, SongMap},
+        blackbird_state::{Group, SongId, SongMap},
         util,
     },
     ui::{song, style, util as ui_util},
@@ -20,7 +23,7 @@ pub fn ui<'a>(
     row_range: Range<usize>,
     album_art: Option<egui::ImageSource>,
     album_art_enabled: bool,
-    song_map: &SongMap,
+    song_map: Arc<RwLock<SongMap>>,
     playing_song: Option<&SongId>,
 ) -> GroupResponse<'a> {
     let mut clicked_song = None;
@@ -115,56 +118,60 @@ pub fn ui<'a>(
                 let end = song_end.min(songs.len());
                 let start = song_start.min(songs.len());
 
-                if start < end {
-                    // Do a pre-pass to calculate the maximum track length width for visible songs
-                    let max_track_length_width = songs[start..end]
-                        .iter()
-                        .filter_map(|song_id| song_map.get(song_id))
-                        .map(|song| song::track_length_str_width(song, ui))
-                        .fold(0.0, f32::max);
+                if start >= end {
+                    return;
+                }
 
-                    // Use shared spacing calculation
-                    let total_spacing = ui_util::track_spacing(ui);
-                    let spaced_row_height = song_row_height + total_spacing;
+                let song_map = song_map.read().unwrap();
 
-                    // Set up the total height for all songs in this range (with spacing)
-                    let total_height = (end - start) as f32 * spaced_row_height;
-                    ui.allocate_space(egui::vec2(ui.available_width(), total_height));
+                // Do a pre-pass to calculate the maximum track length width for visible songs
+                let max_track_length_width = songs[start..end]
+                    .iter()
+                    .filter_map(|song_id| song_map.get(song_id))
+                    .map(|song| song::track_length_str_width(song, ui))
+                    .fold(0.0, f32::max);
 
-                    // Render only the visible songs using direct positioning
-                    for (song_index, song_id) in songs[start..end].iter().enumerate() {
-                        let y_offset = song_index as f32 * spaced_row_height;
-                        let song_y = ui.min_rect().top() + y_offset;
+                // Use shared spacing calculation
+                let total_spacing = ui_util::track_spacing(ui);
+                let spaced_row_height = song_row_height + total_spacing;
 
-                        let Some(song) = song_map.get(song_id) else {
-                            // Draw loading text directly with painter
-                            ui.painter().text(
-                                egui::pos2(ui.min_rect().left(), song_y + total_spacing / 2.0),
-                                egui::Align2::LEFT_TOP,
-                                "[loading...]",
-                                egui::TextStyle::Body.resolve(ui.style()),
-                                ui.visuals().text_color(),
-                            );
-                            continue;
-                        };
+                // Set up the total height for all songs in this range (with spacing)
+                let total_height = (end - start) as f32 * spaced_row_height;
+                ui.allocate_space(egui::vec2(ui.available_width(), total_height));
 
-                        // Use the ui function from song.rs
-                        let r = song::ui(
-                            song,
-                            ui,
-                            style,
-                            &group.artist,
-                            song::SongParams {
-                                max_track_length_width,
-                                playing: playing_song == Some(&song.id),
-                                song_y,
-                                song_row_height,
-                            },
+                // Render only the visible songs using direct positioning
+                for (song_index, song_id) in songs[start..end].iter().enumerate() {
+                    let y_offset = song_index as f32 * spaced_row_height;
+                    let song_y = ui.min_rect().top() + y_offset;
+
+                    let Some(song) = song_map.get(song_id) else {
+                        // Draw loading text directly with painter
+                        ui.painter().text(
+                            egui::pos2(ui.min_rect().left(), song_y + total_spacing / 2.0),
+                            egui::Align2::LEFT_TOP,
+                            "[loading...]",
+                            egui::TextStyle::Body.resolve(ui.style()),
+                            ui.visuals().text_color(),
                         );
+                        continue;
+                    };
 
-                        if r.clicked {
-                            clicked_song = Some(song_id);
-                        }
+                    // Use the ui function from song.rs
+                    let r = song::ui(
+                        song,
+                        ui,
+                        style,
+                        &group.artist,
+                        song::SongParams {
+                            max_track_length_width,
+                            playing: playing_song == Some(&song.id),
+                            song_y,
+                            song_row_height,
+                        },
+                    );
+
+                    if r.clicked {
+                        clicked_song = Some(song_id);
                     }
                 }
             });

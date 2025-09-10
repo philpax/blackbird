@@ -1,6 +1,8 @@
+use std::sync::{Arc, RwLock};
+
 use blackbird_core::{
-    LogicRequestHandle, LogicRequestMessage, PlaybackState, PlaybackToLogicMessage,
-    PlaybackToLogicRx,
+    blackbird_state::SongMap, AppState, LogicRequestHandle, LogicRequestMessage, PlaybackState,
+    PlaybackToLogicMessage, PlaybackToLogicRx, TrackDisplayDetails,
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use souvlaki::{
@@ -10,12 +12,16 @@ use souvlaki::{
 pub struct Controls {
     controls: MediaControls,
     playback_to_logic_rx: PlaybackToLogicRx,
+    song_map: Arc<RwLock<SongMap>>,
+    state: Arc<RwLock<AppState>>,
 }
 impl Controls {
     pub fn new(
         window_handle: Option<&dyn HasWindowHandle>,
         playback_to_logic_rx: PlaybackToLogicRx,
         logic_request: LogicRequestHandle,
+        song_map: Arc<RwLock<SongMap>>,
+        state: Arc<RwLock<AppState>>,
     ) -> Result<Self, souvlaki::Error> {
         let mut controls = MediaControls::new(PlatformConfig {
             dbus_name: "blackbird",
@@ -71,20 +77,32 @@ impl Controls {
         Ok(Self {
             controls,
             playback_to_logic_rx,
+            song_map,
+            state,
         })
     }
 
     pub fn update(&mut self) {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             let result = match event {
-                PlaybackToLogicMessage::TrackStarted(playing_info) => {
-                    self.controls.set_metadata(MediaMetadata {
-                        title: Some(&playing_info.song_title),
-                        artist: Some(&playing_info.album_artist),
-                        album: Some(&playing_info.album_name),
-                        duration: Some(playing_info.song_duration),
-                        ..Default::default()
-                    })
+                PlaybackToLogicMessage::TrackStarted(track_and_position) => {
+                    let display_details = TrackDisplayDetails::from_song_id(
+                        &track_and_position.song_id,
+                        track_and_position.position,
+                        &self.song_map,
+                        &self.state,
+                    );
+                    if let Some(display_details) = display_details {
+                        self.controls.set_metadata(MediaMetadata {
+                            title: Some(&display_details.song_title),
+                            artist: Some(&display_details.album_artist),
+                            album: Some(&display_details.album_name),
+                            duration: Some(display_details.song_duration),
+                            ..Default::default()
+                        })
+                    } else {
+                        Ok(())
+                    }
                 }
                 PlaybackToLogicMessage::PlaybackStateChanged(state) => {
                     let playback_status = match state {
@@ -97,9 +115,9 @@ impl Controls {
                     };
                     self.controls.set_playback(playback_status)
                 }
-                PlaybackToLogicMessage::PositionChanged(position) => {
+                PlaybackToLogicMessage::PositionChanged(track_and_position) => {
                     self.controls.set_playback(MediaPlayback::Playing {
-                        progress: Some(souvlaki::MediaPosition(position)),
+                        progress: Some(souvlaki::MediaPosition(track_and_position.position)),
                     })
                 }
                 PlaybackToLogicMessage::TrackEnded => {
