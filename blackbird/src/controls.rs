@@ -83,17 +83,17 @@ impl Controls {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             let result = match event {
                 PlaybackToLogicMessage::TrackStarted(track_and_position) => {
-                    let display_details = TrackDisplayDetails::from_song_id(
-                        &track_and_position.song_id,
+                    let display_details = TrackDisplayDetails::from_track_id(
+                        &track_and_position.track_id,
                         track_and_position.position,
                         &self.state,
                     );
                     if let Some(display_details) = display_details {
                         self.controls.set_metadata(MediaMetadata {
-                            title: Some(&display_details.song_title),
+                            title: Some(&display_details.track_title),
                             artist: Some(&display_details.album_artist),
                             album: Some(&display_details.album_name),
-                            duration: Some(display_details.song_duration),
+                            duration: Some(display_details.track_duration),
                             ..Default::default()
                         })
                     } else {

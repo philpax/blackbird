@@ -20,8 +20,8 @@ pub struct Album {
     pub artist: String,
     /// The album cover art ID
     pub cover_art_id: Option<String>,
-    /// The number of songs in the album
-    pub song_count: u32,
+    /// The number of tracks in the album
+    pub track_count: u32,
     /// The total duration of the album in seconds
     pub duration: u32,
     /// The release year of the album
@@ -36,7 +36,7 @@ impl From<bs::AlbumID3> for Album {
             name: album.name,
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
             cover_art_id: album.cover_art,
-            song_count: album.song_count,
+            track_count: album.song_count,
             duration: album.duration,
             year: album.year,
             _genre: album.genre,
@@ -70,7 +70,7 @@ impl Ord for Album {
     }
 }
 impl Album {
-    /// Returns all albums; does not include songs.
+    /// Returns all albums; does not include tracks.
     pub async fn fetch_all(client: &bs::Client) -> bs::ClientResult<Vec<Album>> {
         let mut all_albums = vec![];
         let mut offset = 0;

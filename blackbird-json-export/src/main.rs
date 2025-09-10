@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context as _;
 
-use blackbird_json_export_types::{Output, OutputGroup, OutputSong};
+use blackbird_json_export_types::{Output, OutputGroup, OutputTrack};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -37,18 +37,18 @@ async fn main() -> anyhow::Result<()> {
             album: group.album.clone(),
             year: group.year,
             duration: group.duration,
-            songs: group
-                .songs
+            tracks: group
+                .tracks
                 .iter()
-                .map(|song_id| {
-                    let song = fetched.song_map.get(song_id).unwrap();
-                    OutputSong {
-                        title: song.title.clone(),
-                        artist: song.artist.clone(),
-                        track: song.track,
-                        year: song.year,
-                        duration: song.duration,
-                        disc_number: song.disc_number,
+                .map(|id| {
+                    let track = fetched.track_map.get(id).unwrap();
+                    OutputTrack {
+                        title: track.title.clone(),
+                        artist: track.artist.clone(),
+                        track: track.track,
+                        year: track.year,
+                        duration: track.duration,
+                        disc_number: track.disc_number,
                     }
                 })
                 .collect(),

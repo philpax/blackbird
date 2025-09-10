@@ -1,22 +1,22 @@
 use crate::{AlbumId, bs};
 
-/// A song ID
+/// A track ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct SongId(pub String);
-impl std::fmt::Display for SongId {
+pub struct TrackId(pub String);
+impl std::fmt::Display for TrackId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-/// A song, as `blackbird` cares about it
+/// A track, as `blackbird` cares about it
 #[derive(Debug, Clone)]
-pub struct Song {
-    /// The song ID
-    pub id: SongId,
-    /// The song title
+pub struct Track {
+    /// The track ID
+    pub id: TrackId,
+    /// The track title
     pub title: String,
-    /// The song artist
+    /// The track artist
     pub artist: Option<String>,
     /// The track number
     pub track: Option<u32>,
@@ -31,10 +31,10 @@ pub struct Song {
     /// The album ID
     pub album_id: Option<AlbumId>,
 }
-impl From<bs::Child> for Song {
+impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
-        Song {
-            id: SongId(child.id),
+        Track {
+            id: TrackId(child.id),
             title: child.title,
             artist: child.artist.filter(|a| a != "[Unknown Artist]"),
             track: child.track,
@@ -46,18 +46,18 @@ impl From<bs::Child> for Song {
         }
     }
 }
-impl PartialEq for Song {
+impl PartialEq for Track {
     fn eq(&self, other: &Self) -> bool {
         (self.year, self.disc_number, self.track) == (other.year, other.disc_number, other.track)
     }
 }
-impl Eq for Song {}
-impl PartialOrd for Song {
+impl Eq for Track {}
+impl PartialOrd for Track {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
-impl Ord for Song {
+impl Ord for Track {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.year, self.disc_number, self.track).cmp(&(other.year, other.disc_number, other.track))
     }

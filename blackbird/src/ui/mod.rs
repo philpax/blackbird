@@ -2,8 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod group;
-mod song;
 mod style;
+mod track;
 mod util;
 
 use blackbird_core::util::seconds_to_hms_string;
@@ -57,7 +57,7 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
 
     let margin = 8;
     let scroll_margin = 4;
-    let has_loaded_all_songs = logic.has_loaded_all_songs();
+    let has_loaded_all_tracks = logic.has_loaded_all_tracks();
     egui::CentralPanel::default()
         .frame(
             egui::Frame::default()
@@ -80,7 +80,7 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
                 }
             });
 
-            playing_track_info(ui, logic, config, has_loaded_all_songs);
+            playing_track_info(ui, logic, config, has_loaded_all_tracks);
             scrub_bar(ui, logic, config);
 
             ui.separator();
@@ -89,7 +89,7 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
                 ui,
                 logic,
                 config,
-                has_loaded_all_songs,
+                has_loaded_all_tracks,
                 scroll_margin.into(),
             );
         });
@@ -99,7 +99,7 @@ fn playing_track_info(
     ui: &mut egui::Ui,
     logic: &mut bc::Logic,
     config: &Config,
-    has_loaded_all_songs: bool,
+    has_loaded_all_tracks: bool,
 ) {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -114,7 +114,7 @@ fn playing_track_info(
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
                             if let Some(artist) =
-                                pi.song_artist.as_ref().filter(|a| **a != pi.album_artist)
+                                pi.track_artist.as_ref().filter(|a| **a != pi.album_artist)
                             {
                                 ui.add(
                                     egui::Label::new(
@@ -127,7 +127,7 @@ fn playing_track_info(
                             }
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&pi.song_title)
+                                    egui::RichText::new(&pi.track_title)
                                         .color(config.style.track_name_playing()),
                                 )
                                 .selectable(false),
@@ -153,29 +153,31 @@ fn playing_track_info(
                 } else {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            let song_count = logic.get_state().read().unwrap().song_ids.len();
+                            let track_count = logic.get_state().read().unwrap().track_ids.len();
                             ui.add(
                                 egui::Label::new(format!(
-                                    "Nothing playing | {}{} songs",
-                                    if has_loaded_all_songs {
+                                    "Nothing playing | {}{} tracks",
+                                    if has_loaded_all_tracks {
                                         ""
                                     } else {
-                                        "Loading songs... | "
+                                        "Loading tracks... | "
                                     },
-                                    song_count,
+                                    track_count,
                                 ))
                                 .selectable(false),
                             );
                         });
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new("Click a song to play it!").selectable(false));
+                            ui.add(
+                                egui::Label::new("Click on a track to play it!").selectable(false),
+                            );
                         });
                     });
                 }
             });
         });
 
-        if logic.is_song_loaded() {
+        if logic.is_track_loaded() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.style_mut().visuals.override_text_color = None;
 
@@ -220,8 +222,8 @@ fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
             .get_playing_info()
             .map(|pi| {
                 (
-                    pi.song_position.as_secs_f32(),
-                    pi.song_duration.as_secs_f32(),
+                    pi.track_position.as_secs_f32(),
+                    pi.track_duration.as_secs_f32(),
                 )
             })
             .unwrap_or_default();
@@ -262,11 +264,11 @@ fn library(
     ui: &mut egui::Ui,
     logic: &mut bc::Logic,
     config: &Config,
-    has_loaded_all_songs: bool,
+    has_loaded_all_tracks: bool,
     scroll_margin: f32,
 ) {
     ui.scope(|ui| {
-        if !has_loaded_all_songs {
+        if !has_loaded_all_tracks {
             ui.add_sized(ui.available_size(), egui::Spinner::new());
             return;
         }
@@ -314,7 +316,7 @@ fn library(
                     group::line_count,
                 );
 
-                let playing_song_id = logic.get_playing_song_id();
+                let playing_track_id = logic.get_playing_track_id();
                 let mut current_row = visible_groups.start_row;
 
                 for group in visible_groups.groups {
@@ -367,14 +369,14 @@ fn library(
                                 }),
                                 config.general.album_art_enabled,
                                 logic.get_state(),
-                                playing_song_id.as_ref(),
+                                playing_track_id.as_ref(),
                             )
                         })
                         .inner;
 
-                    // Handle song selection
-                    if let Some(song_id) = group_response.clicked_song {
-                        logic.request_play_song(song_id);
+                    // Handle track selection
+                    if let Some(track_id) = group_response.clicked_track {
+                        logic.request_play_track(track_id);
                     }
 
                     current_row += group_lines;

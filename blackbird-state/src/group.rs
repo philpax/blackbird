@@ -1,4 +1,4 @@
-use crate::SongId;
+use crate::TrackId;
 
 /// An grouping of tracks.
 #[derive(Debug, Clone)]
@@ -11,8 +11,8 @@ pub struct Group {
     pub year: Option<i32>,
     /// The total duration of the group in seconds.
     pub duration: u32,
-    /// The songs in the group.
-    pub songs: Vec<SongId>,
+    /// The tracks in the group.
+    pub tracks: Vec<TrackId>,
     /// The album cover art ID
     pub cover_art_id: Option<String>,
 }

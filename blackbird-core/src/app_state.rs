@@ -4,20 +4,20 @@ use std::{
     time::Duration,
 };
 
-use blackbird_state::{Album, AlbumId, Group, Song, SongId};
+use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
 use serde::{Deserialize, Serialize};
 
 use crate::queue::QueueState;
 
 #[derive(Default)]
 pub struct AppState {
-    pub song_ids: Vec<SongId>,
-    pub song_map: HashMap<SongId, Song>,
+    pub track_ids: Vec<TrackId>,
+    pub track_map: HashMap<TrackId, Track>,
     pub groups: Vec<Arc<Group>>,
     pub albums: HashMap<AlbumId, Album>,
     pub cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
     pub pending_cover_art_requests: HashSet<String>,
-    pub has_loaded_all_songs: bool,
+    pub has_loaded_all_tracks: bool,
 
     pub current_track_and_position: Option<TrackAndPosition>,
     pub started_loading_track: Option<std::time::Instant>,
@@ -37,6 +37,6 @@ pub enum PlaybackMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackAndPosition {
-    pub song_id: SongId,
+    pub track_id: TrackId,
     pub position: Duration,
 }

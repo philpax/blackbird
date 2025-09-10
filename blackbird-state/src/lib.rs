@@ -5,13 +5,13 @@
 
 mod album;
 mod group;
-mod song;
+mod track;
 
 use std::{collections::HashMap, sync::Arc};
 
 pub use album::{Album, AlbumId};
 pub use group::Group;
-pub use song::{Song, SongId};
+pub use track::{Track, TrackId};
 
 pub use blackbird_subsonic as bs;
 
@@ -19,21 +19,21 @@ pub use blackbird_subsonic as bs;
 pub struct FetchAllOutput {
     /// The albums that were fetched.
     pub albums: HashMap<AlbumId, Album>,
-    /// The songs that were fetched.
-    pub song_map: HashMap<SongId, Song>,
-    /// The sorted song IDs.
-    pub song_ids: Vec<SongId>,
+    /// The tracks that were fetched.
+    pub track_map: HashMap<TrackId, Track>,
+    /// The sorted track IDs.
+    pub track_ids: Vec<TrackId>,
     /// The groups that were constructed.
     pub groups: Vec<Arc<Group>>,
 }
 
-/// Fetches all albums and songs from the server, and constructs groups.
+/// Fetches all albums and tracks from the server, and constructs groups.
 ///
-/// `on_songs_fetched` is called with the number of songs that were just fetched,
-/// as well as the total number of songs fetched so far.
+/// `on_tracks_fetched` is called with the number of tracks that were just fetched,
+/// as well as the total number of tracks fetched so far.
 pub async fn fetch_all(
     client: &bs::Client,
-    on_songs_fetched: impl Fn(u32, u32),
+    on_tracks_fetched: impl Fn(u32, u32),
 ) -> bs::ClientResult<FetchAllOutput> {
     // Fetch all albums.
     let albums: HashMap<AlbumId, Album> = Album::fetch_all(client)
@@ -42,9 +42,9 @@ pub async fn fetch_all(
         .map(|a| (a.id.clone(), a))
         .collect();
 
-    // Fetch all songs.
+    // Fetch all tracks.
     let mut offset = 0;
-    let mut songs = HashMap::new();
+    let mut tracks = HashMap::new();
     loop {
         let response = client
             .search3(&bs::Search3Request {
@@ -62,29 +62,29 @@ pub async fn fetch_all(
             break;
         }
 
-        let song_count = response.song.len();
-        songs.extend(
+        let track_count = response.song.len();
+        tracks.extend(
             response
                 .song
                 .into_iter()
-                .map(|s| (SongId(s.id.clone()), Song::from(s))),
+                .map(|s| (TrackId(s.id.clone()), Track::from(s))),
         );
-        offset += song_count as u32;
-        on_songs_fetched(song_count as u32, offset);
+        offset += track_count as u32;
+        on_tracks_fetched(track_count as u32, offset);
     }
 
     // This is all mad ineffcient but cbf doing it better.
-    // Sort songs.
-    let mut song_ids: Vec<SongId> = songs.keys().cloned().collect();
+    // Sort tracks.
+    let mut track_ids: Vec<TrackId> = tracks.keys().cloned().collect();
     {
-        let song_data: HashMap<SongId, _> = song_ids
+        let track_data: HashMap<TrackId, _> = track_ids
             .iter()
             .map(|id| {
-                let song = songs.get(id).unwrap_or_else(|| {
-                    panic!("Song not found in song map: {id}");
+                let track = tracks.get(id).unwrap_or_else(|| {
+                    panic!("Track not found in track map: {id}");
                 });
-                let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                    panic!("Album ID not found in song: {song:?}");
+                let album_id = track.album_id.as_ref().unwrap_or_else(|| {
+                    panic!("Album ID not found in track: {track:?}");
                 });
                 let album = albums.get(album_id).unwrap_or_else(|| {
                     panic!("Album not found in state: {album_id:?}");
@@ -105,26 +105,26 @@ pub async fn fetch_all(
                             })
                             .unwrap_or_default(),
                         album.name.clone(),
-                        song.disc_number.unwrap_or_default(),
-                        song.track.unwrap_or_default(),
-                        song.title.clone(),
+                        track.disc_number.unwrap_or_default(),
+                        track.track.unwrap_or_default(),
+                        track.title.clone(),
                     ),
                 )
             })
             .collect();
-        song_ids.sort_by_cached_key(|id| song_data.get(id).unwrap());
+        track_ids.sort_by_cached_key(|id| track_data.get(id).unwrap());
     }
 
     // Build groups.
     let mut groups = vec![];
     {
         let mut current_group: Option<Group> = None;
-        for song_id in &song_ids {
-            let song = songs.get(song_id).unwrap_or_else(|| {
-                panic!("Song not found in song map: {song_id}");
+        for track_id in &track_ids {
+            let track = tracks.get(track_id).unwrap_or_else(|| {
+                panic!("Track not found in track map: {track_id}");
             });
-            let album_id = song.album_id.as_ref().unwrap_or_else(|| {
-                panic!("Album ID not found in song: {song:?}");
+            let album_id = track.album_id.as_ref().unwrap_or_else(|| {
+                panic!("Album ID not found in track: {track:?}");
             });
             let album = albums.get(album_id).unwrap_or_else(|| {
                 panic!("Album not found in album map: {album_id:?}");
@@ -144,12 +144,16 @@ pub async fn fetch_all(
                     album: album.name.clone(),
                     year: album.year,
                     duration: album.duration,
-                    songs: vec![],
+                    tracks: vec![],
                     cover_art_id: album.cover_art_id.clone(),
                 });
             }
 
-            current_group.as_mut().unwrap().songs.push(song_id.clone());
+            current_group
+                .as_mut()
+                .unwrap()
+                .tracks
+                .push(track_id.clone());
         }
         if let Some(group) = current_group.take() {
             groups.push(Arc::new(group));
@@ -158,8 +162,8 @@ pub async fn fetch_all(
 
     Ok(FetchAllOutput {
         albums,
-        song_map: songs,
-        song_ids,
+        track_map: tracks,
+        track_ids,
         groups,
     })
 }

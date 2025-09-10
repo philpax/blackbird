@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blackbird_state::SongId;
+use blackbird_state::TrackId;
 
 use crate::app_state::TrackAndPosition;
 
@@ -19,7 +19,7 @@ impl PlaybackThreadSendHandle {
 }
 #[derive(Debug, Clone)]
 pub enum LogicToPlaybackMessage {
-    PlaySong(SongId, Vec<u8>),
+    PlayTrack(TrackId, Vec<u8>),
     TogglePlayback,
     Play,
     Pause,
@@ -86,7 +86,7 @@ impl PlaybackThread {
 
         const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
 
-        let mut last_song_id = None;
+        let mut last_track_id = None;
         let mut last_seek_time = std::time::Instant::now();
         let mut last_position_update = std::time::Instant::now();
 
@@ -104,7 +104,7 @@ impl PlaybackThread {
             // Process all available messages without blocking
             while let Ok(msg) = playback_rx.try_recv() {
                 match msg {
-                    LTPM::PlaySong(song_id, data) => {
+                    LTPM::PlayTrack(track_id, data) => {
                         let need_to_skip = !sink.empty();
 
                         let decoder = rodio::decoder::DecoderBuilder::new()
@@ -125,9 +125,9 @@ impl PlaybackThread {
                             sink.skip_one();
                         }
                         sink.play();
-                        last_song_id = Some(song_id.clone());
+                        last_track_id = Some(track_id.clone());
                         let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
-                            song_id,
+                            track_id,
                             position: Duration::from_secs(0),
                         }));
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
@@ -158,7 +158,7 @@ impl PlaybackThread {
                             tracing::warn!("Failed to seek to position {position:?}: {e}");
                         } else {
                             let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                                song_id: last_song_id.clone().unwrap(),
+                                track_id: last_track_id.clone().unwrap(),
                                 position,
                             }));
                         }
@@ -171,7 +171,7 @@ impl PlaybackThread {
                                 tracing::warn!("Failed to seek to position {position:?}: {e}");
                             }
                             let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                                song_id: last_song_id.clone().unwrap(),
+                                track_id: last_track_id.clone().unwrap(),
                                 position,
                             }));
                         }
@@ -192,7 +192,7 @@ impl PlaybackThread {
                 last_position_update = now;
                 if !sink.empty() && !sink.is_paused() {
                     let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                        song_id: last_song_id.clone().unwrap(),
+                        track_id: last_track_id.clone().unwrap(),
                         position: current_position,
                     }));
                 }

@@ -1,56 +1,56 @@
 use crate::{
-    bc::{blackbird_state::Song, util},
+    bc::{blackbird_state::Track, util},
     ui::{style, util as ui_util},
 };
 
-pub fn track_length_str_width(song: &Song, ui: &egui::Ui) -> f32 {
-    egui::WidgetText::from(track_length_str(song))
+pub fn track_length_str_width(track: &Track, ui: &egui::Ui) -> f32 {
+    egui::WidgetText::from(track_length_str(track))
         .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body)
         .size()
         .x
 }
 
-pub struct SongResponse {
+pub struct TrackResponse {
     pub clicked: bool,
 }
 
-pub struct SongParams {
+pub struct TrackParams {
     pub max_track_length_width: f32,
     pub playing: bool,
-    pub song_y: f32,
-    pub song_row_height: f32,
+    pub track_y: f32,
+    pub track_row_height: f32,
 }
 
 pub fn ui(
-    song: &Song,
+    track: &Track,
     ui: &mut egui::Ui,
     style: &style::Style,
     album_artist: &str,
-    params: SongParams,
-) -> SongResponse {
+    params: TrackParams,
+) -> TrackResponse {
     // Use shared spacing calculation
     let total_spacing = ui_util::track_spacing(ui);
-    let actual_row_height = params.song_row_height + total_spacing;
+    let actual_row_height = params.track_row_height + total_spacing;
 
-    // Create a rect for this song with proper spacing
-    let song_rect = egui::Rect::from_min_size(
-        egui::pos2(ui.min_rect().left(), params.song_y),
+    // Create a rect for this track with proper spacing
+    let track_rect = egui::Rect::from_min_size(
+        egui::pos2(ui.min_rect().left(), params.track_y),
         egui::vec2(ui.available_width(), actual_row_height),
     );
 
-    // Check for interactions with this song area
-    let song_response = ui.allocate_rect(song_rect, egui::Sense::click());
+    // Check for interactions with this track area
+    let track_response = ui.allocate_rect(track_rect, egui::Sense::click());
 
     // Get track information
-    let track = song.track.unwrap_or(0);
-    let track_str = if let Some(disc_number) = song.disc_number {
-        format!("{disc_number}.{track}")
+    let track_number = track.track.unwrap_or(0);
+    let track_str = if let Some(disc_number) = track.disc_number {
+        format!("{disc_number}.{track_number}")
     } else {
-        track.to_string()
+        track_number.to_string()
     };
 
     // Calculate text baseline position (add some padding from top)
-    let text_y = params.song_y + (actual_row_height - params.song_row_height) / 2.0;
+    let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
 
     // Draw track number (right-aligned in 32px column)
     let track_x = ui.min_rect().left() + 32.0;
@@ -62,9 +62,9 @@ pub fn ui(
         style.track_number(),
     );
 
-    // Draw song title
+    // Draw track title
     let title_x = track_x + 8.0; // Small gap after track number
-    let title_color = if song_response.hovered() {
+    let title_color = if track_response.hovered() {
         style.track_name_hovered()
     } else if params.playing {
         style.track_name_playing()
@@ -75,13 +75,13 @@ pub fn ui(
     ui.painter().text(
         egui::pos2(title_x, text_y),
         egui::Align2::LEFT_TOP,
-        &song.title,
+        &track.title,
         egui::TextStyle::Body.resolve(ui.style()),
         title_color,
     );
 
     // Draw duration (right-aligned)
-    let duration_str = track_length_str(song);
+    let duration_str = track_length_str(track);
     ui.painter().text(
         egui::pos2(ui.max_rect().right(), text_y),
         egui::Align2::RIGHT_TOP,
@@ -91,7 +91,7 @@ pub fn ui(
     );
 
     // Draw artist if different from album artist
-    if let Some(artist) = song
+    if let Some(artist) = track
         .artist
         .as_ref()
         .filter(|artist| *artist != album_artist)
@@ -107,11 +107,11 @@ pub fn ui(
         );
     }
 
-    SongResponse {
-        clicked: song_response.clicked(),
+    TrackResponse {
+        clicked: track_response.clicked(),
     }
 }
 
-fn track_length_str(song: &Song) -> String {
-    util::seconds_to_hms_string(song.duration.unwrap_or(0), false)
+fn track_length_str(track: &Track) -> String {
+    util::seconds_to_hms_string(track.duration.unwrap_or(0), false)
 }

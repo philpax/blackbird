@@ -7,14 +7,14 @@ use blackbird_core::AppState;
 
 use crate::{
     bc::{
-        blackbird_state::{Group, SongId},
+        blackbird_state::{Group, TrackId},
         util,
     },
-    ui::{song, style, util as ui_util},
+    ui::{style, track, util as ui_util},
 };
 
 pub struct GroupResponse<'a> {
-    pub clicked_song: Option<&'a SongId>,
+    pub clicked_track: Option<&'a TrackId>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -26,9 +26,9 @@ pub fn ui<'a>(
     album_art: Option<egui::ImageSource>,
     album_art_enabled: bool,
     state: Arc<RwLock<AppState>>,
-    playing_song: Option<&SongId>,
+    playing_track: Option<&TrackId>,
 ) -> GroupResponse<'a> {
-    let mut clicked_song = None;
+    let mut clicked_track = None;
 
     // Header section (artist and album info)
     let artist_visible = row_range.contains(&0);
@@ -102,54 +102,54 @@ pub fn ui<'a>(
         });
     }
 
-    // Songs section with virtual rendering
-    let song_start = row_range.start.saturating_sub(2);
-    let song_end = row_range.end.saturating_sub(2);
+    // Tracks section with virtual rendering
+    let track_start = row_range.start.saturating_sub(2);
+    let track_end = row_range.end.saturating_sub(2);
 
-    if song_start < song_end && !group.songs.is_empty() {
+    if track_start < track_end && !group.tracks.is_empty() {
         egui::Frame::NONE
             .inner_margin(egui::Margin {
                 left: 10,
                 ..egui::Margin::ZERO
             })
             .show(ui, |ui| {
-                let songs = &group.songs;
-                let song_row_height = ui.text_style_height(&egui::TextStyle::Body);
+                let tracks = &group.tracks;
+                let track_row_height = ui.text_style_height(&egui::TextStyle::Body);
 
-                // Clamp the song slice to the actual number of songs
-                let end = song_end.min(songs.len());
-                let start = song_start.min(songs.len());
+                // Clamp the track slice to the actual number of tracks
+                let end = track_end.min(tracks.len());
+                let start = track_start.min(tracks.len());
 
                 if start >= end {
                     return;
                 }
 
-                let song_map = &state.read().unwrap().song_map;
+                let track_map = &state.read().unwrap().track_map;
 
-                // Do a pre-pass to calculate the maximum track length width for visible songs
-                let max_track_length_width = songs[start..end]
+                // Do a pre-pass to calculate the maximum track length width for visible tracks
+                let max_track_length_width = tracks[start..end]
                     .iter()
-                    .filter_map(|song_id| song_map.get(song_id))
-                    .map(|song| song::track_length_str_width(song, ui))
+                    .filter_map(|id| track_map.get(id))
+                    .map(|track| track::track_length_str_width(track, ui))
                     .fold(0.0, f32::max);
 
                 // Use shared spacing calculation
                 let total_spacing = ui_util::track_spacing(ui);
-                let spaced_row_height = song_row_height + total_spacing;
+                let spaced_row_height = track_row_height + total_spacing;
 
-                // Set up the total height for all songs in this range (with spacing)
+                // Set up the total height for all tracks in this range (with spacing)
                 let total_height = (end - start) as f32 * spaced_row_height;
                 ui.allocate_space(egui::vec2(ui.available_width(), total_height));
 
-                // Render only the visible songs using direct positioning
-                for (song_index, song_id) in songs[start..end].iter().enumerate() {
-                    let y_offset = song_index as f32 * spaced_row_height;
-                    let song_y = ui.min_rect().top() + y_offset;
+                // Render only the visible tracks using direct positioning
+                for (track_index, track_id) in tracks[start..end].iter().enumerate() {
+                    let y_offset = track_index as f32 * spaced_row_height;
+                    let track_y = ui.min_rect().top() + y_offset;
 
-                    let Some(song) = song_map.get(song_id) else {
+                    let Some(track) = track_map.get(track_id) else {
                         // Draw loading text directly with painter
                         ui.painter().text(
-                            egui::pos2(ui.min_rect().left(), song_y + total_spacing / 2.0),
+                            egui::pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
                             egui::Align2::LEFT_TOP,
                             "[loading...]",
                             egui::TextStyle::Body.resolve(ui.style()),
@@ -158,34 +158,33 @@ pub fn ui<'a>(
                         continue;
                     };
 
-                    // Use the ui function from song.rs
-                    let r = song::ui(
-                        song,
+                    let r = track::ui(
+                        track,
                         ui,
                         style,
                         &group.artist,
-                        song::SongParams {
+                        track::TrackParams {
                             max_track_length_width,
-                            playing: playing_song == Some(&song.id),
-                            song_y,
-                            song_row_height,
+                            playing: playing_track == Some(&track.id),
+                            track_y,
+                            track_row_height,
                         },
                     );
 
                     if r.clicked {
-                        clicked_song = Some(song_id);
+                        clicked_track = Some(track_id);
                     }
                 }
             });
     }
 
-    GroupResponse { clicked_song }
+    GroupResponse { clicked_track }
 }
 
 pub fn line_count(group: &Group) -> usize {
     let artist_lines = 1;
     let album_lines = 1;
-    let songs_lines = group.songs.len();
+    let track_lines = group.tracks.len();
 
-    artist_lines + album_lines + songs_lines
+    artist_lines + album_lines + track_lines
 }

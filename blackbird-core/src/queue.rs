@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use blackbird_state::SongId;
+use blackbird_state::TrackId;
 use blackbird_subsonic::ClientResult;
 
 use crate::{
@@ -18,10 +18,10 @@ use crate::{
 #[derive(Default)]
 pub struct QueueState {
     pub shuffle_seed: u64,
-    pub audio_cache: HashMap<SongId, Vec<u8>>,
-    pub pending_audio_requests: HashMap<SongId, u64>,
+    pub audio_cache: HashMap<TrackId, Vec<u8>>,
+    pub pending_audio_requests: HashMap<TrackId, u64>,
     pub request_counter: u64,
-    pub current_target: Option<SongId>,
+    pub current_target: Option<TrackId>,
     pub current_target_request_id: Option<u64>,
     pub pending_skip_after_error: bool,
 }
@@ -44,57 +44,71 @@ impl Logic {
         tracing::debug!("End-of-track advance handling; mode={:?}", mode);
         match mode {
             PlaybackMode::RepeatOne => {
-                if let Some(current) = self.get_playing_song_id() {
+                if let Some(current) = self.get_playing_track_id() {
                     tracing::debug!("RepeatOne: replaying current track {}", current.0);
-                    self.schedule_play_song(&current);
+                    self.schedule_play_track(&current);
                 }
             }
             _ => {
-                self.schedule_next_song();
+                self.schedule_next_track();
             }
         }
     }
 
-    pub(super) fn schedule_next_song(&self) {
-        if let Some(next) = self.compute_next_song_id() {
+    pub(super) fn schedule_next_track(&self) {
+        if let Some(next) = self.compute_next_track_id() {
             tracing::debug!("Advancing to next track {}", next.0);
-            self.schedule_play_song(&next);
+            self.schedule_play_track(&next);
         } else {
             tracing::warn!("No next track available to advance to");
         }
     }
 
-    pub(super) fn schedule_play_song(&self, song_id: &SongId) {
+    pub(super) fn schedule_previous_track(&self) {
+        if let Some(prev) = self.compute_previous_track_id() {
+            tracing::debug!("Advancing to previous track {}", prev.0);
+            self.schedule_play_track(&prev);
+        } else {
+            tracing::warn!("No previous track available to advance to");
+        }
+    }
+
+    pub(super) fn schedule_play_track(&self, track_id: &TrackId) {
         // Set target and show loading indicator
         let req_id = {
             let mut st = self.write_state();
             st.started_loading_track = Some(std::time::Instant::now());
-            st.queue.current_target = Some(song_id.clone());
+            st.queue.current_target = Some(track_id.clone());
             st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
 
             let req_id = st.queue.request_counter;
             st.queue.current_target_request_id = Some(req_id);
-            tracing::debug!("Scheduling song {} (req_id={})", song_id.0, req_id);
+            tracing::debug!("Scheduling track {} (req_id={})", track_id.0, req_id);
             req_id
         };
 
         // If already cached, play immediately
-        let cached_track = self.read_state().queue.audio_cache.get(song_id).cloned();
+        let cached_track = self.read_state().queue.audio_cache.get(track_id).cloned();
         if let Some(data) = cached_track {
-            tracing::debug!("Playing from cache: {}", song_id.0);
+            tracing::debug!("Playing from cache: {}", track_id.0);
             self.playback_thread
                 .send_handle()
-                .send(LogicToPlaybackMessage::PlaySong(song_id.clone(), data));
+                .send(LogicToPlaybackMessage::PlayTrack(track_id.clone(), data));
         } else {
-            tracing::debug!("Loading song {} (req_id={})", song_id.0, req_id);
-            self.load_song_internal(song_id.clone(), req_id, true);
+            tracing::debug!("Loading track {} (req_id={})", track_id.0, req_id);
+            self.load_track_internal(track_id.clone(), req_id, true);
         }
 
         // Also ensure nearby cache is populated
-        self.ensure_cache_window(song_id);
+        self.ensure_cache_window(track_id);
     }
 
-    pub(super) fn load_song_internal(&self, song_id: SongId, request_id: u64, for_playback: bool) {
+    pub(super) fn load_track_internal(
+        &self,
+        track_id: TrackId,
+        request_id: u64,
+        for_playback: bool,
+    ) {
         let client = self.client.clone();
         let state = self.state.clone();
         let playback_tx = self.playback_thread.send_handle();
@@ -105,22 +119,22 @@ impl Logic {
             .unwrap()
             .queue
             .pending_audio_requests
-            .insert(song_id.clone(), request_id);
+            .insert(track_id.clone(), request_id);
 
         self.tokio_thread.spawn(async move {
             tracing::debug!(
                 "Starting load request for {} (req_id={})",
-                song_id.0,
+                track_id.0,
                 request_id
             );
             let response = client
-                .stream(&song_id.0, transcode.then(|| "mp3".to_string()), None)
+                .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
                 .await;
             handle_load_response(
                 response,
                 state,
                 playback_tx,
-                song_id,
+                track_id,
                 request_id,
                 for_playback,
             );
@@ -130,32 +144,32 @@ impl Logic {
             response: ClientResult<Vec<u8>>,
             state: Arc<RwLock<AppState>>,
             playback_tx: PlaybackThreadSendHandle,
-            song_id: SongId,
+            track_id: TrackId,
             request_id: u64,
             for_playback: bool,
         ) {
             match response {
                 Ok(data) => {
                     let is_current_target =
-                        state.read().unwrap().queue.current_target.as_ref() == Some(&song_id);
+                        state.read().unwrap().queue.current_target.as_ref() == Some(&track_id);
                     state
                         .write()
                         .unwrap()
                         .queue
                         .audio_cache
-                        .insert(song_id.clone(), data.clone());
+                        .insert(track_id.clone(), data.clone());
 
                     // If this request was for immediate playback and is still the current target, play it
                     if for_playback && is_current_target {
                         tracing::debug!(
                             "Load complete and current: playing {} (req_id={})",
-                            song_id.0,
+                            track_id.0,
                             request_id
                         );
-                        playback_tx.send(LogicToPlaybackMessage::PlaySong(song_id.clone(), data));
+                        playback_tx.send(LogicToPlaybackMessage::PlayTrack(track_id.clone(), data));
                     } else {
                         tracing::debug!(
-                            "Load complete but not current (for_playback={for_playback}) for {song_id} (req_id={request_id})"
+                            "Load complete but not current (for_playback={for_playback}) for {track_id} (req_id={request_id})"
                         );
                     }
 
@@ -164,7 +178,7 @@ impl Logic {
                         .unwrap()
                         .queue
                         .pending_audio_requests
-                        .remove(&song_id);
+                        .remove(&track_id);
                 }
                 Err(e) => {
                     let mut st = state.write().unwrap();
@@ -172,18 +186,18 @@ impl Logic {
                         .queue
                         .current_target_request_id
                         .is_some_and(|rid| rid == request_id)
-                        && st.queue.current_target.as_ref() == Some(&song_id);
+                        && st.queue.current_target.as_ref() == Some(&track_id);
 
                     if is_current {
                         st.error = Some(e.to_string());
                         st.queue.pending_skip_after_error = true;
                         tracing::warn!(
-                            "Load error for current target {song_id} (req_id={request_id}): {}",
+                            "Load error for current target {track_id} (req_id={request_id}): {}",
                             st.error.as_deref().unwrap_or("")
                         );
                     } else {
                         tracing::debug!(
-                            "Load error for stale/non-current {song_id} (req_id={request_id}): {e}"
+                            "Load error for stale/non-current {track_id} (req_id={request_id}): {e}"
                         );
                     }
                 }
@@ -191,33 +205,33 @@ impl Logic {
         }
     }
 
-    pub(super) fn compute_next_song_id(&self) -> Option<SongId> {
+    pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
         compute_neighbor(
-            &st.song_ids,
-            &st.current_track_and_position.as_ref()?.song_id,
+            &st.track_ids,
+            &st.current_track_and_position.as_ref()?.track_id,
             st.playback_mode,
             st.queue.shuffle_seed,
             Neighbor::Next,
         )
     }
 
-    pub(super) fn compute_previous_song_id(&self) -> Option<SongId> {
+    pub(super) fn compute_previous_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
         compute_neighbor(
-            &st.song_ids,
-            &st.current_track_and_position.as_ref()?.song_id,
+            &st.track_ids,
+            &st.current_track_and_position.as_ref()?.track_id,
             st.playback_mode,
             st.queue.shuffle_seed,
             Neighbor::Prev,
         )
     }
 
-    pub(super) fn ensure_cache_window(&self, center: &SongId) {
+    pub(super) fn ensure_cache_window(&self, center: &TrackId) {
         let window = {
             let st = self.read_state();
             compute_window(
-                &st.song_ids,
+                &st.track_ids,
                 center,
                 st.playback_mode,
                 st.queue.shuffle_seed,
@@ -244,7 +258,7 @@ impl Logic {
                     st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
                     st.queue.request_counter
                 };
-                self.load_song_internal(sid, req_id, false);
+                self.load_track_internal(sid, req_id, false);
                 scheduled += 1;
             }
         }
@@ -256,11 +270,10 @@ impl Logic {
     }
 }
 
-// Deterministic shuffle key based on seed and SongId
-fn shuffle_key(song_id: &SongId, seed: u64) -> u64 {
-    // Build a stable hash of song id string
+// Deterministic shuffle key based on seed and TrackId
+fn shuffle_key(track_id: &TrackId, seed: u64) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    song_id.0.hash(&mut hasher);
+    track_id.0.hash(&mut hasher);
     let id_hash = hasher.finish();
     // Mix with seed using xorshift-like mixing
     let mut x = id_hash ^ seed;
@@ -280,20 +293,20 @@ fn next_seed(seed: u64) -> u64 {
 }
 
 fn compute_window(
-    ordered_songs: &[SongId],
-    center: &SongId,
+    ordered_tracks: &[TrackId],
+    center: &TrackId,
     mode: PlaybackMode,
     seed: u64,
     radius: usize,
-) -> Vec<SongId> {
+) -> Vec<TrackId> {
     let mut out = Vec::with_capacity(1 + radius * 2);
     out.push(center.clone());
 
     // Collect neighbors in each direction in a single pass when possible
-    let prevs = compute_neighbors(ordered_songs, center, mode, seed, Neighbor::Prev, radius);
+    let prevs = compute_neighbors(ordered_tracks, center, mode, seed, Neighbor::Prev, radius);
     out.extend(prevs);
 
-    let nexts = compute_neighbors(ordered_songs, center, mode, seed, Neighbor::Next, radius);
+    let nexts = compute_neighbors(ordered_tracks, center, mode, seed, Neighbor::Next, radius);
     out.extend(nexts);
 
     out
@@ -305,28 +318,28 @@ enum Neighbor {
     Next,
 }
 fn compute_neighbor(
-    ordered_songs: &[SongId],
-    center: &SongId,
+    ordered_tracks: &[TrackId],
+    center: &TrackId,
     mode: PlaybackMode,
     seed: u64,
     dir: Neighbor,
-) -> Option<SongId> {
-    compute_neighbors(ordered_songs, center, mode, seed, dir, 1)
+) -> Option<TrackId> {
+    compute_neighbors(ordered_tracks, center, mode, seed, dir, 1)
         .first()
         .cloned()
 }
 fn compute_neighbors(
-    ordered_songs: &[SongId],
-    center: &SongId,
+    ordered_tracks: &[TrackId],
+    center: &TrackId,
     mode: PlaybackMode,
     seed: u64,
     dir: Neighbor,
     count: usize,
-) -> Vec<SongId> {
+) -> Vec<TrackId> {
     match mode {
         PlaybackMode::RepeatOne => Vec::new(),
         PlaybackMode::Sequential => {
-            let Some(idx) = ordered_songs.iter().position(|s| s == center) else {
+            let Some(idx) = ordered_tracks.iter().position(|s| s == center) else {
                 return vec![];
             };
             match dir {
@@ -335,21 +348,21 @@ fn compute_neighbors(
                     let mut remaining = count;
                     let mut current_idx = idx;
 
-                    // Wrap around from the end if we need more songs
-                    while remaining > 0 && !ordered_songs.is_empty() {
+                    // Wrap around from the end if we need more tracks
+                    while remaining > 0 && !ordered_tracks.is_empty() {
                         current_idx = if current_idx == 0 {
-                            ordered_songs.len() - 1
+                            ordered_tracks.len() - 1
                         } else {
                             current_idx - 1
                         };
 
-                        // Don't include the center song itself
+                        // Don't include the center track itself
                         if current_idx != idx {
-                            v.push(ordered_songs[current_idx].clone());
+                            v.push(ordered_tracks[current_idx].clone());
                             remaining -= 1;
                         }
 
-                        // Prevent infinite loop if there's only one song
+                        // Prevent infinite loop if there's only one track
                         if current_idx == idx && remaining > 0 {
                             break;
                         }
@@ -361,17 +374,17 @@ fn compute_neighbors(
                     let mut remaining = count;
                     let mut current_idx = idx;
 
-                    // Wrap around from the beginning if we need more songs
-                    while remaining > 0 && !ordered_songs.is_empty() {
-                        current_idx = (current_idx + 1) % ordered_songs.len();
+                    // Wrap around from the beginning if we need more tracks
+                    while remaining > 0 && !ordered_tracks.is_empty() {
+                        current_idx = (current_idx + 1) % ordered_tracks.len();
 
-                        // Don't include the center song itself
+                        // Don't include the center track itself
                         if current_idx != idx {
-                            v.push(ordered_songs[current_idx].clone());
+                            v.push(ordered_tracks[current_idx].clone());
                             remaining -= 1;
                         }
 
-                        // Prevent infinite loop if there's only one song
+                        // Prevent infinite loop if there's only one track
                         if current_idx == idx && remaining > 0 {
                             break;
                         }
@@ -385,8 +398,8 @@ fn compute_neighbors(
             match dir {
                 Neighbor::Prev => {
                     // Keep k largest keys below cur_key using a min-heap (via Reverse)
-                    let mut heap: BinaryHeap<(Reverse<u64>, SongId)> = BinaryHeap::new();
-                    for s in ordered_songs {
+                    let mut heap: BinaryHeap<(Reverse<u64>, TrackId)> = BinaryHeap::new();
+                    for s in ordered_tracks {
                         if s == center {
                             continue;
                         }
@@ -399,15 +412,15 @@ fn compute_neighbors(
                         }
                     }
                     // Extract and sort by key descending (closest first)
-                    let mut items: Vec<(u64, SongId)> =
+                    let mut items: Vec<(u64, TrackId)> =
                         heap.into_iter().map(|(Reverse(k), id)| (k, id)).collect();
                     items.sort_by_key(|(k, _)| Reverse(*k));
                     items.into_iter().map(|(_, id)| id).collect()
                 }
                 Neighbor::Next => {
                     // Keep k smallest keys above cur_key using a max-heap
-                    let mut heap: BinaryHeap<(u64, SongId)> = BinaryHeap::new();
-                    for s in ordered_songs {
+                    let mut heap: BinaryHeap<(u64, TrackId)> = BinaryHeap::new();
+                    for s in ordered_tracks {
                         if s == center {
                             continue;
                         }
@@ -420,7 +433,7 @@ fn compute_neighbors(
                         }
                     }
                     // Extract and sort by key ascending (closest first)
-                    let mut items: Vec<(u64, SongId)> = heap.into_iter().collect();
+                    let mut items: Vec<(u64, TrackId)> = heap.into_iter().collect();
                     items.sort_by_key(|(k, _)| *k);
                     items.into_iter().map(|(_, id)| id).collect()
                 }

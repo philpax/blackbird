@@ -1,7 +1,7 @@
 pub mod util;
 
 pub use blackbird_state;
-use blackbird_state::SongId;
+use blackbird_state::TrackId;
 pub use blackbird_subsonic as bs;
 
 use std::{
@@ -60,27 +60,27 @@ impl LogicRequestHandle {
 pub struct TrackDisplayDetails {
     pub album_name: String,
     pub album_artist: String,
-    pub song_title: String,
-    pub song_artist: Option<String>,
-    pub song_duration: Duration,
-    pub song_position: Duration,
+    pub track_title: String,
+    pub track_artist: Option<String>,
+    pub track_duration: Duration,
+    pub track_position: Duration,
 }
 impl TrackDisplayDetails {
-    pub fn from_song_id(
-        song_id: &SongId,
+    pub fn from_track_id(
+        track_id: &TrackId,
         position: Duration,
         state: &Arc<RwLock<AppState>>,
     ) -> Option<TrackDisplayDetails> {
         let state = state.read().unwrap();
-        let song = state.song_map.get(song_id)?;
-        let album = state.albums.get(song.album_id.as_ref()?)?;
+        let track = state.track_map.get(track_id)?;
+        let album = state.albums.get(track.album_id.as_ref()?)?;
         Some(TrackDisplayDetails {
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
-            song_title: song.title.clone(),
-            song_artist: song.artist.clone(),
-            song_duration: Duration::from_secs(song.duration.unwrap_or(1) as u64),
-            song_position: position,
+            track_title: track.title.clone(),
+            track_artist: track.artist.clone(),
+            track_duration: Duration::from_secs(track.duration.unwrap_or(1) as u64),
+            track_position: position,
         })
     }
 }
@@ -126,8 +126,8 @@ impl Logic {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             match event {
                 PlaybackToLogicMessage::TrackStarted(track_and_duration) => {
-                    let info = TrackDisplayDetails::from_song_id(
-                        &track_and_duration.song_id,
+                    let info = TrackDisplayDetails::from_track_id(
+                        &track_and_duration.track_id,
                         track_and_duration.position,
                         &self.state,
                     );
@@ -135,13 +135,13 @@ impl Logic {
                         tracing::debug!(
                             "TrackStarted: {} - {}",
                             info.album_artist,
-                            info.song_title
+                            info.track_title
                         );
                     } else {
-                        tracing::warn!("TrackStarted: no info for {}", track_and_duration.song_id);
+                        tracing::warn!("TrackStarted: no info for {}", track_and_duration.track_id);
                     }
 
-                    self.ensure_cache_window(&track_and_duration.song_id);
+                    self.ensure_cache_window(&track_and_duration.track_id);
 
                     let mut st = self.write_state();
                     st.current_track_and_position = Some(track_and_duration);
@@ -161,7 +161,7 @@ impl Logic {
         // Handle deferred auto-skip after load error
         let should_skip = self.read_state().queue.pending_skip_after_error;
         if should_skip {
-            self.schedule_next_song();
+            self.schedule_next_track();
             self.write_state().queue.pending_skip_after_error = false;
         }
 
@@ -176,7 +176,7 @@ impl Logic {
                     let Some(playing_info) = self.get_playing_info() else {
                         continue;
                     };
-                    let current_position = playing_info.song_position;
+                    let current_position = playing_info.track_position;
                     let duration = Duration::from_secs(seconds.unsigned_abs());
                     self.seek_current(if seconds > 0 {
                         current_position + duration
@@ -221,17 +221,11 @@ impl Logic {
     }
 
     pub fn next(&self) {
-        let next_id = self.compute_next_song_id();
-        if let Some(id) = next_id {
-            self.schedule_play_song(&id);
-        }
+        self.schedule_next_track();
     }
 
     pub fn previous(&self) {
-        let prev_id = self.compute_previous_song_id();
-        if let Some(id) = prev_id {
-            self.schedule_play_song(&id);
-        }
+        self.schedule_previous_track();
     }
 }
 impl Logic {
@@ -303,14 +297,14 @@ impl Logic {
     }
 }
 impl Logic {
-    pub fn get_playing_song_id(&self) -> Option<SongId> {
+    pub fn get_playing_track_id(&self) -> Option<TrackId> {
         self.read_state()
             .current_track_and_position
             .as_ref()
-            .map(|playing_song| playing_song.song_id.clone())
+            .map(|tp| tp.track_id.clone())
     }
 
-    pub fn is_song_loaded(&self) -> bool {
+    pub fn is_track_loaded(&self) -> bool {
         self.read_state().current_track_and_position.is_some()
     }
     pub fn should_show_loading_indicator(&self) -> bool {
@@ -318,14 +312,14 @@ impl Logic {
             .started_loading_track
             .is_some_and(|t| t.elapsed() > Duration::from_millis(100))
     }
-    pub fn has_loaded_all_songs(&self) -> bool {
-        self.read_state().has_loaded_all_songs
+    pub fn has_loaded_all_tracks(&self) -> bool {
+        self.read_state().has_loaded_all_tracks
     }
 
     pub fn get_playing_info(&self) -> Option<TrackDisplayDetails> {
         let track_and_position = self.read_state().current_track_and_position.clone()?;
-        TrackDisplayDetails::from_song_id(
-            &track_and_position.song_id,
+        TrackDisplayDetails::from_track_id(
+            &track_and_position.track_id,
             track_and_position.position,
             &self.state,
         )
@@ -345,9 +339,9 @@ impl Logic {
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
         tracing::debug!("Playback mode set to {mode:?}");
         self.write_state().playback_mode = mode;
-        // Rebase queue around current song and refresh cache window
-        if let Some(song_id) = self.get_playing_song_id() {
-            self.ensure_cache_window(&song_id);
+
+        if let Some(track_id) = self.get_playing_track_id() {
+            self.ensure_cache_window(&track_id);
         }
     }
 
@@ -356,9 +350,9 @@ impl Logic {
     }
 }
 impl Logic {
-    pub fn request_play_song(&self, song_id: &SongId) {
-        // Public API used by UI: keep current playing until new song is ready
-        self.schedule_play_song(song_id);
+    pub fn request_play_track(&self, track_id: &TrackId) {
+        // Public API used by UI: keep current playing until new track is ready
+        self.schedule_play_track(track_id);
     }
 }
 impl Logic {
@@ -372,17 +366,17 @@ impl Logic {
                     client.ping().await?;
 
                     let result = blackbird_state::fetch_all(&client, |batch_count, total_count| {
-                        tracing::info!("Fetched {batch_count} songs, total {total_count} songs");
+                        tracing::info!("Fetched {batch_count} tracks, total {total_count} tracks");
                     })
                     .await?;
 
                     {
                         let mut state = state.write().unwrap();
                         state.albums = result.albums;
-                        state.song_map = result.song_map;
-                        state.song_ids = result.song_ids;
+                        state.track_map = result.track_map;
+                        state.track_ids = result.track_ids;
                         state.groups = result.groups;
-                        state.has_loaded_all_songs = true;
+                        state.has_loaded_all_tracks = true;
                     }
 
                     bs::ClientResult::Ok(())
