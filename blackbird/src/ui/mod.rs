@@ -71,11 +71,11 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
         )
         .show(ctx, |ui| {
             ui.input(|i| {
-                if i.pointer.button_clicked(egui::PointerButton::Extra1) {
+                if i.pointer.button_released(egui::PointerButton::Extra1) {
                     logic.previous();
                 }
 
-                if i.pointer.button_clicked(egui::PointerButton::Extra2) {
+                if i.pointer.button_released(egui::PointerButton::Extra2) {
                     logic.next();
                 }
             });
