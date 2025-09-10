@@ -359,7 +359,7 @@ impl Logic {
                     {
                         let mut state = state.write().unwrap();
                         state.albums = result.albums;
-                        state.songs = result.songs.keys().cloned().collect();
+                        state.songs = result.song_ids;
                         state.groups = result.groups;
                         state.has_loaded_all_songs = true;
                     }

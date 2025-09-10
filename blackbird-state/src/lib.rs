@@ -21,6 +21,8 @@ pub struct FetchAllOutput {
     pub albums: HashMap<AlbumId, Album>,
     /// The songs that were fetched.
     pub songs: HashMap<SongId, Song>,
+    /// The sorted song IDs.
+    pub song_ids: Vec<SongId>,
     /// The groups that were constructed.
     pub groups: Vec<Arc<Group>>,
 }
@@ -157,6 +159,7 @@ pub async fn fetch_all(
     Ok(FetchAllOutput {
         albums,
         songs,
+        song_ids,
         groups,
     })
 }
