@@ -179,94 +179,35 @@ fn playing_track_info(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.style_mut().visuals.override_text_color = None;
 
-                let default_color = config.style.text();
-                let active_color = config.style.track_name_playing();
+                let default = config.style.text();
+                let active = config.style.track_name_playing();
 
-                // Next track button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::SKIP_FORWARD,
-                    default_color,
-                    active_color,
-                ) {
+                if control_button(ui, egui_phosphor::regular::SKIP_FORWARD, default, active) {
                     logic.next();
                 }
-
-                // Play/Pause button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::PLAY_PAUSE,
-                    default_color,
-                    active_color,
-                ) {
+                if control_button(ui, egui_phosphor::regular::PLAY_PAUSE, default, active) {
                     logic.toggle_current();
                 }
-
-                // Previous track button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::SKIP_BACK,
-                    default_color,
-                    active_color,
-                ) {
+                if control_button(ui, egui_phosphor::regular::SKIP_BACK, default, active) {
                     logic.previous();
                 }
-
-                // Stop button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::STOP,
-                    default_color,
-                    active_color,
-                ) {
+                if control_button(ui, egui_phosphor::regular::STOP, default, active) {
                     logic.stop_current();
                 }
 
                 ui.add_space(24.0);
 
                 // Playback mode buttons (Sequential, Shuffle, Repeat One)
-                let current_mode = logic.get_playback_mode();
-
-                // Sequential button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::LIST,
-                    if current_mode == PlaybackMode::Sequential {
-                        active_color
-                    } else {
-                        default_color
-                    },
-                    active_color,
-                ) {
-                    logic.set_playback_mode(PlaybackMode::Sequential);
-                }
-
-                // Shuffle button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::SHUFFLE,
-                    if current_mode == PlaybackMode::Shuffle {
-                        active_color
-                    } else {
-                        default_color
-                    },
-                    active_color,
-                ) {
-                    logic.set_playback_mode(PlaybackMode::Shuffle);
-                }
-
-                // Repeat One button
-                if control_button(
-                    ui,
-                    egui_phosphor::regular::REPEAT_ONCE,
-                    if current_mode == PlaybackMode::RepeatOne {
-                        active_color
-                    } else {
-                        default_color
-                    },
-                    active_color,
-                ) {
-                    logic.set_playback_mode(PlaybackMode::RepeatOne);
+                let playback = logic.get_playback_mode();
+                for (mode, icon) in [
+                    (PlaybackMode::Sequential, egui_phosphor::regular::LIST),
+                    (PlaybackMode::Shuffle, egui_phosphor::regular::SHUFFLE),
+                    (PlaybackMode::RepeatOne, egui_phosphor::regular::REPEAT_ONCE),
+                ] {
+                    let button_color = if playback == mode { active } else { default };
+                    if control_button(ui, icon, button_color, active) {
+                        logic.set_playback_mode(mode);
+                    }
                 }
             });
         }
