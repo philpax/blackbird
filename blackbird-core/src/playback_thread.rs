@@ -34,7 +34,7 @@ pub enum PlaybackToLogicMessage {
     PlaybackStateChanged(PlaybackState),
     PositionChanged(TrackAndPosition),
     TrackEnded,
-    FailedToPlayTrack(String),
+    FailedToPlayTrack(TrackId, String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,7 +119,7 @@ impl PlaybackThread {
                                 // Send a dummy track-started to ensure core is aware of what the
                                 // track was that caused the failure
                                 let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
-                                    track_id,
+                                    track_id: track_id.clone(),
                                     position: Duration::from_secs(0),
                                 }));
                                 update_and_send_state(
@@ -127,7 +127,8 @@ impl PlaybackThread {
                                     &mut state,
                                     PlaybackState::Stopped,
                                 );
-                                let _ = logic_tx.send(PTLM::FailedToPlayTrack(err.to_string()));
+                                let _ = logic_tx
+                                    .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
                                 continue;
                             }
                         };

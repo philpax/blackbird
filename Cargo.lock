@@ -668,6 +668,7 @@ name = "blackbird-state"
 version = "0.1.0"
 dependencies = [
  "blackbird-subsonic",
+ "serde",
 ]
 
 [[package]]

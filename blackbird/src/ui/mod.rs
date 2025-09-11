@@ -48,7 +48,10 @@ pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
     if let Some(error) = logic.get_error() {
         let mut open = true;
         egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
-            ui.label(&error);
+            ui.label(egui::RichText::new(error.display_name()).heading());
+            ui.label(egui::RichText::new(
+                error.display_message(&logic.get_state().read().unwrap()),
+            ));
         });
         if !open {
             logic.clear_error();

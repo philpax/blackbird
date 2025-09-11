@@ -11,6 +11,7 @@ use blackbird_subsonic::ClientResult;
 
 use crate::{
     AppState, Logic, PlaybackMode,
+    app_state::AppStateError,
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
 
@@ -189,12 +190,15 @@ impl Logic {
                         && st.queue.current_target.as_ref() == Some(&track_id);
 
                     if is_current {
-                        st.error = Some(e.to_string());
-                        st.queue.pending_skip_after_error = true;
                         tracing::warn!(
                             "Load error for current target {track_id} (req_id={request_id}): {}",
-                            st.error.as_deref().unwrap_or("")
+                            e.to_string()
                         );
+                        st.error = Some(AppStateError::LoadTrackFailed {
+                            track_id,
+                            error: e.to_string(),
+                        });
+                        st.queue.pending_skip_after_error = true;
                     } else {
                         tracing::debug!(
                             "Load error for stale/non-current {track_id} (req_id={request_id}): {e}"

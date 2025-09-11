@@ -22,7 +22,7 @@ use tokio_thread::TokioThread;
 mod queue;
 
 mod app_state;
-pub use app_state::{AppState, PlaybackMode};
+pub use app_state::{AppState, AppStateError, PlaybackMode, TrackAndPosition};
 
 pub struct Logic {
     tokio_thread: TokioThread,
@@ -181,9 +181,13 @@ impl Logic {
                     tracing::debug!("TrackEnded: scheduling advance to next track");
                     self.handle_track_end_advance();
                 }
-                PlaybackToLogicMessage::FailedToPlayTrack(error) => {
-                    tracing::warn!("Failed to play track: {error}");
-                    self.write_state().error = Some(error);
+                PlaybackToLogicMessage::FailedToPlayTrack(track_id, error) => {
+                    tracing::error!(
+                        "Failed to play track `{}`: {error}",
+                        TrackDisplayDetails::string_report(&track_id, &self.state.read().unwrap())
+                    );
+                    self.write_state().error =
+                        Some(AppStateError::DecodeTrackFailed { track_id, error });
                     self.schedule_next_track();
                 }
                 PlaybackToLogicMessage::PlaybackStateChanged(_s) => {}
@@ -308,7 +312,10 @@ impl Logic {
                     }
                     Err(e) => {
                         let mut state = state.write().unwrap();
-                        state.error = Some(e.to_string());
+                        state.error = Some(AppStateError::CoverArtFetchFailed {
+                            cover_art_id: cover_art_id.clone(),
+                            error: e.to_string(),
+                        });
                         state.pending_cover_art_requests.remove(&cover_art_id);
                     }
                 }
@@ -356,7 +363,7 @@ impl Logic {
         )
     }
 
-    pub fn get_error(&self) -> Option<String> {
+    pub fn get_error(&self) -> Option<AppStateError> {
         self.read_state().error.clone()
     }
     pub fn clear_error(&self) {
@@ -414,8 +421,10 @@ impl Logic {
                 }
             };
 
-            if let Err(e) = future.await {
-                state.write().unwrap().error = Some(e.to_string());
+            if let Err(error) = future.await {
+                state.write().unwrap().error = Some(AppStateError::InitialFetchFailed {
+                    error: error.to_string(),
+                });
             }
         })
     }

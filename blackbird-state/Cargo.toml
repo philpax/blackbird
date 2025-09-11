@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 blackbird-subsonic = { path = "../blackbird-subsonic" }
+
+serde = { workspace = true }

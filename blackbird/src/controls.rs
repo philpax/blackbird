@@ -116,7 +116,7 @@ impl Controls {
                     })
                 }
                 PlaybackToLogicMessage::TrackEnded
-                | PlaybackToLogicMessage::FailedToPlayTrack(_) => {
+                | PlaybackToLogicMessage::FailedToPlayTrack(..) => {
                     // PlaybackStateChanged will take care of this
                     Ok(())
                 }
