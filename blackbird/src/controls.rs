@@ -83,10 +83,9 @@ impl Controls {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             let result = match event {
                 PlaybackToLogicMessage::TrackStarted(track_and_position) => {
-                    let display_details = TrackDisplayDetails::from_track_id(
-                        &track_and_position.track_id,
-                        track_and_position.position,
-                        &self.state,
+                    let display_details = TrackDisplayDetails::from_track_and_position(
+                        &track_and_position,
+                        &self.state.read().unwrap(),
                     );
                     if let Some(display_details) = display_details {
                         self.controls.set_metadata(MediaMetadata {

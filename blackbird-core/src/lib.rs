@@ -66,13 +66,11 @@ pub struct TrackDisplayDetails {
     pub track_position: Duration,
 }
 impl TrackDisplayDetails {
-    pub fn from_track_id(
-        track_id: &TrackId,
-        position: Duration,
-        state: &Arc<RwLock<AppState>>,
+    pub fn from_track_and_position(
+        track_and_position: &TrackAndPosition,
+        state: &AppState,
     ) -> Option<TrackDisplayDetails> {
-        let state = state.read().unwrap();
-        let track = state.track_map.get(track_id)?;
+        let track = state.track_map.get(&track_and_position.track_id)?;
         let album = state.albums.get(track.album_id.as_ref()?)?;
         Some(TrackDisplayDetails {
             album_name: album.name.clone(),
@@ -80,8 +78,45 @@ impl TrackDisplayDetails {
             track_title: track.title.clone(),
             track_artist: track.artist.clone(),
             track_duration: Duration::from_secs(track.duration.unwrap_or(1) as u64),
-            track_position: position,
+            track_position: track_and_position.position,
         })
+    }
+
+    /// Assumes a position of 0
+    pub fn from_track_id(track_id: &TrackId, state: &AppState) -> Option<TrackDisplayDetails> {
+        TrackDisplayDetails::from_track_and_position(
+            &TrackAndPosition {
+                track_id: track_id.clone(),
+                position: Duration::from_secs(0),
+            },
+            state,
+        )
+    }
+
+    /// Returns a string representation of the track, including the album artist, track title, and duration,
+    /// or the track ID if no information is available.
+    pub fn string_report(track_id: &TrackId, state: &AppState) -> String {
+        TrackDisplayDetails::from_track_id(track_id, state)
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| format!("unknown track {track_id}"))
+    }
+}
+impl std::fmt::Display for TrackDisplayDetails {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let artist = self.track_artist.as_ref().unwrap_or(&self.album_artist);
+        write!(f, "{} - {}", artist, self.track_title)?;
+        write!(f, " (")?;
+        if artist != &self.album_artist {
+            write!(f, "{} - ", self.album_artist)?;
+        }
+        write!(
+            f,
+            "{}) [{}/{}]",
+            self.album_artist,
+            util::seconds_to_hms_string(self.track_position.as_secs() as u32, false),
+            util::seconds_to_hms_string(self.track_duration.as_secs() as u32, false)
+        )?;
+        Ok(())
     }
 }
 
@@ -125,26 +160,18 @@ impl Logic {
     pub fn update(&mut self) {
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             match event {
-                PlaybackToLogicMessage::TrackStarted(track_and_duration) => {
-                    let info = TrackDisplayDetails::from_track_id(
-                        &track_and_duration.track_id,
-                        track_and_duration.position,
-                        &self.state,
+                PlaybackToLogicMessage::TrackStarted(track_and_position) => {
+                    tracing::debug!(
+                        "TrackStarted: {}",
+                        TrackDisplayDetails::string_report(
+                            &track_and_position.track_id,
+                            &self.state.read().unwrap()
+                        )
                     );
-                    if let Some(info) = info {
-                        tracing::debug!(
-                            "TrackStarted: {} - {}",
-                            info.album_artist,
-                            info.track_title
-                        );
-                    } else {
-                        tracing::warn!("TrackStarted: no info for {}", track_and_duration.track_id);
-                    }
-
-                    self.ensure_cache_window(&track_and_duration.track_id);
+                    self.ensure_cache_window(&track_and_position.track_id);
 
                     let mut st = self.write_state();
-                    st.current_track_and_position = Some(track_and_duration);
+                    st.current_track_and_position = Some(track_and_position);
                     st.started_loading_track = None;
                 }
                 PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
@@ -323,10 +350,9 @@ impl Logic {
 
     pub fn get_playing_info(&self) -> Option<TrackDisplayDetails> {
         let track_and_position = self.read_state().current_track_and_position.clone()?;
-        TrackDisplayDetails::from_track_id(
-            &track_and_position.track_id,
-            track_and_position.position,
-            &self.state,
+        TrackDisplayDetails::from_track_and_position(
+            &track_and_position,
+            &self.state.read().unwrap(),
         )
     }
 

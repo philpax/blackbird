@@ -1,11 +1,13 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{AlbumId, bs};
 
 /// A track ID
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct TrackId(pub String);
 impl std::fmt::Display for TrackId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{self:?}")
     }
 }
 
