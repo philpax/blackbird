@@ -34,6 +34,7 @@ pub enum PlaybackToLogicMessage {
     PlaybackStateChanged(PlaybackState),
     PositionChanged(TrackAndPosition),
     TrackEnded,
+    FailedToPlayTrack(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,8 +116,19 @@ impl PlaybackThread {
                         let decoder = match decoder {
                             Ok(decoder) => decoder,
                             Err(err) => {
-                                // TODO: Auto-skip instead
-                                panic!("Failed to create decoder: {err}");
+                                // Send a dummy track-started to ensure core is aware of what the
+                                // track was that caused the failure
+                                let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
+                                    track_id,
+                                    position: Duration::from_secs(0),
+                                }));
+                                update_and_send_state(
+                                    &logic_tx,
+                                    &mut state,
+                                    PlaybackState::Stopped,
+                                );
+                                let _ = logic_tx.send(PTLM::FailedToPlayTrack(err.to_string()));
+                                continue;
                             }
                         };
 

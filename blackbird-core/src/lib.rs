@@ -154,6 +154,11 @@ impl Logic {
                     tracing::debug!("TrackEnded: scheduling advance to next track");
                     self.handle_track_end_advance();
                 }
+                PlaybackToLogicMessage::FailedToPlayTrack(error) => {
+                    tracing::warn!("Failed to play track: {error}");
+                    self.write_state().error = Some(error);
+                    self.schedule_next_track();
+                }
                 PlaybackToLogicMessage::PlaybackStateChanged(_s) => {}
             }
         }

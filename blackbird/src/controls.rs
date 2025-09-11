@@ -116,7 +116,8 @@ impl Controls {
                         progress: Some(souvlaki::MediaPosition(track_and_position.position)),
                     })
                 }
-                PlaybackToLogicMessage::TrackEnded => {
+                PlaybackToLogicMessage::TrackEnded
+                | PlaybackToLogicMessage::FailedToPlayTrack(_) => {
                     // PlaybackStateChanged will take care of this
                     Ok(())
                 }

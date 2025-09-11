@@ -340,6 +340,7 @@ fn compute_neighbors(
         PlaybackMode::RepeatOne => Vec::new(),
         PlaybackMode::Sequential => {
             let Some(idx) = ordered_tracks.iter().position(|s| s == center) else {
+                tracing::warn!("Center track {center} not found in ordered tracks");
                 return vec![];
             };
             match dir {
