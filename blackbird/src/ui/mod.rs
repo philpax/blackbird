@@ -351,12 +351,11 @@ fn library(
                     let group_lines = group::line_count(&group);
 
                     // Handle cover art if enabled
-                    if config.general.album_art_enabled {
-                        if let Some(cover_art_id) = &group.cover_art_id {
-                            if !logic.has_cover_art(cover_art_id) {
-                                logic.fetch_cover_art(cover_art_id);
-                            }
-                        }
+                    if config.general.album_art_enabled
+                        && let Some(cover_art_id) = &group.cover_art_id
+                        && !logic.has_cover_art(cover_art_id)
+                    {
+                        logic.fetch_cover_art(cover_art_id);
                     }
 
                     // Get cover art if needed
