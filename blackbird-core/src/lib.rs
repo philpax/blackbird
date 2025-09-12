@@ -1,7 +1,7 @@
 pub mod util;
 
 pub use blackbird_state;
-use blackbird_state::TrackId;
+use blackbird_state::{AlbumId, TrackId};
 pub use blackbird_subsonic as bs;
 
 use std::{
@@ -58,8 +58,10 @@ impl LogicRequestHandle {
 
 #[derive(Debug, Clone)]
 pub struct TrackDisplayDetails {
+    pub album_id: AlbumId,
     pub album_name: String,
     pub album_artist: String,
+    pub track_id: TrackId,
     pub track_title: String,
     pub track_artist: Option<String>,
     pub track_duration: Duration,
@@ -73,8 +75,10 @@ impl TrackDisplayDetails {
         let track = state.track_map.get(&track_and_position.track_id)?;
         let album = state.albums.get(track.album_id.as_ref()?)?;
         Some(TrackDisplayDetails {
+            album_id: album.id.clone(),
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
+            track_id: track.id.clone(),
             track_title: track.title.clone(),
             track_artist: track.artist.clone(),
             track_duration: Duration::from_secs(track.duration.unwrap_or(1) as u64),
@@ -209,7 +213,7 @@ impl Logic {
                 LogicRequestMessage::StopCurrent => self.stop_current(),
                 LogicRequestMessage::Seek(duration) => self.seek_current(duration),
                 LogicRequestMessage::SeekBy { seconds } => {
-                    let Some(playing_info) = self.get_playing_info() else {
+                    let Some(playing_info) = self.get_track_display_details() else {
                         continue;
                     };
                     let current_position = playing_info.track_position;
@@ -355,7 +359,7 @@ impl Logic {
         self.read_state().has_loaded_all_tracks
     }
 
-    pub fn get_playing_info(&self) -> Option<TrackDisplayDetails> {
+    pub fn get_track_display_details(&self) -> Option<TrackDisplayDetails> {
         let track_and_position = self.read_state().current_track_and_position.clone()?;
         TrackDisplayDetails::from_track_and_position(
             &track_and_position,

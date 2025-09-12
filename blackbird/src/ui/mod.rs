@@ -6,10 +6,10 @@ mod style;
 mod track;
 mod util;
 
-use blackbird_core::{blackbird_state::TrackId, util::seconds_to_hms_string, PlaybackMode};
+use blackbird_core::{PlaybackMode, blackbird_state::TrackId, util::seconds_to_hms_string};
 pub use style::Style;
 
-use crate::{bc, config::Config, App};
+use crate::{App, bc, config::Config};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -93,7 +93,13 @@ impl App {
                     }
                 });
 
-                playing_track_info(ui, logic, config, has_loaded_all_tracks);
+                playing_track_info(
+                    ui,
+                    logic,
+                    config,
+                    has_loaded_all_tracks,
+                    &mut track_to_scroll_to,
+                );
                 scrub_bar(ui, logic, config);
 
                 ui.separator();
@@ -115,7 +121,14 @@ fn playing_track_info(
     logic: &mut bc::Logic,
     config: &Config,
     has_loaded_all_tracks: bool,
+    track_to_scroll_to: &mut Option<TrackId>,
 ) {
+    let track_display_details = logic.get_track_display_details();
+    let track_id = track_display_details
+        .as_ref()
+        .map(|tdd| tdd.track_id.clone());
+    let mut track_clicked = false;
+
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
@@ -125,11 +138,16 @@ fn playing_track_info(
                     ui.add_space(16.0);
                 }
 
-                if let Some(pi) = logic.get_playing_info() {
-                    ui.vertical(|ui| {
+                if let Some(tdd) = track_display_details {
+                    let ui_builder = egui::UiBuilder::new()
+                        .layout(egui::Layout::top_down(egui::Align::Min))
+                        .sense(egui::Sense::click());
+                    let r = ui.scope_builder(ui_builder, |ui| {
                         ui.horizontal(|ui| {
-                            if let Some(artist) =
-                                pi.track_artist.as_ref().filter(|a| **a != pi.album_artist)
+                            if let Some(artist) = tdd
+                                .track_artist
+                                .as_ref()
+                                .filter(|a| **a != tdd.album_artist)
                             {
                                 ui.add(
                                     egui::Label::new(
@@ -142,7 +160,7 @@ fn playing_track_info(
                             }
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&pi.track_title)
+                                    egui::RichText::new(&tdd.track_title)
                                         .color(config.style.track_name_playing()),
                                 )
                                 .selectable(false),
@@ -151,20 +169,22 @@ fn playing_track_info(
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&pi.album_name).color(config.style.album()),
+                                    egui::RichText::new(&tdd.album_name)
+                                        .color(config.style.album()),
                                 )
                                 .selectable(false),
                             );
                             ui.add(egui::Label::new(" by ").selectable(false));
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(&pi.album_artist)
-                                        .color(style::string_to_colour(&pi.album_artist)),
+                                    egui::RichText::new(&tdd.album_artist)
+                                        .color(style::string_to_colour(&tdd.album_artist)),
                                 )
                                 .selectable(false),
                             );
                         });
                     });
+                    track_clicked = r.response.clicked();
                 } else {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
@@ -229,12 +249,16 @@ fn playing_track_info(
             });
         }
     });
+
+    if track_clicked && let Some(track_id) = track_id {
+        *track_to_scroll_to = Some(track_id);
+    }
 }
 
 fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
     ui.horizontal(|ui| {
         let (position_secs, duration_secs) = logic
-            .get_playing_info()
+            .get_track_display_details()
             .map(|pi| {
                 (
                     pi.track_position.as_secs_f32(),
