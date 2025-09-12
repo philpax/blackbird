@@ -1,11 +1,13 @@
+use egui::{Align2, Rect, Sense, TextStyle, Ui, WidgetText, pos2, vec2};
+
 use crate::{
     bc::{blackbird_state::Track, util},
     ui::{style, util as ui_util},
 };
 
-pub fn track_length_str_width(track: &Track, ui: &egui::Ui) -> f32 {
-    egui::WidgetText::from(track_length_str(track))
-        .into_galley(ui, None, f32::INFINITY, egui::TextStyle::Body)
+pub fn track_length_str_width(track: &Track, ui: &Ui) -> f32 {
+    WidgetText::from(track_length_str(track))
+        .into_galley(ui, None, f32::INFINITY, TextStyle::Body)
         .size()
         .x
 }
@@ -23,7 +25,7 @@ pub struct TrackParams {
 
 pub fn ui(
     track: &Track,
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     style: &style::Style,
     album_artist: &str,
     params: TrackParams,
@@ -33,13 +35,13 @@ pub fn ui(
     let actual_row_height = params.track_row_height + total_spacing;
 
     // Create a rect for this track with proper spacing
-    let track_rect = egui::Rect::from_min_size(
-        egui::pos2(ui.min_rect().left(), params.track_y),
-        egui::vec2(ui.available_width(), actual_row_height),
+    let track_rect = Rect::from_min_size(
+        pos2(ui.min_rect().left(), params.track_y),
+        vec2(ui.available_width(), actual_row_height),
     );
 
     // Check for interactions with this track area
-    let track_response = ui.allocate_rect(track_rect, egui::Sense::click());
+    let track_response = ui.allocate_rect(track_rect, Sense::click());
 
     // Get track information
     let track_number = track.track.unwrap_or(0);
@@ -55,10 +57,10 @@ pub fn ui(
     // Draw track number (right-aligned in 32px column)
     let track_x = ui.min_rect().left() + 32.0;
     ui.painter().text(
-        egui::pos2(track_x, text_y),
-        egui::Align2::RIGHT_TOP,
+        pos2(track_x, text_y),
+        Align2::RIGHT_TOP,
         &track_str,
-        egui::TextStyle::Body.resolve(ui.style()),
+        TextStyle::Body.resolve(ui.style()),
         style.track_number(),
     );
 
@@ -73,20 +75,20 @@ pub fn ui(
     };
 
     ui.painter().text(
-        egui::pos2(title_x, text_y),
-        egui::Align2::LEFT_TOP,
+        pos2(title_x, text_y),
+        Align2::LEFT_TOP,
         &track.title,
-        egui::TextStyle::Body.resolve(ui.style()),
+        TextStyle::Body.resolve(ui.style()),
         title_color,
     );
 
     // Draw duration (right-aligned)
     let duration_str = track_length_str(track);
     ui.painter().text(
-        egui::pos2(ui.max_rect().right(), text_y),
-        egui::Align2::RIGHT_TOP,
+        pos2(ui.max_rect().right(), text_y),
+        Align2::RIGHT_TOP,
         &duration_str,
-        egui::TextStyle::Body.resolve(ui.style()),
+        TextStyle::Body.resolve(ui.style()),
         style.track_length(),
     );
 
@@ -99,10 +101,10 @@ pub fn ui(
         // Leave space for duration
         let artist_x = ui.max_rect().right() - params.max_track_length_width - 6.0;
         ui.painter().text(
-            egui::pos2(artist_x, text_y),
-            egui::Align2::RIGHT_TOP,
+            pos2(artist_x, text_y),
+            Align2::RIGHT_TOP,
             artist,
-            egui::TextStyle::Body.resolve(ui.style()),
+            TextStyle::Body.resolve(ui.style()),
             style::string_to_colour(artist).into(),
         );
     }

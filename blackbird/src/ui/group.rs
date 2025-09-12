@@ -4,6 +4,10 @@ use std::{
 };
 
 use blackbird_core::AppState;
+use egui::{
+    Align, Align2, Frame, Image, ImageSource, Label, Layout, Margin, RichText, TextFormat,
+    TextStyle, Ui, pos2, vec2,
+};
 
 use crate::{
     bc::{
@@ -20,10 +24,10 @@ pub struct GroupResponse<'a> {
 #[allow(clippy::too_many_arguments)]
 pub fn ui<'a>(
     group: &'a Group,
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     style: &style::Style,
     row_range: Range<usize>,
-    album_art: Option<egui::ImageSource>,
+    album_art: Option<ImageSource>,
     album_art_enabled: bool,
     state: Arc<RwLock<AppState>>,
     playing_track: Option<&TrackId>,
@@ -37,10 +41,10 @@ pub fn ui<'a>(
     if artist_visible || album_visible {
         ui.horizontal(|ui| {
             if album_art_enabled && (artist_visible || album_visible) {
-                let album_art_size = ui.text_style_height(&egui::TextStyle::Body) * 2.0;
+                let album_art_size = ui.text_style_height(&TextStyle::Body) * 2.0;
                 ui.add_sized(
                     [album_art_size, album_art_size],
-                    egui::Image::new(album_art.unwrap_or(egui::include_image!(
+                    Image::new(album_art.unwrap_or(egui::include_image!(
                         "../../assets/blackbird-female-bird.jpg"
                     ))),
                 );
@@ -50,8 +54,8 @@ pub fn ui<'a>(
                 // If the first row is visible, draw the artist.
                 if artist_visible {
                     ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&group.artist)
+                        Label::new(
+                            RichText::new(&group.artist)
                                 .color(style::string_to_colour(&group.artist)),
                         )
                         .selectable(false),
@@ -61,12 +65,12 @@ pub fn ui<'a>(
                 // the total duration.
                 if album_visible {
                     ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                             let mut layout_job = egui::text::LayoutJob::default();
                             layout_job.append(
                                 group.album.as_str(),
                                 0.0,
-                                egui::TextFormat {
+                                TextFormat {
                                     color: style.album(),
                                     ..Default::default()
                                 },
@@ -75,19 +79,19 @@ pub fn ui<'a>(
                                 layout_job.append(
                                     format!(" ({year})").as_str(),
                                     0.0,
-                                    egui::TextFormat {
+                                    TextFormat {
                                         color: style.album_year(),
                                         ..Default::default()
                                     },
                                 );
                             }
-                            ui.add(egui::Label::new(layout_job).selectable(false));
+                            ui.add(Label::new(layout_job).selectable(false));
                         });
 
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(util::seconds_to_hms_string(
+                                Label::new(
+                                    RichText::new(util::seconds_to_hms_string(
                                         group.duration,
                                         false,
                                     ))
@@ -107,14 +111,14 @@ pub fn ui<'a>(
     let track_end = row_range.end.saturating_sub(2);
 
     if track_start < track_end && !group.tracks.is_empty() {
-        egui::Frame::NONE
-            .inner_margin(egui::Margin {
+        Frame::NONE
+            .inner_margin(Margin {
                 left: 10,
-                ..egui::Margin::ZERO
+                ..Margin::ZERO
             })
             .show(ui, |ui| {
                 let tracks = &group.tracks;
-                let track_row_height = ui.text_style_height(&egui::TextStyle::Body);
+                let track_row_height = ui.text_style_height(&TextStyle::Body);
 
                 // Clamp the track slice to the actual number of tracks
                 let end = track_end.min(tracks.len());
@@ -139,7 +143,7 @@ pub fn ui<'a>(
 
                 // Set up the total height for all tracks in this range (with spacing)
                 let total_height = (end - start) as f32 * spaced_row_height;
-                ui.allocate_space(egui::vec2(ui.available_width(), total_height));
+                ui.allocate_space(vec2(ui.available_width(), total_height));
 
                 // Render only the visible tracks using direct positioning
                 for (track_index, track_id) in tracks[start..end].iter().enumerate() {
@@ -149,10 +153,10 @@ pub fn ui<'a>(
                     let Some(track) = track_map.get(track_id) else {
                         // Draw loading text directly with painter
                         ui.painter().text(
-                            egui::pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
-                            egui::Align2::LEFT_TOP,
+                            pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
+                            Align2::LEFT_TOP,
                             "[loading...]",
-                            egui::TextStyle::Body.resolve(ui.style()),
+                            TextStyle::Body.resolve(ui.style()),
                             ui.visuals().text_color(),
                         );
                         continue;

@@ -7,6 +7,13 @@ mod track;
 mod util;
 
 use blackbird_core::{PlaybackMode, blackbird_state::TrackId, util::seconds_to_hms_string};
+use egui::{
+    Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
+    ImageSource, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
+    Slider, Spinner, Ui, UiBuilder, Vec2, Visuals, Window, pos2,
+    style::{HandleShape, ScrollStyle},
+    vec2,
+};
 pub use style::Style;
 
 use crate::{App, bc, config::Config};
@@ -15,7 +22,7 @@ use crate::{App, bc, config::Config};
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
-    cc.egui_ctx.set_visuals(egui::Visuals::dark());
+    cc.egui_ctx.set_visuals(Visuals::dark());
     cc.egui_ctx.style_mut(|style| {
         style.visuals.panel_fill = config.style.background();
         style.visuals.override_text_color = Some(config.style.text());
@@ -24,16 +31,16 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
         options.input_options.line_scroll_speed = config.style.scroll_multiplier
     });
 
-    let mut fonts = egui::FontDefinitions::default();
+    let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         "GoNoto".into(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
+        Arc::new(FontData::from_static(include_bytes!(
             "../../assets/GoNotoKurrent-Regular.ttf"
         ))),
     );
     fonts
         .families
-        .entry(egui::FontFamily::Proportional)
+        .entry(FontFamily::Proportional)
         .or_default()
         .push("GoNoto".into());
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
@@ -44,7 +51,7 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
 }
 
 impl App {
-    pub fn render(&mut self, ctx: &egui::Context) {
+    pub fn render(&mut self, ctx: &Context) {
         let logic = &mut self.logic;
         let config = &self.config.read().unwrap();
 
@@ -57,9 +64,9 @@ impl App {
 
         if let Some(error) = logic.get_error() {
             let mut open = true;
-            egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
-                ui.label(egui::RichText::new(error.display_name()).heading());
-                ui.label(egui::RichText::new(
+            Window::new("Error").open(&mut open).show(ctx, |ui| {
+                ui.label(RichText::new(error.display_name()).heading());
+                ui.label(RichText::new(
                     error.display_message(&logic.get_state().read().unwrap()),
                 ));
             });
@@ -71,10 +78,10 @@ impl App {
         let margin = 8;
         let scroll_margin = 4;
         let has_loaded_all_tracks = logic.has_loaded_all_tracks();
-        egui::CentralPanel::default()
+        CentralPanel::default()
             .frame(
-                egui::Frame::default()
-                    .inner_margin(egui::Margin {
+                Frame::default()
+                    .inner_margin(Margin {
                         left: margin,
                         right: scroll_margin,
                         top: margin,
@@ -84,11 +91,11 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.input(|i| {
-                    if i.pointer.button_released(egui::PointerButton::Extra1) {
+                    if i.pointer.button_released(PointerButton::Extra1) {
                         logic.previous();
                     }
 
-                    if i.pointer.button_released(egui::PointerButton::Extra2) {
+                    if i.pointer.button_released(PointerButton::Extra2) {
                         logic.next();
                     }
                 });
@@ -117,7 +124,7 @@ impl App {
 }
 
 fn playing_track_info(
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     logic: &mut bc::Logic,
     config: &Config,
     has_loaded_all_tracks: bool,
@@ -130,18 +137,18 @@ fn playing_track_info(
     let mut track_clicked = false;
 
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.style_mut().spacing.item_spacing = egui::Vec2::ZERO;
+        ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+            ui.style_mut().spacing.item_spacing = Vec2::ZERO;
             ui.horizontal(|ui| {
                 if logic.should_show_loading_indicator() {
-                    ui.add(egui::Spinner::new());
+                    ui.add(Spinner::new());
                     ui.add_space(16.0);
                 }
 
                 if let Some(tdd) = track_display_details {
-                    let ui_builder = egui::UiBuilder::new()
-                        .layout(egui::Layout::top_down(egui::Align::Min))
-                        .sense(egui::Sense::click());
+                    let ui_builder = UiBuilder::new()
+                        .layout(Layout::top_down(Align::Min))
+                        .sense(Sense::click());
                     let r = ui.scope_builder(ui_builder, |ui| {
                         ui.horizontal(|ui| {
                             if let Some(artist) = tdd
@@ -150,17 +157,17 @@ fn playing_track_info(
                                 .filter(|a| **a != tdd.album_artist)
                             {
                                 ui.add(
-                                    egui::Label::new(
-                                        egui::RichText::new(artist)
+                                    Label::new(
+                                        RichText::new(artist)
                                             .color(style::string_to_colour(artist)),
                                     )
                                     .selectable(false),
                                 );
-                                ui.add(egui::Label::new(" - ").selectable(false));
+                                ui.add(Label::new(" - ").selectable(false));
                             }
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&tdd.track_title)
+                                Label::new(
+                                    RichText::new(&tdd.track_title)
                                         .color(config.style.track_name_playing()),
                                 )
                                 .selectable(false),
@@ -168,16 +175,15 @@ fn playing_track_info(
                         });
                         ui.horizontal(|ui| {
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&tdd.album_name)
-                                        .color(config.style.album()),
+                                Label::new(
+                                    RichText::new(&tdd.album_name).color(config.style.album()),
                                 )
                                 .selectable(false),
                             );
-                            ui.add(egui::Label::new(" by ").selectable(false));
+                            ui.add(Label::new(" by ").selectable(false));
                             ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&tdd.album_artist)
+                                Label::new(
+                                    RichText::new(&tdd.album_artist)
                                         .color(style::string_to_colour(&tdd.album_artist)),
                                 )
                                 .selectable(false),
@@ -190,7 +196,7 @@ fn playing_track_info(
                         ui.horizontal(|ui| {
                             let track_count = logic.get_state().read().unwrap().track_ids.len();
                             ui.add(
-                                egui::Label::new(format!(
+                                Label::new(format!(
                                     "Nothing playing | {}{} tracks",
                                     if has_loaded_all_tracks {
                                         ""
@@ -203,9 +209,7 @@ fn playing_track_info(
                             );
                         });
                         ui.horizontal(|ui| {
-                            ui.add(
-                                egui::Label::new("Click on a track to play it!").selectable(false),
-                            );
+                            ui.add(Label::new("Click on a track to play it!").selectable(false));
                         });
                     });
                 }
@@ -213,7 +217,7 @@ fn playing_track_info(
         });
 
         if logic.is_track_loaded() {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.style_mut().visuals.override_text_color = None;
 
                 let default = config.style.text();
@@ -255,7 +259,7 @@ fn playing_track_info(
     }
 }
 
-fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
+fn scrub_bar(ui: &mut Ui, logic: &mut bc::Logic, config: &Config) {
     ui.horizontal(|ui| {
         let (position_secs, duration_secs) = logic
             .get_track_display_details()
@@ -271,8 +275,8 @@ fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
         let [position_hms, duration_hms] =
             [position_secs, duration_secs].map(|s| seconds_to_hms_string(s as u32, true));
         ui.add(
-            egui::Label::new(
-                egui::RichText::new(format!("{position_hms} / {duration_hms}"))
+            Label::new(
+                RichText::new(format!("{position_hms} / {duration_hms}"))
                     .color(config.style.track_duration()),
             )
             .selectable(false),
@@ -286,9 +290,9 @@ fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
         ui.style_mut().spacing.slider_width =
             ui.available_width() - ui.style().spacing.window_margin.right as f32;
         let slider_response = ui.add(
-            egui::Slider::new(&mut slider_position, 0.0..=slider_duration)
+            Slider::new(&mut slider_position, 0.0..=slider_duration)
                 .show_value(false)
-                .handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 2.0 }),
+                .handle_shape(HandleShape::Rect { aspect_ratio: 2.0 }),
         );
 
         // If the user interacted with the slider, seek to that position
@@ -300,7 +304,7 @@ fn scrub_bar(ui: &mut egui::Ui, logic: &mut bc::Logic, config: &Config) {
 }
 
 fn library(
-    ui: &mut egui::Ui,
+    ui: &mut Ui,
     logic: &mut bc::Logic,
     config: &Config,
     has_loaded_all_tracks: bool,
@@ -309,17 +313,17 @@ fn library(
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
-            ui.add_sized(ui.available_size(), egui::Spinner::new());
+            ui.add_sized(ui.available_size(), Spinner::new());
             return;
         }
 
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
         // to 0, but egui doesn't allow that for solid scroll bars.
-        ui.style_mut().spacing.scroll = egui::style::ScrollStyle {
+        ui.style_mut().spacing.scroll = ScrollStyle {
             bar_inner_margin: scroll_margin,
             bar_width: 20.0,
             handle_min_length: 36.0,
-            ..egui::style::ScrollStyle::solid()
+            ..ScrollStyle::solid()
         };
         ui.style_mut().visuals.extreme_bg_color = config.style.background();
 
@@ -329,7 +333,7 @@ fn library(
 
         let area_offset_y = ui.cursor().top();
 
-        egui::ScrollArea::vertical()
+        ScrollArea::vertical()
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
                 if let Some(scroll_to_height) = track_to_scroll_to.and_then(|id| {
@@ -341,11 +345,11 @@ fn library(
                 }) {
                     let target_height = area_offset_y + scroll_to_height - viewport.min.y;
                     ui.scroll_to_rect(
-                        egui::Rect {
-                            min: egui::Pos2::new(viewport.min.x, target_height),
-                            max: egui::Pos2::new(viewport.max.x, target_height + spaced_row_height),
+                        Rect {
+                            min: Pos2::new(viewport.min.x, target_height),
+                            max: Pos2::new(viewport.max.x, target_height + spaced_row_height),
                         },
-                        Some(egui::Align::Center),
+                        Some(Align::Center),
                     );
                 }
 
@@ -396,9 +400,9 @@ fn library(
                     let group_y = current_row as f32 * spaced_row_height;
 
                     // Always render complete albums (no partial visibility check)
-                    let positioned_rect = egui::Rect::from_min_size(
-                        egui::pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
-                        egui::vec2(
+                    let positioned_rect = Rect::from_min_size(
+                        pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
+                        vec2(
                             ui.available_width(),
                             (group_lines - 2 * group::GROUP_MARGIN_BOTTOM_ROW_COUNT) as f32
                                 * spaced_row_height,
@@ -407,14 +411,14 @@ fn library(
 
                     // Display the complete group
                     let group_response = ui
-                        .scope_builder(egui::UiBuilder::new().max_rect(positioned_rect), |ui| {
+                        .scope_builder(UiBuilder::new().max_rect(positioned_rect), |ui| {
                             // Show the entire group (no row range filtering)
                             group::ui(
                                 &group,
                                 ui,
                                 &config.style,
                                 0..usize::MAX, // Show all rows of this group
-                                cover_art.map(|(id, bytes)| egui::ImageSource::Bytes {
+                                cover_art.map(|(id, bytes)| ImageSource::Bytes {
                                     uri: id.into(),
                                     bytes: bytes.into(),
                                 }),
@@ -438,21 +442,16 @@ fn library(
 
 /// Helper function to create a control button with optional color override
 /// Returns true if the button was clicked
-fn control_button(
-    ui: &mut egui::Ui,
-    icon: &str,
-    text_color: egui::Color32,
-    hover_color: egui::Color32,
-) -> bool {
+fn control_button(ui: &mut Ui, icon: &str, text_color: Color32, hover_color: Color32) -> bool {
     ui.scope(|ui| {
         let visuals = &mut ui.style_mut().visuals;
         visuals.widgets.inactive.fg_stroke.color = text_color;
         visuals.widgets.hovered.fg_stroke.color = hover_color;
         visuals.widgets.active.fg_stroke.color = hover_color;
         ui.add(
-            egui::Label::new(egui::RichText::new(icon).size(CONTROL_BUTTON_SIZE))
+            Label::new(RichText::new(icon).size(CONTROL_BUTTON_SIZE))
                 .selectable(false)
-                .sense(egui::Sense::click()),
+                .sense(Sense::click()),
         )
         .clicked()
     })
