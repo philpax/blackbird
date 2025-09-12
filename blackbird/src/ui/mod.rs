@@ -11,7 +11,7 @@ use egui::{
     Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
     ImageSource, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
     Slider, Spinner, Ui, UiBuilder, Vec2, Visuals, Window, pos2,
-    style::{HandleShape, ScrollStyle},
+    style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
 pub use style::Style;
@@ -26,6 +26,7 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
     cc.egui_ctx.style_mut(|style| {
         style.visuals.panel_fill = config.style.background();
         style.visuals.override_text_color = Some(config.style.text());
+        style.scroll_animation = ScrollAnimation::duration(0.2);
     });
     cc.egui_ctx.options_mut(|options| {
         options.input_options.line_scroll_speed = config.style.scroll_multiplier
