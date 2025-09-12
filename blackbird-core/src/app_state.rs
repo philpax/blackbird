@@ -21,6 +21,8 @@ pub struct AppState {
 
     pub current_track_and_position: Option<TrackAndPosition>,
     pub started_loading_track: Option<std::time::Instant>,
+    // bit ugly but cbf plumbing it better
+    pub last_requested_track_for_ui_scroll: Option<TrackId>,
     pub playback_mode: PlaybackMode,
     pub queue: QueueState,
 

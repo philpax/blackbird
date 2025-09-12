@@ -26,7 +26,6 @@ pub struct QueueState {
     pub current_target_request_id: Option<u64>,
     pub pending_skip_after_error: bool,
 }
-
 impl QueueState {
     pub fn new() -> Self {
         let now = SystemTime::now()
@@ -75,6 +74,8 @@ impl Logic {
     }
 
     pub(super) fn schedule_play_track(&self, track_id: &TrackId) {
+        self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
+
         // Set target and show loading indicator
         let req_id = {
             let mut st = self.write_state();

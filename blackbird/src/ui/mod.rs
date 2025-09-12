@@ -56,7 +56,12 @@ impl App {
         let logic = &mut self.logic;
         let config = &self.config.read().unwrap();
 
-        let mut track_to_scroll_to = None;
+        let mut track_to_scroll_to = logic
+            .get_state()
+            .write()
+            .unwrap()
+            .last_requested_track_for_ui_scroll
+            .take();
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
                 track_to_scroll_to = Some(track_and_position.track_id);
