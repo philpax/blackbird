@@ -1,4 +1,4 @@
-use crate::TrackId;
+use crate::{AlbumId, TrackId};
 
 /// An grouping of tracks.
 #[derive(Debug, Clone)]
@@ -15,4 +15,6 @@ pub struct Group {
     pub tracks: Vec<TrackId>,
     /// The album cover art ID
     pub cover_art_id: Option<String>,
+    /// The associated album's ID
+    pub album_id: AlbumId,
 }

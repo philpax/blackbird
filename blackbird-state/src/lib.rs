@@ -146,6 +146,7 @@ pub async fn fetch_all(
                     duration: album.duration,
                     tracks: vec![],
                     cover_art_id: album.cover_art_id.clone(),
+                    album_id: album.id.clone(),
                 });
             }
 

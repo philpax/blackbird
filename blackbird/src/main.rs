@@ -56,6 +56,7 @@ pub struct App {
     config: Arc<RwLock<Config>>,
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
+    playback_to_logic_rx: bc::PlaybackToLogicRx,
     controls: controls::Controls,
     logic: bc::Logic,
     current_window_position: Option<(i32, i32)>,
@@ -106,6 +107,7 @@ impl App {
             config,
             _config_reload_thread,
             _repaint_thread,
+            playback_to_logic_rx: logic.subscribe_to_playback_events(),
             controls,
             logic,
             current_window_position: None,
@@ -128,7 +130,7 @@ impl eframe::App for App {
             }
         });
 
-        ui::render(ctx, &self.config.read().unwrap(), &mut self.logic);
+        self.render(ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

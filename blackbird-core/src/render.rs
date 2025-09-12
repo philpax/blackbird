@@ -10,22 +10,17 @@ pub struct VisibleGroupSet {
 }
 
 impl Logic {
-    pub fn calculate_total_rows(
-        &self,
-        group_margin_bottom_row_count: usize,
-        group_line_count_getter: impl Fn(&Group) -> usize,
-    ) -> usize {
+    pub fn calculate_total_rows(&self, group_line_count_getter: impl Fn(&Group) -> usize) -> usize {
         self.read_state()
             .groups
             .iter()
-            .map(|group| group_line_count_getter(group) + group_margin_bottom_row_count)
+            .map(|group| group_line_count_getter(group))
             .sum()
     }
 
     pub fn get_visible_groups(
         &self,
         visible_row_range: std::ops::Range<usize>,
-        group_margin_bottom_row_count: usize,
         group_line_count_getter: impl Fn(&Group) -> usize,
     ) -> VisibleGroupSet {
         let state = self.read_state();
@@ -38,7 +33,7 @@ impl Logic {
         // First pass: find albums that intersect with visible range
         let mut intersecting_album_indices = Vec::new();
         for (album_index, group) in state.groups.iter().enumerate() {
-            let group_lines = group_line_count_getter(group) + group_margin_bottom_row_count;
+            let group_lines = group_line_count_getter(group);
             let group_range = current_row..(current_row + group_lines);
 
             // Check if this album intersects with visible range
@@ -69,7 +64,7 @@ impl Logic {
         current_row = 0;
         for i in 0..start_album_index {
             let group = &state.groups[i];
-            let group_lines = group_line_count_getter(group) + group_margin_bottom_row_count;
+            let group_lines = group_line_count_getter(group);
             current_row += group_lines;
         }
         let start_row = current_row;

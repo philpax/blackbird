@@ -181,10 +181,35 @@ pub fn ui<'a>(
     GroupResponse { clicked_track }
 }
 
+pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
+pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
+pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
+
 pub fn line_count(group: &Group) -> usize {
-    let artist_lines = 1;
-    let album_lines = 1;
     let track_lines = group.tracks.len();
 
-    artist_lines + album_lines + track_lines
+    GROUP_ARTIST_LINE_COUNT + GROUP_ALBUM_LINE_COUNT + track_lines + GROUP_MARGIN_BOTTOM_ROW_COUNT
+}
+
+pub fn target_scroll_height_for_track(
+    state: &AppState,
+    spaced_row_height: f32,
+    track_id: &TrackId,
+) -> Option<f32> {
+    let track = state.track_map.get(track_id)?;
+    let album_id = track.album_id.as_ref()?;
+
+    let mut scroll_to_rows = 0;
+    for group in &state.groups {
+        if group.album_id == *album_id {
+            scroll_to_rows += GROUP_ARTIST_LINE_COUNT;
+            scroll_to_rows += GROUP_ALBUM_LINE_COUNT;
+            scroll_to_rows += group.tracks.iter().take_while(|id| *id != track_id).count();
+            break;
+        }
+
+        scroll_to_rows += line_count(group);
+    }
+
+    Some(scroll_to_rows as f32 * spaced_row_height)
 }

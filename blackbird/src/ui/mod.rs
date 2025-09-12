@@ -6,11 +6,10 @@ mod style;
 mod track;
 mod util;
 
-use blackbird_core::util::seconds_to_hms_string;
-use blackbird_core::PlaybackMode;
+use blackbird_core::{blackbird_state::TrackId, util::seconds_to_hms_string, PlaybackMode};
 pub use style::Style;
 
-use crate::{bc, config::Config};
+use crate::{bc, config::Config, App};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -44,58 +43,71 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
     egui_extras::install_image_loaders(&cc.egui_ctx);
 }
 
-pub fn render(ctx: &egui::Context, config: &Config, logic: &mut bc::Logic) {
-    if let Some(error) = logic.get_error() {
-        let mut open = true;
-        egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
-            ui.label(egui::RichText::new(error.display_name()).heading());
-            ui.label(egui::RichText::new(
-                error.display_message(&logic.get_state().read().unwrap()),
-            ));
-        });
-        if !open {
-            logic.clear_error();
+impl App {
+    pub fn render(&mut self, ctx: &egui::Context) {
+        let logic = &mut self.logic;
+        let config = &self.config.read().unwrap();
+
+        let mut track_to_scroll_to = None;
+        while let Ok(event) = self.playback_to_logic_rx.try_recv() {
+            if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
+                track_to_scroll_to = Some(track_and_position.track_id);
+            }
         }
-    }
 
-    let margin = 8;
-    let scroll_margin = 4;
-    let has_loaded_all_tracks = logic.has_loaded_all_tracks();
-    egui::CentralPanel::default()
-        .frame(
-            egui::Frame::default()
-                .inner_margin(egui::Margin {
-                    left: margin,
-                    right: scroll_margin,
-                    top: margin,
-                    bottom: margin,
-                })
-                .fill(config.style.background()),
-        )
-        .show(ctx, |ui| {
-            ui.input(|i| {
-                if i.pointer.button_released(egui::PointerButton::Extra1) {
-                    logic.previous();
-                }
-
-                if i.pointer.button_released(egui::PointerButton::Extra2) {
-                    logic.next();
-                }
+        if let Some(error) = logic.get_error() {
+            let mut open = true;
+            egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
+                ui.label(egui::RichText::new(error.display_name()).heading());
+                ui.label(egui::RichText::new(
+                    error.display_message(&logic.get_state().read().unwrap()),
+                ));
             });
+            if !open {
+                logic.clear_error();
+            }
+        }
 
-            playing_track_info(ui, logic, config, has_loaded_all_tracks);
-            scrub_bar(ui, logic, config);
+        let margin = 8;
+        let scroll_margin = 4;
+        let has_loaded_all_tracks = logic.has_loaded_all_tracks();
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .inner_margin(egui::Margin {
+                        left: margin,
+                        right: scroll_margin,
+                        top: margin,
+                        bottom: margin,
+                    })
+                    .fill(config.style.background()),
+            )
+            .show(ctx, |ui| {
+                ui.input(|i| {
+                    if i.pointer.button_released(egui::PointerButton::Extra1) {
+                        logic.previous();
+                    }
 
-            ui.separator();
+                    if i.pointer.button_released(egui::PointerButton::Extra2) {
+                        logic.next();
+                    }
+                });
 
-            library(
-                ui,
-                logic,
-                config,
-                has_loaded_all_tracks,
-                scroll_margin.into(),
-            );
-        });
+                playing_track_info(ui, logic, config, has_loaded_all_tracks);
+                scrub_bar(ui, logic, config);
+
+                ui.separator();
+
+                library(
+                    ui,
+                    logic,
+                    config,
+                    has_loaded_all_tracks,
+                    scroll_margin.into(),
+                    track_to_scroll_to,
+                );
+            });
+    }
 }
 
 fn playing_track_info(
@@ -269,6 +281,7 @@ fn library(
     config: &Config,
     has_loaded_all_tracks: bool,
     scroll_margin: f32,
+    track_to_scroll_to: Option<TrackId>,
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
@@ -287,16 +300,31 @@ fn library(
         ui.style_mut().visuals.extreme_bg_color = config.style.background();
 
         let spaced_row_height = util::spaced_row_height(ui);
-        let group_margin_bottom_row_count = 1;
-
-        // Get total rows for virtual rendering
         let total_rows =
-            logic.calculate_total_rows(group_margin_bottom_row_count, group::line_count);
+            logic.calculate_total_rows(group::line_count) - group::GROUP_MARGIN_BOTTOM_ROW_COUNT;
 
-        // Use custom virtual rendering for better performance
+        let area_offset_y = ui.cursor().top();
+
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
+                if let Some(scroll_to_height) = track_to_scroll_to.and_then(|id| {
+                    group::target_scroll_height_for_track(
+                        &logic.get_state().read().unwrap(),
+                        spaced_row_height,
+                        &id,
+                    )
+                }) {
+                    let target_height = area_offset_y + scroll_to_height - viewport.min.y;
+                    ui.scroll_to_rect(
+                        egui::Rect {
+                            min: egui::Pos2::new(viewport.min.x, target_height),
+                            max: egui::Pos2::new(viewport.max.x, target_height + spaced_row_height),
+                        },
+                        Some(egui::Align::Center),
+                    );
+                }
+
                 // Set the total height for the virtual content (with spacing)
                 ui.set_height(spaced_row_height * total_rows as f32);
 
@@ -313,17 +341,14 @@ fn library(
                 let visible_row_range = first_visible_row..last_visible_row;
 
                 // Calculate which groups are in view
-                let visible_groups = logic.get_visible_groups(
-                    visible_row_range.clone(),
-                    group_margin_bottom_row_count,
-                    group::line_count,
-                );
+                let visible_groups =
+                    logic.get_visible_groups(visible_row_range.clone(), group::line_count);
 
                 let playing_track_id = logic.get_playing_track_id();
                 let mut current_row = visible_groups.start_row;
 
                 for group in visible_groups.groups {
-                    let group_lines = group::line_count(&group) + group_margin_bottom_row_count;
+                    let group_lines = group::line_count(&group);
 
                     // Handle cover art if enabled
                     if config.general.album_art_enabled {
@@ -352,7 +377,7 @@ fn library(
                         egui::pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
                         egui::vec2(
                             ui.available_width(),
-                            (group_lines - group_margin_bottom_row_count) as f32
+                            (group_lines - 2 * group::GROUP_MARGIN_BOTTOM_ROW_COUNT) as f32
                                 * spaced_row_height,
                         ),
                     );
