@@ -30,8 +30,8 @@ pub struct Logic {
     playback_thread: PlaybackThread,
     playback_to_logic_rx: PlaybackToLogicRx,
 
-    logic_to_playback_tx: LogicRequestHandle,
-    logic_to_playback_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
+    logic_request_tx: LogicRequestHandle,
+    logic_request_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
 
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
@@ -141,7 +141,7 @@ impl Logic {
         let playback_thread = PlaybackThread::new();
         let playback_to_logic_rx = playback_thread.subscribe();
 
-        let (logic_to_playback_tx, logic_to_playback_rx) =
+        let (logic_request_tx, logic_request_rx) =
             std::sync::mpsc::channel::<LogicRequestMessage>();
 
         let logic = Logic {
@@ -150,8 +150,8 @@ impl Logic {
             playback_thread,
             playback_to_logic_rx,
 
-            logic_to_playback_tx: LogicRequestHandle(logic_to_playback_tx),
-            logic_to_playback_rx,
+            logic_request_tx: LogicRequestHandle(logic_request_tx),
+            logic_request_rx,
 
             state,
             client,
@@ -205,7 +205,7 @@ impl Logic {
             self.write_state().queue.pending_skip_after_error = false;
         }
 
-        while let Ok(event) = self.logic_to_playback_rx.try_recv() {
+        while let Ok(event) = self.logic_request_rx.try_recv() {
             match event {
                 LogicRequestMessage::PlayCurrent => self.play_current(),
                 LogicRequestMessage::PauseCurrent => self.pause_current(),
@@ -270,7 +270,7 @@ impl Logic {
 }
 impl Logic {
     pub fn request_handle(&self) -> LogicRequestHandle {
-        self.logic_to_playback_tx.clone()
+        self.logic_request_tx.clone()
     }
     pub fn subscribe_to_playback_events(&self) -> PlaybackToLogicRx {
         self.playback_thread.subscribe()
