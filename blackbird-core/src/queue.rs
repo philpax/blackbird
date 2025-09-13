@@ -212,23 +212,23 @@ impl Logic {
 
     pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
-        compute_neighbor(
+        compute_neighbour(
             &st.track_ids,
             &st.current_track_and_position.as_ref()?.track_id,
             st.playback_mode,
             st.queue.shuffle_seed,
-            Neighbor::Next,
+            Neighbour::Next,
         )
     }
 
     pub(super) fn compute_previous_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
-        compute_neighbor(
+        compute_neighbour(
             &st.track_ids,
             &st.current_track_and_position.as_ref()?.track_id,
             st.playback_mode,
             st.queue.shuffle_seed,
-            Neighbor::Prev,
+            Neighbour::Prev,
         )
     }
 
@@ -307,38 +307,38 @@ fn compute_window(
     let mut out = Vec::with_capacity(1 + radius * 2);
     out.push(center.clone());
 
-    // Collect neighbors in each direction in a single pass when possible
-    let prevs = compute_neighbors(ordered_tracks, center, mode, seed, Neighbor::Prev, radius);
+    // Collect neighbours in each direction in a single pass when possible
+    let prevs = compute_neighbours(ordered_tracks, center, mode, seed, Neighbour::Prev, radius);
     out.extend(prevs);
 
-    let nexts = compute_neighbors(ordered_tracks, center, mode, seed, Neighbor::Next, radius);
+    let nexts = compute_neighbours(ordered_tracks, center, mode, seed, Neighbour::Next, radius);
     out.extend(nexts);
 
     out
 }
 
 #[derive(Clone, Copy)]
-enum Neighbor {
+enum Neighbour {
     Prev,
     Next,
 }
-fn compute_neighbor(
+fn compute_neighbour(
     ordered_tracks: &[TrackId],
     center: &TrackId,
     mode: PlaybackMode,
     seed: u64,
-    dir: Neighbor,
+    dir: Neighbour,
 ) -> Option<TrackId> {
-    compute_neighbors(ordered_tracks, center, mode, seed, dir, 1)
+    compute_neighbours(ordered_tracks, center, mode, seed, dir, 1)
         .first()
         .cloned()
 }
-fn compute_neighbors(
+fn compute_neighbours(
     ordered_tracks: &[TrackId],
     center: &TrackId,
     mode: PlaybackMode,
     seed: u64,
-    dir: Neighbor,
+    dir: Neighbour,
     count: usize,
 ) -> Vec<TrackId> {
     match mode {
@@ -349,7 +349,7 @@ fn compute_neighbors(
                 return vec![];
             };
             match dir {
-                Neighbor::Prev => {
+                Neighbour::Prev => {
                     let mut v = Vec::new();
                     let mut remaining = count;
                     let mut current_idx = idx;
@@ -375,7 +375,7 @@ fn compute_neighbors(
                     }
                     v
                 }
-                Neighbor::Next => {
+                Neighbour::Next => {
                     let mut v = Vec::new();
                     let mut remaining = count;
                     let mut current_idx = idx;
@@ -402,7 +402,7 @@ fn compute_neighbors(
         PlaybackMode::Shuffle => {
             let cur_key = shuffle_key(center, seed);
             match dir {
-                Neighbor::Prev => {
+                Neighbour::Prev => {
                     // Keep k largest keys below cur_key using a min-heap (via Reverse)
                     let mut heap: BinaryHeap<(Reverse<u64>, TrackId)> = BinaryHeap::new();
                     for s in ordered_tracks {
@@ -423,7 +423,7 @@ fn compute_neighbors(
                     items.sort_by_key(|(k, _)| Reverse(*k));
                     items.into_iter().map(|(_, id)| id).collect()
                 }
-                Neighbor::Next => {
+                Neighbour::Next => {
                     // Keep k smallest keys above cur_key using a max-heap
                     let mut heap: BinaryHeap<(u64, TrackId)> = BinaryHeap::new();
                     for s in ordered_tracks {
