@@ -227,5 +227,5 @@ fn normalized_artist_sort_name(album: &Album, artists: &HashMap<ArtistId, Artist
                 raw_artist_sort_name.clone()
             })
         })
-        .unwrap_or_else(|| album_artist)
+        .unwrap_or(album_artist)
 }
