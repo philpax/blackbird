@@ -1,4 +1,4 @@
-use crate::bs;
+use crate::{ArtistId, bs};
 
 /// An album ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -18,6 +18,8 @@ pub struct Album {
     pub name: String,
     /// The album artist name
     pub artist: String,
+    /// The artist ID
+    pub artist_id: Option<ArtistId>,
     /// The album cover art ID
     pub cover_art_id: Option<String>,
     /// The number of tracks in the album
@@ -35,6 +37,7 @@ impl From<bs::AlbumID3> for Album {
             id: AlbumId(album.id),
             name: album.name,
             artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
+            artist_id: album.artist_id.map(ArtistId),
             cover_art_id: album.cover_art,
             track_count: album.song_count,
             duration: album.duration,

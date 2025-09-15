@@ -3,17 +3,22 @@
 //! Separated out to allow for use in other utilities.
 #![deny(missing_docs)]
 
-mod album;
-mod group;
-mod track;
-
 use std::{collections::HashMap, sync::Arc};
 
+pub use blackbird_subsonic as bs;
+use blackbird_subsonic::ArtistID3;
+
+mod album;
 pub use album::{Album, AlbumId};
+
+mod group;
 pub use group::Group;
+
+mod track;
 pub use track::{Track, TrackId};
 
-pub use blackbird_subsonic as bs;
+mod artist;
+pub use artist::ArtistId;
 
 /// The output of [`fetch_all`].
 pub struct FetchAllOutput {
@@ -55,8 +60,7 @@ pub async fn fetch_all(
                 song_offset: Some(offset),
                 ..Default::default()
             })
-            .await
-            .unwrap();
+            .await?;
 
         if response.song.is_empty() {
             break;
@@ -71,6 +75,34 @@ pub async fn fetch_all(
         );
         offset += track_count as u32;
         on_tracks_fetched(track_count as u32, offset);
+    }
+
+    // Fetch all artists.
+    let mut offset = 0;
+    let mut artists = HashMap::new();
+    loop {
+        let response = client
+            .search3(&bs::Search3Request {
+                query: "".to_string(),
+                artist_count: Some(10000),
+                artist_offset: Some(offset),
+                ..Default::default()
+            })
+            .await?;
+
+        if response.artist.is_empty() {
+            break;
+        }
+
+        let artist_count = response.artist.len();
+        artists.extend(
+            response
+                .artist
+                .into_iter()
+                .map(|a| (ArtistId(a.id.clone()), a)),
+        );
+
+        offset += artist_count as u32;
     }
 
     // This is all mad ineffcient but cbf doing it better.
@@ -89,7 +121,7 @@ pub async fn fetch_all(
                 let album = albums.get(album_id).unwrap_or_else(|| {
                     panic!("Album not found in state: {album_id:?}");
                 });
-                let album_artist = album.artist.to_lowercase();
+                let album_artist = normalized_artist_sort_name(album, &artists);
                 let is_various_artists = album_artist == "various artists";
                 (
                     id.clone(),
@@ -131,7 +163,7 @@ pub async fn fetch_all(
             });
 
             if !current_group.as_ref().is_some_and(|group| {
-                group.artist == album.artist
+                group.sort_artist == normalized_artist_sort_name(album, &artists)
                     && group.album == album.name
                     && group.year == album.year
             }) {
@@ -141,6 +173,7 @@ pub async fn fetch_all(
 
                 current_group = Some(Group {
                     artist: album.artist.clone(),
+                    sort_artist: normalized_artist_sort_name(album, &artists),
                     album: album.name.clone(),
                     year: album.year,
                     duration: album.duration,
@@ -167,4 +200,32 @@ pub async fn fetch_all(
         track_ids,
         groups,
     })
+}
+
+fn normalized_artist_sort_name(album: &Album, artists: &HashMap<ArtistId, ArtistID3>) -> String {
+    let album_artist = album.artist.to_lowercase();
+    album
+        .artist_id
+        .as_ref()
+        .and_then(|id| {
+            let raw_artist_sort_name = artists.get(id)?.sort_name.as_ref()?;
+            Some(if album_artist.starts_with("the ") {
+                format!("the {raw_artist_sort_name}")
+            } else if album_artist.starts_with("an ") {
+                format!("an {raw_artist_sort_name}")
+            } else if album_artist.starts_with("a ") {
+                format!("a {raw_artist_sort_name}")
+            } else if album_artist.starts_with("el ") {
+                format!("el {raw_artist_sort_name}")
+            } else if album_artist.starts_with("los ") {
+                format!("los {raw_artist_sort_name}")
+            } else if album_artist.starts_with("las ") {
+                format!("las {raw_artist_sort_name}")
+            } else if album_artist.starts_with("les ") {
+                format!("les {raw_artist_sort_name}")
+            } else {
+                raw_artist_sort_name.clone()
+            })
+        })
+        .unwrap_or_else(|| album_artist)
 }

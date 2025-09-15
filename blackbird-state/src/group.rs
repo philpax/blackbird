@@ -5,6 +5,8 @@ use crate::{AlbumId, TrackId};
 pub struct Group {
     /// The heading of the group.
     pub artist: String,
+    /// The sort artist of the group.
+    pub sort_artist: String,
     /// The subheading of the group.
     pub album: String,
     /// The year of the group.
