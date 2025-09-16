@@ -45,7 +45,6 @@ impl Config {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct General {
-    pub album_art_enabled: bool,
     pub repaint_secs: f32,
     pub window_position_x: i32,
     pub window_position_y: i32,
@@ -56,7 +55,6 @@ pub struct General {
 impl Default for General {
     fn default() -> Self {
         Self {
-            album_art_enabled: true,
             repaint_secs: 1.0,
             window_position_x: 0,
             window_position_y: 0,

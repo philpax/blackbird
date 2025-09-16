@@ -8,9 +8,9 @@ mod util;
 
 use blackbird_core::{PlaybackMode, blackbird_state::TrackId, util::seconds_to_hms_string};
 use egui::{
-    Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
-    ImageSource, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
-    Slider, Spinner, Ui, UiBuilder, Vec2, Visuals, Window, pos2,
+    Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Label,
+    Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner, Ui,
+    UiBuilder, Vec2, Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -398,24 +398,6 @@ fn library(
                 for group in visible_groups.groups {
                     let group_lines = group::line_count(&group);
 
-                    // Handle cover art if enabled
-                    if config.general.album_art_enabled
-                        && let Some(cover_art_id) = &group.cover_art_id
-                        && !logic.has_cover_art(cover_art_id)
-                    {
-                        logic.fetch_cover_art(cover_art_id);
-                    }
-
-                    // Get cover art if needed
-                    let cover_art = if config.general.album_art_enabled {
-                        group
-                            .cover_art_id
-                            .as_deref()
-                            .and_then(|id| Some((id.to_string(), logic.get_cover_art(id)?)))
-                    } else {
-                        None
-                    };
-
                     // Calculate the Y position for this group in viewport coordinates
                     let group_y = current_row as f32 * spaced_row_height;
 
@@ -437,12 +419,6 @@ fn library(
                                 &group,
                                 ui,
                                 &config.style,
-                                0..usize::MAX, // Show all rows of this group
-                                cover_art.map(|(id, bytes)| ImageSource::Bytes {
-                                    uri: id.into(),
-                                    bytes: bytes.into(),
-                                }),
-                                config.general.album_art_enabled,
                                 logic.get_state(),
                                 playing_track_id.as_ref(),
                             )
