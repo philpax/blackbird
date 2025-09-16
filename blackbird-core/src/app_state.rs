@@ -25,6 +25,7 @@ pub struct AppState {
     pub last_requested_track_for_ui_scroll: Option<TrackId>,
     pub playback_mode: PlaybackMode,
     pub queue: QueueState,
+    pub volume: f32,
 
     pub error: Option<AppStateError>,
 }

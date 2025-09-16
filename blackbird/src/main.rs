@@ -27,6 +27,7 @@ fn main() {
         config.server.username.clone(),
         config.server.password.clone(),
         config.server.transcode,
+        config.general.volume,
     );
 
     let native_options = eframe::NativeOptions {
@@ -143,6 +144,7 @@ impl eframe::App for App {
             config.general.window_width = width;
             config.general.window_height = height;
         }
+        config.general.volume = self.logic.get_volume();
         config.save();
     }
 }

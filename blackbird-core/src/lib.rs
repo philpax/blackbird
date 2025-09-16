@@ -128,8 +128,17 @@ impl Logic {
     const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
     const MAX_COVER_ART_CACHE_SIZE: usize = 32;
 
-    pub fn new(base_url: String, username: String, password: String, transcode: bool) -> Self {
-        let state = Arc::new(RwLock::new(AppState::default()));
+    pub fn new(
+        base_url: String,
+        username: String,
+        password: String,
+        transcode: bool,
+        volume: f32,
+    ) -> Self {
+        let state = Arc::new(RwLock::new(AppState {
+            volume,
+            ..AppState::default()
+        }));
         let client = Arc::new(bs::Client::new(
             base_url,
             username,
@@ -138,7 +147,7 @@ impl Logic {
         ));
 
         let tokio_thread = TokioThread::new();
-        let playback_thread = PlaybackThread::new();
+        let playback_thread = PlaybackThread::new(volume);
         let playback_to_logic_rx = playback_thread.subscribe();
 
         let (logic_request_tx, logic_request_rx) =
@@ -389,6 +398,16 @@ impl Logic {
 
     pub fn get_playback_mode(&self) -> PlaybackMode {
         self.read_state().playback_mode
+    }
+
+    pub fn get_volume(&self) -> f32 {
+        self.read_state().volume
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.write_state().volume = volume;
+        self.playback_thread
+            .send(LogicToPlaybackMessage::SetVolume(volume));
     }
 }
 impl Logic {

@@ -51,6 +51,7 @@ pub struct General {
     pub window_position_y: i32,
     pub window_width: u32,
     pub window_height: u32,
+    pub volume: f32,
 }
 impl Default for General {
     fn default() -> Self {
@@ -61,6 +62,7 @@ impl Default for General {
             window_position_y: 0,
             window_width: 640,
             window_height: 1280,
+            volume: 1.0,
         }
     }
 }
