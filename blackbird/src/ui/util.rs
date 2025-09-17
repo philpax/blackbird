@@ -1,11 +1,8 @@
 use egui::{TextStyle, Ui};
 
-/// Extra spacing added between tracks for better readability
-pub const EXTRA_TRACK_SPACING: f32 = 4.0;
-
 /// Calculate the total spacing between tracks (base egui spacing + extra spacing)
 pub fn track_spacing(ui: &Ui) -> f32 {
-    ui.spacing().item_spacing.y + EXTRA_TRACK_SPACING
+    ui.spacing().item_spacing.y
 }
 
 /// Calculate the row height including spacing for virtual rendering

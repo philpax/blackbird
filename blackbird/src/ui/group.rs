@@ -16,7 +16,7 @@ pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
 
 pub const GROUP_ALBUM_ART_SIZE: f32 = 128.0;
 // Should be roughly synchronised to GROUP_ALBUM_ART_SIZE
-pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 6;
+pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 8;
 
 pub struct GroupResponse<'a> {
     pub clicked_track: Option<&'a TrackId>,
