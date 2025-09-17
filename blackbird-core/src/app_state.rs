@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
 use serde::{Deserialize, Serialize};
@@ -15,8 +11,6 @@ pub struct AppState {
     pub track_map: HashMap<TrackId, Track>,
     pub groups: Vec<Arc<Group>>,
     pub albums: HashMap<AlbumId, Album>,
-    pub cover_art_cache: HashMap<String, (Vec<u8>, std::time::Instant)>,
-    pub pending_cover_art_requests: HashSet<String>,
     pub has_loaded_all_tracks: bool,
 
     pub current_track_and_position: Option<TrackAndPosition>,

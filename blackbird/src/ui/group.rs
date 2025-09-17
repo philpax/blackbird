@@ -1,6 +1,4 @@
-use std::sync::{Arc, RwLock};
-
-use blackbird_core::AppState;
+use blackbird_core::{AppState, Logic};
 use egui::{Align, Align2, Label, Layout, RichText, TextFormat, TextStyle, Ui, pos2, vec2};
 
 use crate::{
@@ -8,6 +6,7 @@ use crate::{
         blackbird_state::{Group, TrackId},
         util,
     },
+    cover_art_cache::CoverArtCache,
     ui::{style, track, util as ui_util},
 };
 
@@ -28,8 +27,9 @@ pub fn ui<'a>(
     group: &'a Group,
     ui: &mut Ui,
     style: &style::Style,
-    state: Arc<RwLock<AppState>>,
+    logic: &mut Logic,
     playing_track: Option<&TrackId>,
+    cover_art_cache: &mut CoverArtCache,
 ) -> GroupResponse<'a> {
     let mut clicked_track = None;
 
@@ -86,6 +86,7 @@ pub fn ui<'a>(
         let tracks = &group.tracks;
         let track_row_height = ui.text_style_height(&TextStyle::Body);
 
+        let state = logic.get_state();
         let track_map = &state.read().unwrap().track_map;
 
         // Do a pre-pass to calculate the maximum track length width for visible tracks
@@ -106,10 +107,7 @@ pub fn ui<'a>(
         let image_size = GROUP_ALBUM_ART_SIZE;
         let image_top_margin = 4.0;
         let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
-        egui::Image::new(egui::include_image!(
-            "../../assets/blackbird-female-bird.jpg"
-        ))
-        .paint_at(
+        egui::Image::new(cover_art_cache.get(logic, group.cover_art_id.as_deref())).paint_at(
             ui,
             egui::Rect {
                 min: image_pos,

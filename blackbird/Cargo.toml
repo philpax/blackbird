@@ -19,6 +19,8 @@ egui_extras = { version = "0.32.0", features = ["image"] }
 image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "png",
+    "webp",
+    "gif",
 ] }
 egui-phosphor = "0.10.0"
 souvlaki = "0.8.3"

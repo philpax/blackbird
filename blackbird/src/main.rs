@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 mod config;
 mod controls;
+mod cover_art_cache;
 mod ui;
 
 use blackbird_core as bc;
@@ -22,13 +23,16 @@ fn main() {
     let config = Config::load();
     config.save();
 
-    let logic = bc::Logic::new(
-        config.server.base_url.clone(),
-        config.server.username.clone(),
-        config.server.password.clone(),
-        config.server.transcode,
-        config.general.volume,
-    );
+    let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
+
+    let logic = bc::Logic::new(bc::LogicArgs {
+        base_url: config.server.base_url.clone(),
+        username: config.server.username.clone(),
+        password: config.server.password.clone(),
+        transcode: config.server.transcode,
+        volume: config.general.volume,
+        cover_art_loaded_tx,
+    });
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -48,7 +52,14 @@ fn main() {
     eframe::run_native(
         "blackbird",
         native_options,
-        Box::new(move |cc| Ok(Box::new(App::new(cc, config.clone(), logic)))),
+        Box::new(move |cc| {
+            Ok(Box::new(App::new(
+                cc,
+                config.clone(),
+                logic,
+                cover_art_loaded_rx,
+            )))
+        }),
     )
     .unwrap();
 }
@@ -60,6 +71,7 @@ pub struct App {
     playback_to_logic_rx: bc::PlaybackToLogicRx,
     controls: controls::Controls,
     logic: bc::Logic,
+    cover_art_cache: cover_art_cache::CoverArtCache,
     current_window_position: Option<(i32, i32)>,
     current_window_size: Option<(u32, u32)>,
 }
@@ -68,6 +80,7 @@ impl App {
         cc: &eframe::CreationContext<'_>,
         config: Arc<RwLock<Config>>,
         logic: bc::Logic,
+        cover_art_loaded_rx: std::sync::mpsc::Receiver<bc::CoverArt>,
     ) -> Self {
         let _config_reload_thread = std::thread::spawn({
             let config = config.clone();
@@ -102,6 +115,8 @@ impl App {
         )
         .expect("Failed to initialize media controls");
 
+        let cover_art_cache = cover_art_cache::CoverArtCache::new(cover_art_loaded_rx);
+
         ui::initialize(cc, &config.read().unwrap());
 
         App {
@@ -111,6 +126,7 @@ impl App {
             playback_to_logic_rx: logic.subscribe_to_playback_events(),
             controls,
             logic,
+            cover_art_cache,
             current_window_position: None,
             current_window_size: None,
         }
@@ -120,6 +136,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.controls.update();
         self.logic.update();
+        self.cover_art_cache.update();
 
         // Update current window size
         ctx.input(|i| {

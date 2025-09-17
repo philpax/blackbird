@@ -33,6 +33,8 @@ pub struct Logic {
     logic_request_tx: LogicRequestHandle,
     logic_request_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
 
+    cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
+
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
     transcode: bool,
@@ -57,10 +59,17 @@ impl LogicRequestHandle {
 }
 
 #[derive(Debug, Clone)]
+pub struct CoverArt {
+    pub cover_art_id: String,
+    pub cover_art: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TrackDisplayDetails {
     pub album_id: AlbumId,
     pub album_name: String,
     pub album_artist: String,
+    pub cover_art_id: Option<String>,
     pub track_id: TrackId,
     pub track_title: String,
     pub track_artist: Option<String>,
@@ -78,6 +87,7 @@ impl TrackDisplayDetails {
             album_id: album.id.clone(),
             album_name: album.name.clone(),
             album_artist: album.artist.clone(),
+            cover_art_id: album.cover_art_id.clone(),
             track_id: track.id.clone(),
             track_title: track.title.clone(),
             track_artist: track.artist.clone(),
@@ -124,16 +134,25 @@ impl std::fmt::Display for TrackDisplayDetails {
     }
 }
 
-impl Logic {
-    const MAX_CONCURRENT_COVER_ART_REQUESTS: usize = 10;
-    const MAX_COVER_ART_CACHE_SIZE: usize = 32;
+pub struct LogicArgs {
+    pub base_url: String,
+    pub username: String,
+    pub password: String,
+    pub transcode: bool,
+    pub volume: f32,
+    pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
+}
 
+impl Logic {
     pub fn new(
-        base_url: String,
-        username: String,
-        password: String,
-        transcode: bool,
-        volume: f32,
+        LogicArgs {
+            base_url,
+            username,
+            password,
+            transcode,
+            volume,
+            cover_art_loaded_tx,
+        }: LogicArgs,
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             volume,
@@ -161,6 +180,8 @@ impl Logic {
 
             logic_request_tx: LogicRequestHandle(logic_request_tx),
             logic_request_rx,
+
+            cover_art_loaded_tx,
 
             state,
             client,
@@ -286,66 +307,30 @@ impl Logic {
     }
 }
 impl Logic {
-    pub fn fetch_cover_art(&self, cover_art_id: &str) {
-        {
-            let mut state = self.write_state();
-            if state.pending_cover_art_requests.len() >= Self::MAX_CONCURRENT_COVER_ART_REQUESTS {
-                return;
-            }
-            if state.pending_cover_art_requests.contains(cover_art_id) {
-                return;
-            }
-            state
-                .pending_cover_art_requests
-                .insert(cover_art_id.to_string());
-        }
-
-        self.tokio_thread.spawn({
-            let client = self.client.clone();
-            let state = self.state.clone();
-            let cover_art_id = cover_art_id.to_string();
-            async move {
-                match client.get_cover_art(&cover_art_id).await {
-                    Ok(cover_art) => {
-                        let mut state = state.write().unwrap();
-                        if state.cover_art_cache.len() == Self::MAX_COVER_ART_CACHE_SIZE {
-                            let oldest_id = state
-                                .cover_art_cache
-                                .iter()
-                                .min_by_key(|(_, (_, time))| *time)
-                                .map(|(id, _)| id.clone())
-                                .expect("cover art cache not empty");
-                            state.cover_art_cache.remove(&oldest_id);
-                        }
-
-                        state.pending_cover_art_requests.remove(&cover_art_id);
-                        state
-                            .cover_art_cache
-                            .insert(cover_art_id, (cover_art, std::time::Instant::now()));
-                    }
-                    Err(e) => {
-                        let mut state = state.write().unwrap();
-                        state.error = Some(AppStateError::CoverArtFetchFailed {
+    pub fn request_cover_art(&self, cover_art_id: &str) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let cover_art_id = cover_art_id.to_string();
+        let cover_art_loaded_tx = self.cover_art_loaded_tx.clone();
+        self.tokio_thread.spawn(async move {
+            match client.get_cover_art(&cover_art_id).await {
+                Ok(cover_art) => {
+                    cover_art_loaded_tx
+                        .send(CoverArt {
                             cover_art_id: cover_art_id.clone(),
-                            error: e.to_string(),
-                        });
-                        state.pending_cover_art_requests.remove(&cover_art_id);
-                    }
+                            cover_art,
+                        })
+                        .unwrap();
+                }
+                Err(e) => {
+                    let mut state = state.write().unwrap();
+                    state.error = Some(AppStateError::CoverArtFetchFailed {
+                        cover_art_id: cover_art_id.clone(),
+                        error: e.to_string(),
+                    });
                 }
             }
         });
-    }
-
-    pub fn get_cover_art(&self, id: &str) -> Option<Vec<u8>> {
-        self.read_state()
-            .cover_art_cache
-            .get(id)
-            .map(|(img, _)| img.clone())
-    }
-
-    pub fn has_cover_art(&self, id: &str) -> bool {
-        let state = self.read_state();
-        state.cover_art_cache.contains_key(id) || state.pending_cover_art_requests.contains(id)
     }
 }
 impl Logic {

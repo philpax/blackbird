@@ -16,7 +16,7 @@ use egui::{
 };
 pub use style::Style;
 
-use crate::{App, bc, config::Config};
+use crate::{App, bc, config::Config, cover_art_cache::CoverArtCache};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -112,6 +112,7 @@ impl App {
                     config,
                     has_loaded_all_tracks,
                     &mut track_to_scroll_to,
+                    &mut self.cover_art_cache,
                 );
                 scrub_bar(ui, logic, config);
 
@@ -124,6 +125,7 @@ impl App {
                     has_loaded_all_tracks,
                     scroll_margin.into(),
                     track_to_scroll_to,
+                    &mut self.cover_art_cache,
                 );
             });
     }
@@ -135,6 +137,7 @@ fn playing_track_info(
     config: &Config,
     has_loaded_all_tracks: bool,
     track_to_scroll_to: &mut Option<TrackId>,
+    cover_art_cache: &mut CoverArtCache,
 ) {
     let track_display_details = logic.get_track_display_details();
     let track_id = track_display_details
@@ -159,9 +162,9 @@ fn playing_track_info(
                         let image_size = ui.text_style_height(&TextStyle::Body) * 2.5;
                         ui.add_sized(
                             vec2(image_size, image_size),
-                            egui::Image::new(egui::include_image!(
-                                "../../assets/blackbird-female-bird.jpg"
-                            )),
+                            egui::Image::new(
+                                cover_art_cache.get(logic, tdd.cover_art_id.as_deref()),
+                            ),
                         );
 
                         ui.add_space(6.0);
@@ -342,6 +345,7 @@ fn library(
     has_loaded_all_tracks: bool,
     scroll_margin: f32,
     track_to_scroll_to: Option<TrackId>,
+    cover_art_cache: &mut CoverArtCache,
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
@@ -431,8 +435,9 @@ fn library(
                                 &group,
                                 ui,
                                 &config.style,
-                                logic.get_state(),
+                                logic,
                                 playing_track_id.as_ref(),
+                                cover_art_cache,
                             )
                         })
                         .inner;
