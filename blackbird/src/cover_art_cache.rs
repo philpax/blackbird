@@ -1,9 +1,15 @@
-use std::{borrow::Cow, collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use blackbird_core::{CoverArt, Logic};
 
-const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(150);
-const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(10);
+const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(200);
+const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_CACHE_SIZE: usize = 15;
 
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
@@ -40,15 +46,44 @@ impl CoverArtCache {
             }
         }
 
-        let now = std::time::Instant::now();
-        self.cache.retain(|cover_art_id, cache_entry| {
-            let is_active = now.duration_since(cache_entry.last_requested) <= CACHE_ENTRY_TIMEOUT;
-            if !is_active {
-                tracing::debug!("Cache entry for {cover_art_id} timed out");
-                ctx.forget_image(&cover_art_id_to_url(cover_art_id));
-            }
-            is_active
-        });
+        let mut removal_candidates = HashSet::new();
+
+        // Remove entries that have timed out
+        for (cover_art_id, _) in self
+            .cache
+            .iter()
+            .filter(|(_, cache_entry)| cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT)
+        {
+            tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to timeout");
+            removal_candidates.insert(cover_art_id.clone());
+        }
+
+        // Remove any entries that exceed our cache size limit
+        let overage = self
+            .cache
+            .len()
+            .saturating_sub(MAX_CACHE_SIZE)
+            .saturating_sub(removal_candidates.len());
+        if overage > 0 {
+            tracing::debug!("Forgetting {overage} cover arts from cache due to size limit");
+        }
+        let mut cache_entries_by_oldest = self
+            .cache
+            .iter()
+            .map(|(cover_art_id, cache_entry)| (cover_art_id, cache_entry.first_requested))
+            .filter(|(cover_art_id, _)| !removal_candidates.contains(*cover_art_id))
+            .collect::<Vec<_>>();
+        cache_entries_by_oldest.sort_by_key(|(_, first_requested)| *first_requested);
+        for (cover_art_id, _) in cache_entries_by_oldest.iter().take(overage) {
+            tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to size limit");
+            removal_candidates.insert(cover_art_id.to_string());
+        }
+
+        self.cache
+            .retain(|cover_art_id, _| !removal_candidates.contains(cover_art_id));
+        for cover_art_id in removal_candidates {
+            ctx.forget_image(&cover_art_id_to_url(&cover_art_id));
+        }
     }
 
     pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&str>) -> egui::ImageSource<'static> {
