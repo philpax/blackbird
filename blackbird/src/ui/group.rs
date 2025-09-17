@@ -11,6 +11,14 @@ use crate::{
     ui::{style, track, util as ui_util},
 };
 
+pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
+pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
+pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
+
+pub const GROUP_ALBUM_ART_SIZE: f32 = 128.0;
+// Should be roughly synchronised to GROUP_ALBUM_ART_SIZE
+pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 6;
+
 pub struct GroupResponse<'a> {
     pub clicked_track: Option<&'a TrackId>,
 }
@@ -95,7 +103,7 @@ pub fn ui<'a>(
         let total_height = tracks.len() as f32 * spaced_row_height;
         ui.allocate_space(vec2(ui.available_width(), total_height));
 
-        let image_size = spaced_row_height * GROUP_ALBUM_ART_LINE_COUNT as f32;
+        let image_size = GROUP_ALBUM_ART_SIZE;
         let image_top_margin = 4.0;
         let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
         egui::Image::new(egui::include_image!(
@@ -157,11 +165,6 @@ pub fn ui<'a>(
 
     GroupResponse { clicked_track }
 }
-
-pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
-pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
-pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
-pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 5;
 
 pub fn line_count(group: &Group) -> usize {
     let track_lines = group.tracks.len();
