@@ -14,6 +14,7 @@ const MAX_CACHE_SIZE: usize = 30;
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
     cache: HashMap<String, CacheEntry>,
+    target_size: Option<usize>,
 }
 struct CacheEntry {
     first_requested: std::time::Instant,
@@ -26,10 +27,14 @@ enum CacheEntryState {
     Loaded(Arc<[u8]>),
 }
 impl CoverArtCache {
-    pub fn new(cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>) -> Self {
+    pub fn new(
+        cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
+        target_size: Option<usize>,
+    ) -> Self {
         Self {
             cover_art_loaded_rx,
             cache: HashMap::new(),
+            target_size,
         }
     }
 
@@ -108,7 +113,7 @@ impl CoverArtCache {
         if cache_entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT
             && let CacheEntryState::Unloaded = cache_entry.state
         {
-            logic.request_cover_art(cover_art_id);
+            logic.request_cover_art(cover_art_id, self.target_size);
             cache_entry.state = CacheEntryState::Loading;
             tracing::debug!("Requesting cover art for {cover_art_id}");
         }

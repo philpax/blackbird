@@ -9,10 +9,16 @@ impl Client {
     }
 
     /// Get cover art for a given ID.
-    pub async fn get_cover_art(&self, id: impl Into<String>) -> ClientResult<Vec<u8>> {
-        Self::check_for_subsonic_error_in_bytes(
-            self.request_raw("getCoverArt", &[("id", id.into())])
-                .await?,
-        )
+    pub async fn get_cover_art(
+        &self,
+        id: impl Into<String>,
+        size: Option<usize>,
+    ) -> ClientResult<Vec<u8>> {
+        let mut parameters = vec![("id", id.into())];
+        if let Some(size) = size {
+            parameters.push(("size", size.to_string()));
+        }
+
+        Self::check_for_subsonic_error_in_bytes(self.request_raw("getCoverArt", &parameters).await?)
     }
 }

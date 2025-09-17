@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 mod group;
+pub use group::GROUP_ALBUM_ART_SIZE;
+
 mod style;
 mod track;
 mod util;

@@ -115,7 +115,10 @@ impl App {
         )
         .expect("Failed to initialize media controls");
 
-        let cover_art_cache = cover_art_cache::CoverArtCache::new(cover_art_loaded_rx);
+        let cover_art_cache = cover_art_cache::CoverArtCache::new(
+            cover_art_loaded_rx,
+            Some(ui::GROUP_ALBUM_ART_SIZE as usize),
+        );
 
         ui::initialize(cc, &config.read().unwrap());
 

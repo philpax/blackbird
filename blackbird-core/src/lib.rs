@@ -307,13 +307,13 @@ impl Logic {
     }
 }
 impl Logic {
-    pub fn request_cover_art(&self, cover_art_id: &str) {
+    pub fn request_cover_art(&self, cover_art_id: &str, size: Option<usize>) {
         let client = self.client.clone();
         let state = self.state.clone();
         let cover_art_id = cover_art_id.to_string();
         let cover_art_loaded_tx = self.cover_art_loaded_tx.clone();
         self.tokio_thread.spawn(async move {
-            match client.get_cover_art(&cover_art_id).await {
+            match client.get_cover_art(&cover_art_id, size).await {
                 Ok(cover_art) => {
                     cover_art_loaded_tx
                         .send(CoverArt {
