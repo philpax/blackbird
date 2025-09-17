@@ -1,9 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use blackbird_core::AppState;
-use egui::{
-    Align, Align2, Frame, Label, Layout, Margin, RichText, TextFormat, TextStyle, Ui, pos2, vec2,
-};
+use egui::{Align, Align2, Label, Layout, RichText, TextFormat, TextStyle, Ui, pos2, vec2};
 
 use crate::{
     bc::{
@@ -76,67 +74,86 @@ pub fn ui<'a>(
         });
     });
 
-    Frame::NONE
-        .inner_margin(Margin {
-            left: 10,
-            ..Margin::ZERO
-        })
-        .show(ui, |ui| {
-            let tracks = &group.tracks;
-            let track_row_height = ui.text_style_height(&TextStyle::Body);
+    ui.scope(|ui| {
+        let tracks = &group.tracks;
+        let track_row_height = ui.text_style_height(&TextStyle::Body);
 
-            let track_map = &state.read().unwrap().track_map;
+        let track_map = &state.read().unwrap().track_map;
 
-            // Do a pre-pass to calculate the maximum track length width for visible tracks
-            let max_track_length_width = tracks
-                .iter()
-                .filter_map(|id| track_map.get(id))
-                .map(|track| track::track_length_str_width(track, ui))
-                .fold(0.0, f32::max);
+        // Do a pre-pass to calculate the maximum track length width for visible tracks
+        let max_track_length_width = tracks
+            .iter()
+            .filter_map(|id| track_map.get(id))
+            .map(|track| track::track_length_str_width(track, ui))
+            .fold(0.0, f32::max);
 
-            // Use shared spacing calculation
-            let total_spacing = ui_util::track_spacing(ui);
-            let spaced_row_height = track_row_height + total_spacing;
+        // Use shared spacing calculation
+        let total_spacing = ui_util::track_spacing(ui);
+        let spaced_row_height = track_row_height + total_spacing;
 
-            // Set up the total height for all tracks in this range (with spacing)
-            let total_height = tracks.len() as f32 * spaced_row_height;
-            ui.allocate_space(vec2(ui.available_width(), total_height));
+        // Set up the total height for all tracks in this range (with spacing)
+        let total_height = tracks.len() as f32 * spaced_row_height;
+        ui.allocate_space(vec2(ui.available_width(), total_height));
 
-            // Render only the visible tracks using direct positioning
-            for (track_index, track_id) in tracks.iter().enumerate() {
-                let y_offset = track_index as f32 * spaced_row_height;
-                let track_y = ui.min_rect().top() + y_offset;
+        let image_size = spaced_row_height * GROUP_ALBUM_ART_LINE_COUNT as f32;
+        let image_top_margin = 4.0;
+        let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
+        egui::Image::new(egui::include_image!(
+            "../../assets/blackbird-female-bird.jpg"
+        ))
+        .paint_at(
+            ui,
+            egui::Rect {
+                min: image_pos,
+                max: image_pos + vec2(image_size, image_size),
+            },
+        );
 
-                let Some(track) = track_map.get(track_id) else {
-                    // Draw loading text directly with painter
-                    ui.painter().text(
-                        pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
-                        Align2::LEFT_TOP,
-                        "[loading...]",
-                        TextStyle::Body.resolve(ui.style()),
-                        ui.visuals().text_color(),
+        let track_x = image_pos.x + image_size + 16.0;
+
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(egui::Rect {
+                min: pos2(track_x, ui.min_rect().top()),
+                max: pos2(ui.max_rect().right(), ui.max_rect().bottom()),
+            }),
+            |ui| {
+                // Render only the visible tracks using direct positioning
+                for (track_index, track_id) in tracks.iter().enumerate() {
+                    let y_offset = track_index as f32 * spaced_row_height;
+                    let track_y = ui.min_rect().top() + y_offset;
+
+                    let Some(track) = track_map.get(track_id) else {
+                        // Draw loading text directly with painter
+                        ui.painter().text(
+                            pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
+                            Align2::LEFT_TOP,
+                            "[loading...]",
+                            TextStyle::Body.resolve(ui.style()),
+                            ui.visuals().text_color(),
+                        );
+                        continue;
+                    };
+
+                    let r = track::ui(
+                        track,
+                        ui,
+                        style,
+                        &group.artist,
+                        track::TrackParams {
+                            max_track_length_width,
+                            playing: playing_track == Some(&track.id),
+                            track_y,
+                            track_row_height,
+                        },
                     );
-                    continue;
-                };
 
-                let r = track::ui(
-                    track,
-                    ui,
-                    style,
-                    &group.artist,
-                    track::TrackParams {
-                        max_track_length_width,
-                        playing: playing_track == Some(&track.id),
-                        track_y,
-                        track_row_height,
-                    },
-                );
-
-                if r.clicked {
-                    clicked_track = Some(track_id);
+                    if r.clicked {
+                        clicked_track = Some(track_id);
+                    }
                 }
-            }
-        });
+            },
+        );
+    });
 
     GroupResponse { clicked_track }
 }
@@ -144,11 +161,15 @@ pub fn ui<'a>(
 pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
 pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
 pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
+pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 5;
 
 pub fn line_count(group: &Group) -> usize {
     let track_lines = group.tracks.len();
 
-    GROUP_ARTIST_LINE_COUNT + GROUP_ALBUM_LINE_COUNT + track_lines + GROUP_MARGIN_BOTTOM_ROW_COUNT
+    GROUP_ARTIST_LINE_COUNT
+        + GROUP_ALBUM_LINE_COUNT
+        + track_lines.max(GROUP_ALBUM_ART_LINE_COUNT)
+        + GROUP_MARGIN_BOTTOM_ROW_COUNT
 }
 
 pub fn target_scroll_height_for_track(

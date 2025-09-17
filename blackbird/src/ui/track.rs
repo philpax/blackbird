@@ -54,8 +54,8 @@ pub fn ui(
     // Calculate text baseline position (add some padding from top)
     let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
 
-    // Draw track number (right-aligned in 32px column)
-    let track_x = ui.min_rect().left() + 32.0;
+    // Draw track number
+    let track_x = ui.min_rect().left() + 16.0;
     ui.painter().text(
         pos2(track_x, text_y),
         Align2::RIGHT_TOP,

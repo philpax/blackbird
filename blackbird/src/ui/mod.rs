@@ -9,8 +9,8 @@ mod util;
 use blackbird_core::{PlaybackMode, blackbird_state::TrackId, util::seconds_to_hms_string};
 use egui::{
     Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Label,
-    Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner, Ui,
-    UiBuilder, Vec2, Visuals, Window, pos2,
+    Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
+    TextStyle, Ui, UiBuilder, Vec2, Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -153,47 +153,59 @@ fn playing_track_info(
 
                 if let Some(tdd) = track_display_details {
                     let ui_builder = UiBuilder::new()
-                        .layout(Layout::top_down(Align::Min))
+                        .layout(Layout::left_to_right(Align::Min))
                         .sense(Sense::click());
                     let r = ui.scope_builder(ui_builder, |ui| {
-                        ui.horizontal(|ui| {
-                            if let Some(artist) = tdd
-                                .track_artist
-                                .as_ref()
-                                .filter(|a| **a != tdd.album_artist)
-                            {
+                        let image_size = ui.text_style_height(&TextStyle::Body) * 2.5;
+                        ui.add_sized(
+                            vec2(image_size, image_size),
+                            egui::Image::new(egui::include_image!(
+                                "../../assets/blackbird-female-bird.jpg"
+                            )),
+                        );
+
+                        ui.add_space(6.0);
+
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                if let Some(artist) = tdd
+                                    .track_artist
+                                    .as_ref()
+                                    .filter(|a| **a != tdd.album_artist)
+                                {
+                                    ui.add(
+                                        Label::new(
+                                            RichText::new(artist)
+                                                .color(style::string_to_colour(artist)),
+                                        )
+                                        .selectable(false),
+                                    );
+                                    ui.add(Label::new(" - ").selectable(false));
+                                }
                                 ui.add(
                                     Label::new(
-                                        RichText::new(artist)
-                                            .color(style::string_to_colour(artist)),
+                                        RichText::new(&tdd.track_title)
+                                            .color(config.style.track_name_playing()),
                                     )
                                     .selectable(false),
                                 );
-                                ui.add(Label::new(" - ").selectable(false));
-                            }
-                            ui.add(
-                                Label::new(
-                                    RichText::new(&tdd.track_title)
-                                        .color(config.style.track_name_playing()),
-                                )
-                                .selectable(false),
-                            );
-                        });
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                Label::new(
-                                    RichText::new(&tdd.album_name).color(config.style.album()),
-                                )
-                                .selectable(false),
-                            );
-                            ui.add(Label::new(" by ").selectable(false));
-                            ui.add(
-                                Label::new(
-                                    RichText::new(&tdd.album_artist)
-                                        .color(style::string_to_colour(&tdd.album_artist)),
-                                )
-                                .selectable(false),
-                            );
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(&tdd.album_name).color(config.style.album()),
+                                    )
+                                    .selectable(false),
+                                );
+                                ui.add(Label::new(" by ").selectable(false));
+                                ui.add(
+                                    Label::new(
+                                        RichText::new(&tdd.album_artist)
+                                            .color(style::string_to_colour(&tdd.album_artist)),
+                                    )
+                                    .selectable(false),
+                                );
+                            });
                         });
                     });
                     track_clicked = r.response.clicked();
