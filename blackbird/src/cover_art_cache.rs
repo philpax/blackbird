@@ -27,7 +27,7 @@ impl CoverArtCache {
         }
     }
 
-    pub fn update(&mut self) {
+    pub fn update(&mut self, ctx: &egui::Context) {
         for incoming_cover_art in self.cover_art_loaded_rx.try_iter() {
             if let Some(cache_entry) = self.cache.get_mut(&incoming_cover_art.cover_art_id) {
                 cache_entry.state = CacheEntryState::Loaded(incoming_cover_art.cover_art.into());
@@ -45,6 +45,7 @@ impl CoverArtCache {
             let is_active = now.duration_since(cache_entry.last_requested) <= CACHE_ENTRY_TIMEOUT;
             if !is_active {
                 tracing::debug!("Cache entry for {cover_art_id} timed out");
+                ctx.forget_image(&cover_art_id_to_url(cover_art_id));
             }
             is_active
         });
@@ -55,7 +56,7 @@ impl CoverArtCache {
         let missing_art_image = egui::include_image!("../assets/no-album-art.png");
 
         let Some(cover_art_id) = cover_art_id else {
-            return missing_art_image.clone();
+            return missing_art_image;
         };
 
         let cache_entry = self
@@ -78,12 +79,16 @@ impl CoverArtCache {
         }
 
         match &cache_entry.state {
-            CacheEntryState::Unloaded => loading_image.clone(),
-            CacheEntryState::Loading => loading_image.clone(),
+            CacheEntryState::Unloaded => loading_image,
+            CacheEntryState::Loading => loading_image,
             CacheEntryState::Loaded(cover_art) => egui::ImageSource::Bytes {
-                uri: Cow::Owned(format!("bytes://{cover_art_id}")),
+                uri: Cow::Owned(cover_art_id_to_url(cover_art_id)),
                 bytes: cover_art.clone().into(),
             },
         }
     }
+}
+
+fn cover_art_id_to_url(cover_art_id: &str) -> String {
+    format!("bytes://{cover_art_id}")
 }

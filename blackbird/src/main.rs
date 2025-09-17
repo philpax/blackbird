@@ -136,7 +136,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.controls.update();
         self.logic.update();
-        self.cover_art_cache.update();
+        self.cover_art_cache.update(ctx);
 
         // Update current window size
         ctx.input(|i| {
