@@ -281,10 +281,14 @@ fn playing_track_info(
 
                 ui.add_space(24.0);
 
-                // Playback mode buttons (Sequential, Shuffle, Repeat One)
+                // Playback mode buttons
                 let playback = logic.get_playback_mode();
                 for (mode, icon) in [
                     (PlaybackMode::RepeatOne, egui_phosphor::regular::REPEAT_ONCE),
+                    (
+                        PlaybackMode::GroupShuffle,
+                        egui_phosphor::regular::VINYL_RECORD,
+                    ),
                     (PlaybackMode::Shuffle, egui_phosphor::regular::SHUFFLE),
                     (PlaybackMode::Sequential, egui_phosphor::regular::QUEUE),
                 ]

@@ -421,6 +421,21 @@ impl Logic {
                         state.albums = result.albums;
                         state.track_map = result.track_map;
                         state.track_ids = result.track_ids;
+
+                        // Populate reverse lookup maps for efficient group shuffle navigation
+                        state.track_to_group_index.clear();
+                        state.track_to_group_track_index.clear();
+                        for (group_idx, group) in result.groups.iter().enumerate() {
+                            for (track_idx, track_id) in group.tracks.iter().enumerate() {
+                                state
+                                    .track_to_group_index
+                                    .insert(track_id.clone(), group_idx);
+                                state
+                                    .track_to_group_track_index
+                                    .insert(track_id.clone(), track_idx);
+                            }
+                        }
+
                         state.groups = result.groups;
                         state.has_loaded_all_tracks = true;
                     }

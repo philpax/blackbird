@@ -1,12 +1,12 @@
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use blackbird_state::TrackId;
+use blackbird_state::{Group, TrackId};
 use blackbird_subsonic::ClientResult;
 
 use crate::{
@@ -25,14 +25,17 @@ pub struct QueueState {
     pub current_target: Option<TrackId>,
     pub current_target_request_id: Option<u64>,
     pub pending_skip_after_error: bool,
+    pub group_shuffle_seed: u64,
 }
 impl QueueState {
     pub fn new() -> Self {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default();
+        let seed = next_seed((now.as_secs() << 32) ^ (now.subsec_nanos() as u64));
         QueueState {
-            shuffle_seed: next_seed((now.as_secs() << 32) ^ (now.subsec_nanos() as u64)),
+            shuffle_seed: seed,
+            group_shuffle_seed: next_seed(seed),
             ..Default::default()
         }
     }
@@ -214,9 +217,12 @@ impl Logic {
         let st = self.read_state();
         compute_neighbour(
             &st.track_ids,
-            &st.current_track_and_position.as_ref()?.track_id,
+            &st.groups,
+            &st.track_to_group_index,
+            &st.track_to_group_track_index,
+            &st.queue,
             st.playback_mode,
-            st.queue.shuffle_seed,
+            &st.current_track_and_position.as_ref()?.track_id,
             Neighbour::Next,
         )
     }
@@ -225,9 +231,12 @@ impl Logic {
         let st = self.read_state();
         compute_neighbour(
             &st.track_ids,
-            &st.current_track_and_position.as_ref()?.track_id,
+            &st.groups,
+            &st.track_to_group_index,
+            &st.track_to_group_track_index,
+            &st.queue,
             st.playback_mode,
-            st.queue.shuffle_seed,
+            &st.current_track_and_position.as_ref()?.track_id,
             Neighbour::Prev,
         )
     }
@@ -237,9 +246,12 @@ impl Logic {
             let st = self.read_state();
             compute_window(
                 &st.track_ids,
-                center,
+                &st.groups,
+                &st.track_to_group_index,
+                &st.track_to_group_track_index,
+                &st.queue,
                 st.playback_mode,
-                st.queue.shuffle_seed,
+                center,
                 2,
             )
         };
@@ -275,10 +287,10 @@ impl Logic {
     }
 }
 
-// Deterministic shuffle key based on seed and TrackId
-fn shuffle_key(track_id: &TrackId, seed: u64) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    track_id.0.hash(&mut hasher);
+// Deterministic shuffle key based on seed and id
+fn shuffle_key(id: impl Hash, seed: u64) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    id.hash(&mut hasher);
     let id_hash = hasher.finish();
     // Mix with seed using xorshift-like mixing
     let mut x = id_hash ^ seed;
@@ -297,21 +309,45 @@ fn next_seed(seed: u64) -> u64 {
     x.wrapping_mul(2685821657736338717)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_window(
     ordered_tracks: &[TrackId],
-    center: &TrackId,
+    groups: &[Arc<Group>],
+    track_to_group_index: &HashMap<TrackId, usize>,
+    track_to_group_track_index: &HashMap<TrackId, usize>,
+    queue: &QueueState,
     mode: PlaybackMode,
-    seed: u64,
+    center: &TrackId,
     radius: usize,
 ) -> Vec<TrackId> {
     let mut out = Vec::with_capacity(1 + radius * 2);
     out.push(center.clone());
 
     // Collect neighbours in each direction in a single pass when possible
-    let prevs = compute_neighbours(ordered_tracks, center, mode, seed, Neighbour::Prev, radius);
+    let prevs = compute_neighbours(
+        ordered_tracks,
+        groups,
+        track_to_group_index,
+        track_to_group_track_index,
+        queue,
+        mode,
+        center,
+        Neighbour::Prev,
+        radius,
+    );
     out.extend(prevs);
 
-    let nexts = compute_neighbours(ordered_tracks, center, mode, seed, Neighbour::Next, radius);
+    let nexts = compute_neighbours(
+        ordered_tracks,
+        groups,
+        track_to_group_index,
+        track_to_group_track_index,
+        queue,
+        mode,
+        center,
+        Neighbour::Next,
+        radius,
+    );
     out.extend(nexts);
 
     out
@@ -322,22 +358,40 @@ enum Neighbour {
     Prev,
     Next,
 }
+#[allow(clippy::too_many_arguments)]
 fn compute_neighbour(
     ordered_tracks: &[TrackId],
-    center: &TrackId,
+    groups: &[Arc<Group>],
+    track_to_group_index: &HashMap<TrackId, usize>,
+    track_to_group_track_index: &HashMap<TrackId, usize>,
+    queue: &QueueState,
     mode: PlaybackMode,
-    seed: u64,
+    center: &TrackId,
     dir: Neighbour,
 ) -> Option<TrackId> {
-    compute_neighbours(ordered_tracks, center, mode, seed, dir, 1)
-        .first()
-        .cloned()
+    compute_neighbours(
+        ordered_tracks,
+        groups,
+        track_to_group_index,
+        track_to_group_track_index,
+        queue,
+        mode,
+        center,
+        dir,
+        1,
+    )
+    .first()
+    .cloned()
 }
+#[allow(clippy::too_many_arguments)]
 fn compute_neighbours(
     ordered_tracks: &[TrackId],
-    center: &TrackId,
+    groups: &[Arc<Group>],
+    track_to_group_index: &HashMap<TrackId, usize>,
+    track_to_group_track_index: &HashMap<TrackId, usize>,
+    queue: &QueueState,
     mode: PlaybackMode,
-    seed: u64,
+    center: &TrackId,
     dir: Neighbour,
     count: usize,
 ) -> Vec<TrackId> {
@@ -376,7 +430,7 @@ fn compute_neighbours(
             }
         }
         PlaybackMode::Shuffle => {
-            let cur_key = shuffle_key(center, seed);
+            let cur_key = shuffle_key(center, queue.shuffle_seed);
             match dir {
                 Neighbour::Prev => {
                     // Keep k largest keys below cur_key using a min-heap (via Reverse)
@@ -385,7 +439,7 @@ fn compute_neighbours(
                         if s == center {
                             continue;
                         }
-                        let k = shuffle_key(s, seed);
+                        let k = shuffle_key(s, queue.shuffle_seed);
                         if k < cur_key {
                             heap.push((Reverse(k), s.clone()));
                             if heap.len() > count {
@@ -406,7 +460,7 @@ fn compute_neighbours(
                         if s == center {
                             continue;
                         }
-                        let k = shuffle_key(s, seed);
+                        let k = shuffle_key(s, queue.shuffle_seed);
                         if k > cur_key {
                             heap.push((k, s.clone()));
                             if heap.len() > count {
@@ -421,5 +475,128 @@ fn compute_neighbours(
                 }
             }
         }
+        PlaybackMode::GroupShuffle => {
+            let (current_group_idx, current_track_idx) = {
+                let group_idx = track_to_group_index.get(center).copied();
+                let track_idx = track_to_group_track_index.get(center).copied();
+
+                let Some(group_idx) = group_idx else {
+                    tracing::warn!("Center track {center} not found in group index map");
+                    return vec![];
+                };
+                (group_idx, track_idx.unwrap_or(0))
+            };
+
+            if current_group_idx >= groups.len() {
+                return vec![];
+            }
+
+            let current_group = &groups[current_group_idx];
+            let mut result = Vec::new();
+            let mut remaining = count;
+
+            match dir {
+                Neighbour::Next => {
+                    // Try to get next track in current group first
+                    if current_track_idx + 1 < current_group.tracks.len() {
+                        result.push(current_group.tracks[current_track_idx + 1].clone());
+                        remaining -= 1;
+                    }
+
+                    // If we need more tracks, get next groups using shuffle-like ordering
+                    if remaining > 0 && groups.len() > 1 {
+                        let next_groups = get_groups_shuffle_order_impl(
+                            groups.len(),
+                            current_group_idx,
+                            queue.group_shuffle_seed,
+                            remaining,
+                            |k| k,                    // identity mapping
+                            |k, cur_key| k > cur_key, // filter: keys above current
+                        );
+                        for next_group_idx in next_groups {
+                            if next_group_idx < groups.len()
+                                && !groups[next_group_idx].tracks.is_empty()
+                            {
+                                result.push(groups[next_group_idx].tracks[0].clone());
+                                remaining -= 1;
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Neighbour::Prev => {
+                    // Try to get previous track in current group first
+                    if current_track_idx > 0 {
+                        result.push(current_group.tracks[current_track_idx - 1].clone());
+                        remaining -= 1;
+                    }
+
+                    // If we need more tracks, get previous groups using shuffle-like ordering
+                    if remaining > 0 && groups.len() > 1 {
+                        let prev_groups = get_groups_shuffle_order_impl(
+                            groups.len(),
+                            current_group_idx,
+                            queue.group_shuffle_seed,
+                            remaining,
+                            Reverse,                  // reverse mapping for descending order
+                            |k, cur_key| k < cur_key, // filter: keys below current
+                        );
+                        for prev_group_idx in prev_groups {
+                            if prev_group_idx < groups.len()
+                                && !groups[prev_group_idx].tracks.is_empty()
+                            {
+                                let last_track_idx = groups[prev_group_idx].tracks.len() - 1;
+                                result.push(groups[prev_group_idx].tracks[last_track_idx].clone());
+                                remaining -= 1;
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            result
+        }
     }
 }
+
+// Common implementation for finding groups in shuffle order
+fn get_groups_shuffle_order_impl<K: Ord + Copy>(
+    total_groups: usize,
+    current_group_idx: usize,
+    seed: u64,
+    count: usize,
+    key_mapper: impl Fn(u64) -> K,
+    key_filter: impl Fn(u64, u64) -> bool,
+) -> Vec<usize> {
+    if total_groups <= 1 {
+        return vec![];
+    }
+
+    let cur_key = shuffle_key(current_group_idx, seed);
+
+    // Build heap with mapped keys
+    let mut heap: BinaryHeap<(K, usize)> = BinaryHeap::new();
+    for group_idx in 0..total_groups {
+        if group_idx == current_group_idx {
+            continue;
+        }
+        let k = shuffle_key(group_idx, seed);
+        if key_filter(k, cur_key) {
+            heap.push((key_mapper(k), group_idx));
+            if heap.len() > count {
+                heap.pop();
+            }
+        }
+    }
+
+    // Extract and sort (heap order is already correct for our needs)
+    let mut items: Vec<(K, usize)> = heap.into_iter().collect();
+    items.sort_by_key(|(k, _)| *k);
+    items.into_iter().map(|(_, group_idx)| group_idx).collect()
+}
+

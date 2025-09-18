@@ -21,6 +21,10 @@ pub struct AppState {
     pub queue: QueueState,
     pub volume: f32,
 
+    // Reverse lookup maps for efficient group shuffle navigation
+    pub track_to_group_index: HashMap<TrackId, usize>,
+    pub track_to_group_track_index: HashMap<TrackId, usize>,
+
     pub error: Option<AppStateError>,
 }
 
@@ -72,6 +76,7 @@ pub enum PlaybackMode {
     Sequential,
     Shuffle,
     RepeatOne,
+    GroupShuffle,
 }
 impl PlaybackMode {
     pub fn as_str(&self) -> &'static str {
@@ -79,6 +84,7 @@ impl PlaybackMode {
             PlaybackMode::Sequential => "Sequential",
             PlaybackMode::Shuffle => "Shuffle",
             PlaybackMode::RepeatOne => "Repeat One",
+            PlaybackMode::GroupShuffle => "Group Shuffle",
         }
     }
 }
