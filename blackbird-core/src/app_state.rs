@@ -74,16 +74,18 @@ impl AppStateError {
 pub enum PlaybackMode {
     #[default]
     Sequential,
-    Shuffle,
     RepeatOne,
+    GroupRepeat,
+    Shuffle,
     GroupShuffle,
 }
 impl PlaybackMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             PlaybackMode::Sequential => "Sequential",
-            PlaybackMode::Shuffle => "Shuffle",
             PlaybackMode::RepeatOne => "Repeat One",
+            PlaybackMode::GroupRepeat => "Group Repeat",
+            PlaybackMode::Shuffle => "Shuffle",
             PlaybackMode::GroupShuffle => "Group Shuffle",
         }
     }

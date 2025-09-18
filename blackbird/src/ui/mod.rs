@@ -283,19 +283,41 @@ fn playing_track_info(
 
                 // Playback mode buttons
                 let playback = logic.get_playback_mode();
-                for (mode, icon) in [
-                    (PlaybackMode::RepeatOne, egui_phosphor::regular::REPEAT_ONCE),
+                for (mode, icon, render_separator) in [
+                    (
+                        PlaybackMode::Sequential,
+                        egui_phosphor::regular::QUEUE,
+                        true,
+                    ),
+                    (
+                        PlaybackMode::RepeatOne,
+                        egui_phosphor::regular::REPEAT_ONCE,
+                        false,
+                    ),
+                    (
+                        PlaybackMode::GroupRepeat,
+                        egui_phosphor::regular::REPEAT,
+                        true,
+                    ),
+                    (
+                        PlaybackMode::Shuffle,
+                        egui_phosphor::regular::SHUFFLE,
+                        false,
+                    ),
                     (
                         PlaybackMode::GroupShuffle,
                         egui_phosphor::regular::VINYL_RECORD,
+                        false,
                     ),
-                    (PlaybackMode::Shuffle, egui_phosphor::regular::SHUFFLE),
-                    (PlaybackMode::Sequential, egui_phosphor::regular::QUEUE),
                 ]
                 .iter()
                 .rev()
                 .copied()
                 {
+                    if render_separator {
+                        ui.separator();
+                    }
+
                     let button_color = if playback == mode { active } else { default };
                     if control_button(ui, icon, button_color, active, mode.as_str()) {
                         logic.set_playback_mode(mode);

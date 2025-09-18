@@ -396,7 +396,49 @@ fn compute_neighbours(
     count: usize,
 ) -> Vec<TrackId> {
     match mode {
-        PlaybackMode::RepeatOne => Vec::new(),
+        PlaybackMode::RepeatOne => vec![center.clone()],
+        PlaybackMode::GroupRepeat => {
+            let (current_group_idx, current_track_idx) = {
+                let group_idx = track_to_group_index.get(center).copied();
+                let track_idx = track_to_group_track_index.get(center).copied();
+
+                let Some(group_idx) = group_idx else {
+                    tracing::warn!("Center track {center} not found in group index map");
+                    return vec![];
+                };
+                (group_idx, track_idx.unwrap_or(0))
+            };
+
+            let Some(current_group) = groups
+                .get(current_group_idx)
+                .filter(|g| !g.tracks.is_empty() && g.tracks.len() > 1)
+            else {
+                return vec![center.clone()];
+            };
+
+            match dir {
+                Neighbour::Next => {
+                    let start_idx = (current_track_idx + 1) % current_group.tracks.len();
+                    current_group
+                        .tracks
+                        .iter()
+                        .cycle()
+                        .skip(start_idx)
+                        .take(count)
+                        .cloned()
+                        .collect()
+                }
+                Neighbour::Prev => {
+                    let len = current_group.tracks.len();
+                    (1..=count)
+                        .map(|i| {
+                            let idx = (current_track_idx + len - i) % len;
+                            current_group.tracks[idx].clone()
+                        })
+                        .collect()
+                }
+            }
+        }
         PlaybackMode::Sequential => {
             let Some(idx) = ordered_tracks.iter().position(|s| s == center) else {
                 tracing::warn!("Center track {center} not found in ordered tracks");
