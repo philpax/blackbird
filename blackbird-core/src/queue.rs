@@ -431,7 +431,7 @@ fn compute_neighbours(
         }
         PlaybackMode::Shuffle => {
             match dir {
-                Neighbour::Prev => get_tracks_shuffle_order_impl(
+                Neighbour::Prev => get_tracks_shuffle_order(
                     ordered_tracks,
                     center,
                     queue.shuffle_seed,
@@ -439,7 +439,7 @@ fn compute_neighbours(
                     Reverse,                  // reverse mapping for descending order
                     |k, cur_key| k < cur_key, // filter: keys below current
                 ),
-                Neighbour::Next => get_tracks_shuffle_order_impl(
+                Neighbour::Next => get_tracks_shuffle_order(
                     ordered_tracks,
                     center,
                     queue.shuffle_seed,
@@ -479,7 +479,7 @@ fn compute_neighbours(
 
                     // If we need more tracks, get next groups using shuffle-like ordering
                     if remaining > 0 && groups.len() > 1 {
-                        let next_groups = get_groups_shuffle_order_impl(
+                        let next_groups = get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             queue.group_shuffle_seed,
@@ -509,7 +509,7 @@ fn compute_neighbours(
 
                     // If we need more tracks, get previous groups using shuffle-like ordering
                     if remaining > 0 && groups.len() > 1 {
-                        let prev_groups = get_groups_shuffle_order_impl(
+                        let prev_groups = get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             queue.group_shuffle_seed,
@@ -538,8 +538,7 @@ fn compute_neighbours(
     }
 }
 
-// Common implementation for finding tracks in shuffle order
-fn get_tracks_shuffle_order_impl<K: Ord + Copy>(
+fn get_tracks_shuffle_order<K: Ord + Copy>(
     ordered_tracks: &[TrackId],
     center: &TrackId,
     seed: u64,
@@ -547,31 +546,20 @@ fn get_tracks_shuffle_order_impl<K: Ord + Copy>(
     key_mapper: impl Fn(u64) -> K,
     key_filter: impl Fn(u64, u64) -> bool,
 ) -> Vec<TrackId> {
-    let cur_key = shuffle_key(center, seed);
-
-    // Build heap with mapped keys
-    let mut heap: BinaryHeap<(K, TrackId)> = BinaryHeap::new();
-    for track in ordered_tracks {
-        if track == center {
-            continue;
-        }
-        let k = shuffle_key(track, seed);
-        if key_filter(k, cur_key) {
-            heap.push((key_mapper(k), track.clone()));
-            if heap.len() > count {
-                heap.pop();
-            }
-        }
-    }
-
-    // Extract and sort (heap order is already correct for our needs)
-    let mut items: Vec<(K, TrackId)> = heap.into_iter().collect();
-    items.sort_by_key(|(k, _)| *k);
-    items.into_iter().map(|(_, track_id)| track_id).collect()
+    get_shuffle_order_impl(
+        ordered_tracks
+            .iter()
+            .filter(|&track| track != center)
+            .cloned(),
+        shuffle_key(center, seed),
+        count,
+        |track| shuffle_key(track, seed),
+        key_mapper,
+        key_filter,
+    )
 }
 
-// Common implementation for finding groups in shuffle order
-fn get_groups_shuffle_order_impl<K: Ord + Copy>(
+fn get_groups_shuffle_order<K: Ord + Copy>(
     total_groups: usize,
     current_group_idx: usize,
     seed: u64,
@@ -579,30 +567,40 @@ fn get_groups_shuffle_order_impl<K: Ord + Copy>(
     key_mapper: impl Fn(u64) -> K,
     key_filter: impl Fn(u64, u64) -> bool,
 ) -> Vec<usize> {
-    if total_groups <= 1 {
-        return vec![];
-    }
+    get_shuffle_order_impl(
+        (0..total_groups).filter(|&group_idx| group_idx != current_group_idx),
+        shuffle_key(current_group_idx, seed),
+        count,
+        |group_idx| shuffle_key(*group_idx, seed),
+        key_mapper,
+        key_filter,
+    )
+}
 
-    let cur_key = shuffle_key(current_group_idx, seed);
-
-    // Build heap with mapped keys
-    let mut heap: BinaryHeap<(K, usize)> = BinaryHeap::new();
-    for group_idx in 0..total_groups {
-        if group_idx == current_group_idx {
-            continue;
-        }
-        let k = shuffle_key(group_idx, seed);
-        if key_filter(k, cur_key) {
-            heap.push((key_mapper(k), group_idx));
+// Common implementation for shuffle ordering of any items using BinaryHeap
+fn get_shuffle_order_impl<T: Ord + Clone, K: Ord + Copy>(
+    items: impl Iterator<Item = T>,
+    center_key: u64,
+    count: usize,
+    item_to_key: impl Fn(&T) -> u64,
+    key_mapper: impl Fn(u64) -> K,
+    key_filter: impl Fn(u64, u64) -> bool,
+) -> Vec<T> {
+    // Use heap to keep only the top-k items, avoiding full allocation
+    let mut heap: BinaryHeap<(K, T)> = BinaryHeap::new();
+    for item in items {
+        let k = item_to_key(&item);
+        if key_filter(k, center_key) {
+            heap.push((key_mapper(k), item));
+            // Keep only the closest `count` items
             if heap.len() > count {
                 heap.pop();
             }
         }
     }
 
-    // Extract and sort (heap order is already correct for our needs)
-    let mut items: Vec<(K, usize)> = heap.into_iter().collect();
+    // Extract items and sort by key (heap gives us max-first, we want sorted order)
+    let mut items: Vec<(K, T)> = heap.into_iter().collect();
     items.sort_by_key(|(k, _)| *k);
-    items.into_iter().map(|(_, group_idx)| group_idx).collect()
+    items.into_iter().map(|(_, item)| item).collect()
 }
-
