@@ -20,6 +20,8 @@ struct CacheEntry {
     first_requested: std::time::Instant,
     last_requested: std::time::Instant,
     state: CacheEntryState,
+    /// If set, this entry will never be evicted from the cache
+    priority: bool,
 }
 enum CacheEntryState {
     Unloaded,
@@ -54,11 +56,9 @@ impl CoverArtCache {
         let mut removal_candidates = HashSet::new();
 
         // Remove entries that have timed out
-        for (cover_art_id, _) in self
-            .cache
-            .iter()
-            .filter(|(_, cache_entry)| cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT)
-        {
+        for (cover_art_id, _) in self.cache.iter().filter(|(_, cache_entry)| {
+            cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT && !cache_entry.priority
+        }) {
             tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to timeout");
             removal_candidates.insert(cover_art_id.clone());
         }
@@ -75,10 +75,12 @@ impl CoverArtCache {
         let mut cache_entries_by_oldest = self
             .cache
             .iter()
-            .map(|(cover_art_id, cache_entry)| (cover_art_id, cache_entry.first_requested))
-            .filter(|(cover_art_id, _)| !removal_candidates.contains(*cover_art_id))
+            .map(|(cover_art_id, cache_entry)| (cover_art_id, cache_entry))
+            .filter(|(cover_art_id, cache_entry)| {
+                !(removal_candidates.contains(*cover_art_id) || cache_entry.priority)
+            })
             .collect::<Vec<_>>();
-        cache_entries_by_oldest.sort_by_key(|(_, first_requested)| *first_requested);
+        cache_entries_by_oldest.sort_by_key(|(_, cache_entry)| cache_entry.first_requested);
         for (cover_art_id, _) in cache_entries_by_oldest.iter().take(overage) {
             tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to size limit");
             removal_candidates.insert(cover_art_id.to_string());
@@ -91,7 +93,12 @@ impl CoverArtCache {
         }
     }
 
-    pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&str>) -> egui::ImageSource<'static> {
+    pub fn get(
+        &mut self,
+        logic: &Logic,
+        cover_art_id: Option<&str>,
+        priority: bool,
+    ) -> egui::ImageSource<'static> {
         let loading_image = egui::include_image!("../assets/no-album-art.png");
         let missing_art_image = egui::include_image!("../assets/no-album-art.png");
 
@@ -106,9 +113,11 @@ impl CoverArtCache {
                 first_requested: std::time::Instant::now(),
                 last_requested: std::time::Instant::now(),
                 state: CacheEntryState::Unloaded,
+                priority,
             });
 
         cache_entry.last_requested = std::time::Instant::now();
+        cache_entry.priority = priority;
 
         if cache_entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT
             && let CacheEntryState::Unloaded = cache_entry.state

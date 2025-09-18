@@ -164,9 +164,11 @@ fn playing_track_info(
                         let image_size = ui.text_style_height(&TextStyle::Body) * 2.5;
                         ui.add_sized(
                             vec2(image_size, image_size),
-                            egui::Image::new(
-                                cover_art_cache.get(logic, tdd.cover_art_id.as_deref()),
-                            ),
+                            egui::Image::new(cover_art_cache.get(
+                                logic,
+                                tdd.cover_art_id.as_deref(),
+                                true,
+                            )),
                         );
 
                         ui.add_space(6.0);

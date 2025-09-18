@@ -107,13 +107,14 @@ pub fn ui<'a>(
         let image_size = GROUP_ALBUM_ART_SIZE;
         let image_top_margin = 4.0;
         let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
-        egui::Image::new(cover_art_cache.get(logic, group.cover_art_id.as_deref())).paint_at(
-            ui,
-            egui::Rect {
-                min: image_pos,
-                max: image_pos + vec2(image_size, image_size),
-            },
-        );
+        egui::Image::new(cover_art_cache.get(logic, group.cover_art_id.as_deref(), false))
+            .paint_at(
+                ui,
+                egui::Rect {
+                    min: image_pos,
+                    max: image_pos + vec2(image_size, image_size),
+                },
+            );
 
         let track_x = image_pos.x + image_size + 16.0;
 
