@@ -430,49 +430,23 @@ fn compute_neighbours(
             }
         }
         PlaybackMode::Shuffle => {
-            let cur_key = shuffle_key(center, queue.shuffle_seed);
             match dir {
-                Neighbour::Prev => {
-                    // Keep k largest keys below cur_key using a min-heap (via Reverse)
-                    let mut heap: BinaryHeap<(Reverse<u64>, TrackId)> = BinaryHeap::new();
-                    for s in ordered_tracks {
-                        if s == center {
-                            continue;
-                        }
-                        let k = shuffle_key(s, queue.shuffle_seed);
-                        if k < cur_key {
-                            heap.push((Reverse(k), s.clone()));
-                            if heap.len() > count {
-                                heap.pop();
-                            }
-                        }
-                    }
-                    // Extract and sort by key descending (closest first)
-                    let mut items: Vec<(u64, TrackId)> =
-                        heap.into_iter().map(|(Reverse(k), id)| (k, id)).collect();
-                    items.sort_by_key(|(k, _)| Reverse(*k));
-                    items.into_iter().map(|(_, id)| id).collect()
-                }
-                Neighbour::Next => {
-                    // Keep k smallest keys above cur_key using a max-heap
-                    let mut heap: BinaryHeap<(u64, TrackId)> = BinaryHeap::new();
-                    for s in ordered_tracks {
-                        if s == center {
-                            continue;
-                        }
-                        let k = shuffle_key(s, queue.shuffle_seed);
-                        if k > cur_key {
-                            heap.push((k, s.clone()));
-                            if heap.len() > count {
-                                heap.pop();
-                            }
-                        }
-                    }
-                    // Extract and sort by key ascending (closest first)
-                    let mut items: Vec<(u64, TrackId)> = heap.into_iter().collect();
-                    items.sort_by_key(|(k, _)| *k);
-                    items.into_iter().map(|(_, id)| id).collect()
-                }
+                Neighbour::Prev => get_tracks_shuffle_order_impl(
+                    ordered_tracks,
+                    center,
+                    queue.shuffle_seed,
+                    count,
+                    Reverse,                  // reverse mapping for descending order
+                    |k, cur_key| k < cur_key, // filter: keys below current
+                ),
+                Neighbour::Next => get_tracks_shuffle_order_impl(
+                    ordered_tracks,
+                    center,
+                    queue.shuffle_seed,
+                    count,
+                    |k| k,                    // identity mapping
+                    |k, cur_key| k > cur_key, // filter: keys above current
+                ),
             }
         }
         PlaybackMode::GroupShuffle => {
@@ -562,6 +536,38 @@ fn compute_neighbours(
             result
         }
     }
+}
+
+// Common implementation for finding tracks in shuffle order
+fn get_tracks_shuffle_order_impl<K: Ord + Copy>(
+    ordered_tracks: &[TrackId],
+    center: &TrackId,
+    seed: u64,
+    count: usize,
+    key_mapper: impl Fn(u64) -> K,
+    key_filter: impl Fn(u64, u64) -> bool,
+) -> Vec<TrackId> {
+    let cur_key = shuffle_key(center, seed);
+
+    // Build heap with mapped keys
+    let mut heap: BinaryHeap<(K, TrackId)> = BinaryHeap::new();
+    for track in ordered_tracks {
+        if track == center {
+            continue;
+        }
+        let k = shuffle_key(track, seed);
+        if key_filter(k, cur_key) {
+            heap.push((key_mapper(k), track.clone()));
+            if heap.len() > count {
+                heap.pop();
+            }
+        }
+    }
+
+    // Extract and sort (heap order is already correct for our needs)
+    let mut items: Vec<(K, TrackId)> = heap.into_iter().collect();
+    items.sort_by_key(|(k, _)| *k);
+    items.into_iter().map(|(_, track_id)| track_id).collect()
 }
 
 // Common implementation for finding groups in shuffle order
