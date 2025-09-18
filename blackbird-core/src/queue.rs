@@ -348,55 +348,31 @@ fn compute_neighbours(
                 tracing::warn!("Center track {center} not found in ordered tracks");
                 return vec![];
             };
+
+            if ordered_tracks.len() <= 1 {
+                return vec![];
+            }
+
             match dir {
                 Neighbour::Prev => {
-                    let mut v = Vec::new();
-                    let mut remaining = count;
-                    let mut current_idx = idx;
-
-                    // Wrap around from the end if we need more tracks
-                    while remaining > 0 && !ordered_tracks.is_empty() {
-                        current_idx = if current_idx == 0 {
-                            ordered_tracks.len() - 1
-                        } else {
-                            current_idx - 1
-                        };
-
-                        // Don't include the center track itself
-                        if current_idx != idx {
-                            v.push(ordered_tracks[current_idx].clone());
-                            remaining -= 1;
-                        }
-
-                        // Prevent infinite loop if there's only one track
-                        if current_idx == idx && remaining > 0 {
-                            break;
-                        }
-                    }
-                    v
+                    (0..count)
+                        .map(|i| {
+                            let pos = if idx > i {
+                                idx - i - 1
+                            } else {
+                                // Wrap around: go to end and count backwards
+                                ordered_tracks.len() - (i + 1 - idx)
+                            };
+                            ordered_tracks[pos].clone()
+                        })
+                        .collect()
                 }
-                Neighbour::Next => {
-                    let mut v = Vec::new();
-                    let mut remaining = count;
-                    let mut current_idx = idx;
-
-                    // Wrap around from the beginning if we need more tracks
-                    while remaining > 0 && !ordered_tracks.is_empty() {
-                        current_idx = (current_idx + 1) % ordered_tracks.len();
-
-                        // Don't include the center track itself
-                        if current_idx != idx {
-                            v.push(ordered_tracks[current_idx].clone());
-                            remaining -= 1;
-                        }
-
-                        // Prevent infinite loop if there's only one track
-                        if current_idx == idx && remaining > 0 {
-                            break;
-                        }
-                    }
-                    v
-                }
+                Neighbour::Next => (1..=count)
+                    .map(|i| {
+                        let pos = (idx + i) % ordered_tracks.len();
+                        ordered_tracks[pos].clone()
+                    })
+                    .collect(),
             }
         }
         PlaybackMode::Shuffle => {
