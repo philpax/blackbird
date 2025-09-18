@@ -9,7 +9,7 @@ use blackbird_core::{CoverArt, Logic};
 
 const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
 const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_CACHE_SIZE: usize = 30;
+const MAX_CACHE_SIZE: usize = 100;
 
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
