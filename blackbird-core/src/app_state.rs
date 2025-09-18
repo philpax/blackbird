@@ -73,6 +73,20 @@ pub enum PlaybackMode {
     Shuffle,
     RepeatOne,
 }
+impl PlaybackMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlaybackMode::Sequential => "Sequential",
+            PlaybackMode::Shuffle => "Shuffle",
+            PlaybackMode::RepeatOne => "Repeat One",
+        }
+    }
+}
+impl std::fmt::Display for PlaybackMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TrackAndPosition {

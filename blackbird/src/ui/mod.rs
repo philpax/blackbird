@@ -248,16 +248,34 @@ fn playing_track_info(
                 let default = config.style.text();
                 let active = config.style.track_name_playing();
 
-                if control_button(ui, egui_phosphor::regular::SKIP_FORWARD, default, active) {
+                if control_button(
+                    ui,
+                    egui_phosphor::regular::SKIP_FORWARD,
+                    default,
+                    active,
+                    "Next Track",
+                ) {
                     logic.next();
                 }
-                if control_button(ui, egui_phosphor::regular::PLAY_PAUSE, default, active) {
+                if control_button(
+                    ui,
+                    egui_phosphor::regular::PLAY_PAUSE,
+                    default,
+                    active,
+                    "Play/Pause",
+                ) {
                     logic.toggle_current();
                 }
-                if control_button(ui, egui_phosphor::regular::SKIP_BACK, default, active) {
+                if control_button(
+                    ui,
+                    egui_phosphor::regular::SKIP_BACK,
+                    default,
+                    active,
+                    "Previous Track",
+                ) {
                     logic.previous();
                 }
-                if control_button(ui, egui_phosphor::regular::STOP, default, active) {
+                if control_button(ui, egui_phosphor::regular::STOP, default, active, "Stop") {
                     logic.stop_current();
                 }
 
@@ -266,12 +284,16 @@ fn playing_track_info(
                 // Playback mode buttons (Sequential, Shuffle, Repeat One)
                 let playback = logic.get_playback_mode();
                 for (mode, icon) in [
-                    (PlaybackMode::Sequential, egui_phosphor::regular::LIST),
-                    (PlaybackMode::Shuffle, egui_phosphor::regular::SHUFFLE),
                     (PlaybackMode::RepeatOne, egui_phosphor::regular::REPEAT_ONCE),
-                ] {
+                    (PlaybackMode::Shuffle, egui_phosphor::regular::SHUFFLE),
+                    (PlaybackMode::Sequential, egui_phosphor::regular::QUEUE),
+                ]
+                .iter()
+                .rev()
+                .copied()
+                {
                     let button_color = if playback == mode { active } else { default };
-                    if control_button(ui, icon, button_color, active) {
+                    if control_button(ui, icon, button_color, active, mode.as_str()) {
                         logic.set_playback_mode(mode);
                     }
                 }
@@ -459,7 +481,13 @@ fn library(
 
 /// Helper function to create a control button with optional color override
 /// Returns true if the button was clicked
-fn control_button(ui: &mut Ui, icon: &str, text_color: Color32, hover_color: Color32) -> bool {
+fn control_button(
+    ui: &mut Ui,
+    icon: &str,
+    text_color: Color32,
+    hover_color: Color32,
+    tooltip: &str,
+) -> bool {
     ui.scope(|ui| {
         let visuals = &mut ui.style_mut().visuals;
         visuals.widgets.inactive.fg_stroke.color = text_color;
@@ -470,6 +498,7 @@ fn control_button(ui: &mut Ui, icon: &str, text_color: Color32, hover_color: Col
                 .selectable(false)
                 .sense(Sense::click()),
         )
+        .on_hover_text(tooltip)
         .clicked()
     })
     .inner
