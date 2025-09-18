@@ -75,7 +75,6 @@ impl CoverArtCache {
         let mut cache_entries_by_oldest = self
             .cache
             .iter()
-            .map(|(cover_art_id, cache_entry)| (cover_art_id, cache_entry))
             .filter(|(cover_art_id, cache_entry)| {
                 !(removal_candidates.contains(*cover_art_id) || cache_entry.priority)
             })
