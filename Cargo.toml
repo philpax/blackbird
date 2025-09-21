@@ -11,6 +11,7 @@ members = [
     "blackbird-subsonic",
 ]
 resolver = "2"
+default-members = ["blackbird"]
 
 [workspace.dependencies]
 anyhow = "1.0"
