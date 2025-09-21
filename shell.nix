@@ -3,11 +3,13 @@
 pkgs.mkShell rec {
   nativeBuildInputs = with pkgs; [
     pkg-config
-    openssl
   ];
 
   buildInputs = with pkgs; [
     alsa-lib.dev
+    alsa-lib.out
+    dbus.dev
+    dbus.lib
     wayland
     libxkbcommon
     libGL
