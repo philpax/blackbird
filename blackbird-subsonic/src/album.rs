@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{song::Child, Client, ClientResult};
+use crate::{Client, ClientResult, song::Child};
 
 /// Represents an album with ID3 metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,12 +101,12 @@ impl Client {
             parameters.push(("offset", offset.to_string()));
         }
 
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Deserialize)]
         struct AlbumList2 {
             album: Vec<AlbumID3>,
         }
 
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct AlbumList2Response {
             album_list_2: AlbumList2,
@@ -124,7 +124,7 @@ impl Client {
         &self,
         id: impl Into<String>,
     ) -> ClientResult<AlbumWithSongsID3> {
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct AlbumResponse {
             album: AlbumWithSongsID3,

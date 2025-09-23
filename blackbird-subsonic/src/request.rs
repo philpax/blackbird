@@ -1,5 +1,5 @@
 use rand::seq::IndexedRandom as _;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{Client, ClientError, ClientResult};
 
@@ -12,7 +12,7 @@ impl Client {
     /// # Errors
     ///
     /// Returns an error if the request fails or the response is not valid.
-    pub async fn request<T: Serialize + DeserializeOwned>(
+    pub async fn request<T: DeserializeOwned>(
         &self,
         endpoint: &str,
         parameters: &[(&str, String)],
@@ -56,7 +56,7 @@ impl Client {
         }
     }
 
-    fn parse_response<T: Serialize + DeserializeOwned>(bytes: &[u8]) -> ClientResult<T> {
+    fn parse_response<T: DeserializeOwned>(bytes: &[u8]) -> ClientResult<T> {
         let response: Response<T> = serde_json::from_slice(bytes)?;
 
         if response.subsonic_response.status == ResponseStatus::Failed {

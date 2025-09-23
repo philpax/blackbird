@@ -70,7 +70,7 @@ impl Client {
             parameters.push(("musicFolderId", music_folder_id.to_string()));
         }
 
-        #[derive(Debug, Clone, Serialize, Deserialize)]
+        #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Search3ApiResponse {
             search_result_3: Search3Response,
