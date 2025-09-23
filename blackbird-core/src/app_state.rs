@@ -34,6 +34,9 @@ pub enum AppStateError {
     CoverArtFetchFailed { cover_art_id: String, error: String },
     LoadTrackFailed { track_id: TrackId, error: String },
     DecodeTrackFailed { track_id: TrackId, error: String },
+    StarTrackFailed { track_id: TrackId, error: String },
+    UnstarTrackFailed { track_id: TrackId, error: String },
+    FetchTrackFailed { track_id: TrackId, error: String },
 }
 impl AppStateError {
     /// Should be paired with [`Self::display_message`]
@@ -43,6 +46,9 @@ impl AppStateError {
             AppStateError::CoverArtFetchFailed { .. } => "Failed to fetch cover art",
             AppStateError::LoadTrackFailed { .. } => "Failed to load track",
             AppStateError::DecodeTrackFailed { .. } => "Failed to decode track",
+            AppStateError::StarTrackFailed { .. } => "Failed to star track",
+            AppStateError::UnstarTrackFailed { .. } => "Failed to unstar track",
+            AppStateError::FetchTrackFailed { .. } => "Failed to fetch track",
         }
     }
 
@@ -63,6 +69,24 @@ impl AppStateError {
             AppStateError::DecodeTrackFailed { track_id, error } => {
                 format!(
                     "Track `{}` failed to decode: {error}",
+                    TrackDisplayDetails::string_report(track_id, state)
+                )
+            }
+            AppStateError::StarTrackFailed { track_id, error } => {
+                format!(
+                    "Failed to star track `{}`: {error}",
+                    TrackDisplayDetails::string_report(track_id, state)
+                )
+            }
+            AppStateError::UnstarTrackFailed { track_id, error } => {
+                format!(
+                    "Failed to unstar track `{}`: {error}",
+                    TrackDisplayDetails::string_report(track_id, state)
+                )
+            }
+            AppStateError::FetchTrackFailed { track_id, error } => {
+                format!(
+                    "Failed to fetch track `{}`: {error}",
                     TrackDisplayDetails::string_report(track_id, state)
                 )
             }

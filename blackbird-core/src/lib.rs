@@ -332,6 +332,54 @@ impl Logic {
             }
         });
     }
+
+    pub fn set_track_starred(&self, track_id: &TrackId, starred: bool) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let track_id = track_id.clone();
+
+        self.tokio_thread.spawn(async move {
+            // Immediately update the track in the UI to avoid latency, and assume
+            // the server will confirm the operation.
+            if let Some(track) = state.write().unwrap().track_map.get_mut(&track_id) {
+                track.starred = starred;
+            }
+
+            let operation = if starred {
+                client.star([track_id.0.clone()], vec![], vec![]).await
+            } else {
+                client.unstar([track_id.0.clone()], vec![], vec![]).await
+            };
+
+            if let Err(e) = operation {
+                let track_id = track_id.clone();
+                let error = e.to_string();
+
+                state.write().unwrap().error = Some(if starred {
+                    AppStateError::StarTrackFailed { track_id, error }
+                } else {
+                    AppStateError::UnstarTrackFailed { track_id, error }
+                });
+                return;
+            }
+
+            match client.get_song(&track_id.0).await {
+                Ok(song) => {
+                    state
+                        .write()
+                        .unwrap()
+                        .track_map
+                        .insert(track_id, song.into());
+                }
+                Err(e) => {
+                    state.write().unwrap().error = Some(AppStateError::FetchTrackFailed {
+                        track_id,
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
 }
 impl Logic {
     pub fn get_playing_track_id(&self) -> Option<TrackId> {

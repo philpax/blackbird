@@ -145,6 +145,7 @@ pub fn ui<'a>(
                         track,
                         ui,
                         style,
+                        logic,
                         &group.artist,
                         track::TrackParams {
                             max_track_length_width,

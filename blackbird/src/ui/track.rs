@@ -1,3 +1,4 @@
+use blackbird_core::Logic;
 use egui::{Align2, Rect, Sense, TextStyle, Ui, WidgetText, pos2, vec2};
 
 use crate::{
@@ -27,6 +28,7 @@ pub fn ui(
     track: &Track,
     ui: &mut Ui,
     style: &style::Style,
+    logic: &mut Logic,
     album_artist: &str,
     params: TrackParams,
 ) -> TrackResponse {
@@ -34,11 +36,12 @@ pub fn ui(
     let total_spacing = ui_util::track_spacing(ui);
     let actual_row_height = params.track_row_height + total_spacing;
     let default_font = TextStyle::Body.resolve(ui.style());
+    let heart_size = ui.text_style_height(&TextStyle::Body);
 
     // Create a rect for this track with proper spacing
     let track_rect = Rect::from_min_size(
         pos2(ui.min_rect().left(), params.track_y),
-        vec2(ui.available_width(), actual_row_height),
+        vec2(ui.available_width() - heart_size, actual_row_height),
     );
 
     // Check for interactions with this track area
@@ -87,7 +90,6 @@ pub fn ui(
 
     // Draw heart
     {
-        let heart_size = ui.text_style_height(&TextStyle::Body);
         right_x -= heart_size;
         let heart_rect = Rect::from_min_size(pos2(right_x, text_y), vec2(heart_size, heart_size));
         let heart_response = ui.allocate_rect(heart_rect, Sense::click());
@@ -128,7 +130,7 @@ pub fn ui(
             );
         }
         if heart_response.clicked() {
-            println!("Heart clicked");
+            logic.set_track_starred(&track.id, !starred);
         }
     }
 
