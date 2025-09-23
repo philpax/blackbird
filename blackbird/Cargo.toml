@@ -22,6 +22,6 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
     "gif",
 ] }
-egui-phosphor = "0.10.0"
+egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
 souvlaki = "0.8.3"
 raw-window-handle = "0.6"

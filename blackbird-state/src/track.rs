@@ -32,6 +32,8 @@ pub struct Track {
     pub disc_number: Option<u32>,
     /// The album ID
     pub album_id: Option<AlbumId>,
+    /// Whether the track is starred
+    pub starred: bool,
 }
 impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
@@ -45,6 +47,7 @@ impl From<bs::Child> for Track {
             duration: child.duration,
             disc_number: child.disc_number,
             album_id: child.album_id.map(AlbumId),
+            starred: child.starred.is_some(),
         }
     }
 }

@@ -33,6 +33,7 @@ pub fn ui(
     // Use shared spacing calculation
     let total_spacing = ui_util::track_spacing(ui);
     let actual_row_height = params.track_row_height + total_spacing;
+    let default_font = TextStyle::Body.resolve(ui.style());
 
     // Create a rect for this track with proper spacing
     let track_rect = Rect::from_min_size(
@@ -60,7 +61,7 @@ pub fn ui(
         pos2(track_x, text_y),
         Align2::RIGHT_TOP,
         &track_str,
-        TextStyle::Body.resolve(ui.style()),
+        default_font.clone(),
         style.track_number(),
     );
 
@@ -78,19 +79,70 @@ pub fn ui(
         pos2(title_x, text_y),
         Align2::LEFT_TOP,
         &track.title,
-        TextStyle::Body.resolve(ui.style()),
+        default_font.clone(),
         title_color,
     );
 
+    let mut right_x = ui.max_rect().right();
+
+    // Draw heart
+    {
+        let heart_size = ui.text_style_height(&TextStyle::Body);
+        right_x -= heart_size;
+        let heart_rect = Rect::from_min_size(pos2(right_x, text_y), vec2(heart_size, heart_size));
+        let heart_response = ui.allocate_rect(heart_rect, Sense::click());
+
+        let hovered = heart_response.hovered();
+        let starred = track.starred;
+
+        // If:
+        // - unstarred, unhovered: invisible
+        // - unstarred, hovered: unfilled, red
+        // - starred, unhovered: filled, red
+        // - starred, hovered: unfilled, white
+        let visible = starred || hovered;
+        let filled = starred && !hovered;
+        let is_red = (!starred && hovered) || (starred && !hovered);
+
+        // For some reason, the heart is slightly lower than the text when filled
+        let y_offset = if filled { -2.0 } else { 0.0 };
+
+        if visible {
+            ui.painter().text(
+                pos2(right_x, text_y + y_offset),
+                Align2::LEFT_TOP,
+                egui_phosphor::variants::regular::HEART,
+                if filled {
+                    egui::FontId::new(
+                        default_font.size,
+                        egui::FontFamily::Name("phosphor-fill".into()),
+                    )
+                } else {
+                    default_font.clone()
+                },
+                if is_red {
+                    egui::Color32::RED
+                } else {
+                    egui::Color32::WHITE
+                },
+            );
+        }
+        if heart_response.clicked() {
+            println!("Heart clicked");
+        }
+    }
+
     // Draw duration (right-aligned)
+    right_x -= 6.0;
     let duration_str = track_length_str(track);
     ui.painter().text(
-        pos2(ui.max_rect().right(), text_y),
+        pos2(right_x, text_y),
         Align2::RIGHT_TOP,
         &duration_str,
-        TextStyle::Body.resolve(ui.style()),
+        default_font.clone(),
         style.track_length(),
     );
+    right_x -= params.max_track_length_width + 6.0;
 
     // Draw artist if different from album artist
     if let Some(artist) = track
@@ -99,12 +151,11 @@ pub fn ui(
         .filter(|artist| *artist != album_artist)
     {
         // Leave space for duration
-        let artist_x = ui.max_rect().right() - params.max_track_length_width - 6.0;
         ui.painter().text(
-            pos2(artist_x, text_y),
+            pos2(right_x, text_y),
             Align2::RIGHT_TOP,
             artist,
-            TextStyle::Body.resolve(ui.style()),
+            default_font,
             style::string_to_colour(artist).into(),
         );
     }

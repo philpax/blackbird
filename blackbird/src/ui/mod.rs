@@ -35,6 +35,7 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
     });
 
     let mut fonts = FontDefinitions::default();
+    // Replace the default font with GoNoto
     fonts.font_data.insert(
         "GoNoto".into(),
         Arc::new(FontData::from_static(include_bytes!(
@@ -46,7 +47,19 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
         .entry(FontFamily::Proportional)
         .or_default()
         .push("GoNoto".into());
+
+    // Add Phosphor regular icons as fallback
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
+    // Add Phosphor fill as an explicit font
+    fonts.font_data.insert(
+        "phosphor-fill".into(),
+        Arc::new(egui_phosphor::Variant::Fill.font_data()),
+    );
+    fonts.families.insert(
+        egui::FontFamily::Name("phosphor-fill".into()),
+        vec!["GoNoto".into(), "phosphor-fill".into()],
+    );
 
     cc.egui_ctx.set_fonts(fonts);
 
