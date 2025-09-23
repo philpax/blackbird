@@ -123,4 +123,16 @@ impl Client {
 
         Self::check_for_subsonic_error_in_bytes(self.request_raw("stream", &parameters).await?)
     }
+
+    /// Get a song by ID.
+    pub async fn get_song(&self, id: impl Into<String>) -> ClientResult<Child> {
+        #[derive(Deserialize)]
+        struct GetSongResponse {
+            song: Child,
+        }
+        Ok(self
+            .request::<GetSongResponse>("getSong", &[("id", id.into())])
+            .await?
+            .song)
+    }
 }

@@ -21,4 +21,46 @@ impl Client {
 
         Self::check_for_subsonic_error_in_bytes(self.request_raw("getCoverArt", &parameters).await?)
     }
+
+    /// Star items.
+    pub async fn star(
+        &self,
+        track_ids: impl IntoIterator<Item = String>,
+        album_ids: impl IntoIterator<Item = String>,
+        artist_ids: impl IntoIterator<Item = String>,
+    ) -> ClientResult<()> {
+        let mut parameters = vec![];
+        for track_id in track_ids.into_iter() {
+            parameters.push(("id", track_id));
+        }
+        for album_id in album_ids.into_iter() {
+            parameters.push(("albumId", album_id));
+        }
+        for artist_id in artist_ids.into_iter() {
+            parameters.push(("artistId", artist_id));
+        }
+
+        self.request::<()>("star", &parameters).await
+    }
+
+    /// Unstar items.
+    pub async fn unstar(
+        &self,
+        track_ids: impl IntoIterator<Item = String>,
+        album_ids: impl IntoIterator<Item = String>,
+        artist_ids: impl IntoIterator<Item = String>,
+    ) -> ClientResult<()> {
+        let mut parameters = vec![];
+        for track_id in track_ids.into_iter() {
+            parameters.push(("id", track_id));
+        }
+        for album_id in album_ids.into_iter() {
+            parameters.push(("albumId", album_id));
+        }
+        for artist_id in artist_ids.into_iter() {
+            parameters.push(("artistId", artist_id));
+        }
+
+        self.request::<()>("unstar", &parameters).await
+    }
 }
