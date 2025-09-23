@@ -13,6 +13,12 @@ pub struct OutputTrack {
     pub duration: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disc_number: Option<u32>,
+    #[serde(skip_serializing_if = "is_false")]
+    pub starred: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !b
 }
 
 #[derive(Serialize, Deserialize, Debug)]

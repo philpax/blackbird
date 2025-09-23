@@ -49,6 +49,7 @@ async fn main() -> anyhow::Result<()> {
                         year: track.year,
                         duration: track.duration,
                         disc_number: track.disc_number,
+                        starred: track.starred,
                     }
                 })
                 .collect(),
