@@ -1,5 +1,5 @@
 use blackbird_core::Logic;
-use egui::{Align2, Rect, Sense, TextStyle, Ui, WidgetText, pos2, vec2};
+use egui::{Align2, Rect, Sense, TextStyle, Ui, WidgetText, epaint::PathStroke, pos2, vec2};
 
 use crate::{
     bc::{blackbird_state::Track, util},
@@ -38,10 +38,12 @@ pub fn ui(
     let default_font = TextStyle::Body.resolve(ui.style());
     let heart_size = ui.text_style_height(&TextStyle::Body);
 
+    let row_width = ui.available_width();
+
     // Create a rect for this track with proper spacing
     let track_rect = Rect::from_min_size(
         pos2(ui.min_rect().left(), params.track_y),
-        vec2(ui.available_width() - heart_size, actual_row_height),
+        vec2(row_width - heart_size, actual_row_height),
     );
 
     // Check for interactions with this track area
@@ -89,7 +91,7 @@ pub fn ui(
     let mut right_x = ui.max_rect().right();
 
     // Draw heart
-    {
+    let heart_hovered = {
         right_x -= heart_size;
         let heart_rect = Rect::from_min_size(pos2(right_x, text_y), vec2(heart_size, heart_size));
         let heart_response = ui.allocate_rect(heart_rect, Sense::click());
@@ -132,7 +134,9 @@ pub fn ui(
         if heart_response.clicked() {
             logic.set_track_starred(&track.id, !starred);
         }
-    }
+
+        hovered
+    };
 
     // Draw duration (right-aligned)
     right_x -= 6.0;
@@ -159,6 +163,18 @@ pub fn ui(
             artist,
             default_font,
             style::string_to_colour(artist).into(),
+        );
+    }
+
+    // If the heart is hovered, draw a line underneath the track to make it
+    // easier to line them up.
+    if heart_hovered {
+        let line_start = track_rect.left_top() + vec2(0.0, track_rect.height());
+        let line_end = line_start + vec2(row_width, 0.0);
+
+        ui.painter().line(
+            vec![line_start, line_end],
+            PathStroke::new(1.0, style.track_name_hovered()),
         );
     }
 
