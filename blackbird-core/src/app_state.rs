@@ -27,6 +27,16 @@ pub struct AppState {
 
     pub error: Option<AppStateError>,
 }
+impl AppState {
+    pub fn set_track_starred(&mut self, track_id: &TrackId, starred: bool) -> Option<bool> {
+        let mut old_starred = None;
+        if let Some(track) = self.track_map.get_mut(track_id) {
+            old_starred = Some(track.starred);
+            track.starred = starred;
+        }
+        old_starred
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppStateError {
@@ -36,7 +46,6 @@ pub enum AppStateError {
     DecodeTrackFailed { track_id: TrackId, error: String },
     StarTrackFailed { track_id: TrackId, error: String },
     UnstarTrackFailed { track_id: TrackId, error: String },
-    FetchTrackFailed { track_id: TrackId, error: String },
 }
 impl AppStateError {
     /// Should be paired with [`Self::display_message`]
@@ -48,7 +57,6 @@ impl AppStateError {
             AppStateError::DecodeTrackFailed { .. } => "Failed to decode track",
             AppStateError::StarTrackFailed { .. } => "Failed to star track",
             AppStateError::UnstarTrackFailed { .. } => "Failed to unstar track",
-            AppStateError::FetchTrackFailed { .. } => "Failed to fetch track",
         }
     }
 
@@ -81,12 +89,6 @@ impl AppStateError {
             AppStateError::UnstarTrackFailed { track_id, error } => {
                 format!(
                     "Failed to unstar track `{}`: {error}",
-                    TrackDisplayDetails::string_report(track_id, state)
-                )
-            }
-            AppStateError::FetchTrackFailed { track_id, error } => {
-                format!(
-                    "Failed to fetch track `{}`: {error}",
                     TrackDisplayDetails::string_report(track_id, state)
                 )
             }

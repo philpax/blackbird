@@ -341,43 +341,33 @@ impl Logic {
         self.tokio_thread.spawn(async move {
             // Immediately update the track in the UI to avoid latency, and assume
             // the server will confirm the operation.
-            if let Some(track) = state.write().unwrap().track_map.get_mut(&track_id) {
-                track.starred = starred;
-            }
+            let old_starred = state.write().unwrap().set_track_starred(&track_id, starred);
 
             let operation = if starred {
-                client.star([track_id.0.clone()], vec![], vec![]).await
+                client.star([track_id.0.clone()], [], []).await
             } else {
-                client.unstar([track_id.0.clone()], vec![], vec![]).await
+                client.unstar([track_id.0.clone()], [], []).await
             };
 
-            if let Err(e) = operation {
-                let track_id = track_id.clone();
-                let error = e.to_string();
-
-                state.write().unwrap().error = Some(if starred {
-                    AppStateError::StarTrackFailed { track_id, error }
-                } else {
-                    AppStateError::UnstarTrackFailed { track_id, error }
-                });
+            let Err(e) = operation else {
                 return;
+            };
+
+            let track_id = track_id.clone();
+            let error = e.to_string();
+
+            if let Some(old_starred) = old_starred {
+                state
+                    .write()
+                    .unwrap()
+                    .set_track_starred(&track_id, old_starred);
             }
 
-            match client.get_song(&track_id.0).await {
-                Ok(song) => {
-                    state
-                        .write()
-                        .unwrap()
-                        .track_map
-                        .insert(track_id, song.into());
-                }
-                Err(e) => {
-                    state.write().unwrap().error = Some(AppStateError::FetchTrackFailed {
-                        track_id,
-                        error: e.to_string(),
-                    });
-                }
-            }
+            state.write().unwrap().error = Some(if starred {
+                AppStateError::StarTrackFailed { track_id, error }
+            } else {
+                AppStateError::UnstarTrackFailed { track_id, error }
+            });
         });
     }
 }
