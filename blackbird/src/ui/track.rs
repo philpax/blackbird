@@ -36,7 +36,24 @@ pub fn ui(
     let total_spacing = ui_util::track_spacing(ui);
     let actual_row_height = params.track_row_height + total_spacing;
     let default_font = TextStyle::Body.resolve(ui.style());
-    let heart_size = ui.text_style_height(&TextStyle::Body);
+
+    let mut right_x = ui.max_rect().right();
+    // Calculate text baseline position (add some padding from top)
+    let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
+
+    // Draw heart
+    let (heart_response, heart_size) = ui_util::draw_heart(
+        ui,
+        default_font.clone(),
+        right_x,
+        text_y,
+        track.starred,
+        true,
+    );
+    right_x -= heart_size;
+    if heart_response.clicked() {
+        logic.set_track_starred(&track.id, !track.starred);
+    }
 
     let row_width = ui.available_width();
 
@@ -56,9 +73,6 @@ pub fn ui(
     } else {
         track_number.to_string()
     };
-
-    // Calculate text baseline position (add some padding from top)
-    let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
 
     // Draw track number
     let track_x = ui.min_rect().left() + 16.0;
@@ -87,56 +101,6 @@ pub fn ui(
         default_font.clone(),
         title_color,
     );
-
-    let mut right_x = ui.max_rect().right();
-
-    // Draw heart
-    let heart_hovered = {
-        right_x -= heart_size;
-        let heart_rect = Rect::from_min_size(pos2(right_x, text_y), vec2(heart_size, heart_size));
-        let heart_response = ui.allocate_rect(heart_rect, Sense::click());
-
-        let hovered = heart_response.hovered();
-        let starred = track.starred;
-
-        // If:
-        // - unstarred, unhovered: invisible
-        // - unstarred, hovered: unfilled, red
-        // - starred, unhovered: filled, red
-        // - starred, hovered: unfilled, white
-        let visible = starred || hovered;
-        let filled = starred && !hovered;
-        let is_red = (!starred && hovered) || (starred && !hovered);
-
-        // For some reason, the heart is slightly lower than the text when filled
-        let y_offset = if filled { -2.0 } else { 0.0 };
-
-        if visible {
-            ui.painter().text(
-                pos2(right_x, text_y + y_offset),
-                Align2::LEFT_TOP,
-                egui_phosphor::variants::regular::HEART,
-                if filled {
-                    egui::FontId::new(
-                        default_font.size,
-                        egui::FontFamily::Name("phosphor-fill".into()),
-                    )
-                } else {
-                    default_font.clone()
-                },
-                if is_red {
-                    egui::Color32::RED
-                } else {
-                    egui::Color32::WHITE
-                },
-            );
-        }
-        if heart_response.clicked() {
-            logic.set_track_starred(&track.id, !starred);
-        }
-
-        hovered
-    };
 
     // Draw duration (right-aligned)
     right_x -= 6.0;
@@ -168,7 +132,7 @@ pub fn ui(
 
     // If the heart is hovered, draw a line underneath the track to make it
     // easier to line them up.
-    if heart_hovered {
+    if heart_response.hovered() {
         let line_start = track_rect.left_top() + vec2(0.0, track_rect.height());
         let line_end = line_start + vec2(row_width, 0.0);
 
