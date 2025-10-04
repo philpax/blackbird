@@ -1,4 +1,4 @@
-use egui::{Align2, Rect, Sense, TextStyle, Ui, pos2, vec2};
+use egui::{Align2, Pos2, Rect, Sense, TextStyle, Ui, pos2, vec2};
 
 /// Calculate the total spacing between tracks (base egui spacing + extra spacing)
 pub fn track_spacing(ui: &Ui) -> f32 {
@@ -12,19 +12,24 @@ pub fn spaced_row_height(ui: &Ui) -> f32 {
 }
 
 /// Draw a clickable heart.
+pub enum HeartPlacement {
+    Position { pos: Pos2, right_aligned: bool },
+    Space,
+}
 pub fn draw_heart(
     ui: &mut Ui,
     font: egui::FontId,
-    pos_x: f32,
-    pos_y: f32,
+    placement: HeartPlacement,
     active: bool,
-    right_aligned: bool,
 ) -> (egui::Response, f32) {
     let size = ui.fonts(|f| f.row_height(&font));
 
-    let pos_x = if right_aligned { pos_x - size } else { pos_x };
-
-    let rect = Rect::from_min_size(pos2(pos_x, pos_y), vec2(size, size));
+    let rect = if let HeartPlacement::Position { pos, right_aligned } = placement {
+        let pos_x = if right_aligned { pos.x - size } else { pos.x };
+        Rect::from_min_size(pos2(pos_x, pos.y), vec2(size, size))
+    } else {
+        ui.allocate_space(vec2(size, size)).1
+    };
     let response = ui.allocate_rect(rect, Sense::click());
 
     let hovered = response.hovered();
@@ -43,7 +48,7 @@ pub fn draw_heart(
 
     if visible {
         ui.painter().text(
-            pos2(pos_x, pos_y + y_offset),
+            pos2(rect.left(), rect.top() + y_offset),
             Align2::LEFT_TOP,
             egui_phosphor::variants::regular::HEART,
             if filled {

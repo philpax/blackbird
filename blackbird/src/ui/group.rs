@@ -20,6 +20,7 @@ pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 8;
 
 pub struct GroupResponse<'a> {
     pub clicked_track: Option<&'a TrackId>,
+    pub clicked_heart: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -32,10 +33,11 @@ pub fn ui<'a>(
     cover_art_cache: &mut CoverArtCache,
 ) -> GroupResponse<'a> {
     let mut clicked_track = None;
+    let mut clicked_heart = false;
 
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
-            // If the first row is visible, draw the artist.
+            // Artist
             ui.add(
                 Label::new(
                     RichText::new(&group.artist).color(style::string_to_colour(&group.artist)),
@@ -43,8 +45,7 @@ pub fn ui<'a>(
                 .selectable(false),
             );
 
-            // If the second row is visible, draw the album title (including release year if available), as well as
-            // the total duration.
+            // Album + Year + Duration
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let mut layout_job = egui::text::LayoutJob::default();
@@ -70,6 +71,17 @@ pub fn ui<'a>(
                 });
 
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (heart_response, _) = ui_util::draw_heart(
+                        ui,
+                        TextStyle::Body.resolve(ui.style()),
+                        ui_util::HeartPlacement::Space,
+                        group.starred,
+                    );
+
+                    if heart_response.clicked() {
+                        clicked_heart = true;
+                    }
+
                     ui.add(
                         Label::new(
                             RichText::new(util::seconds_to_hms_string(group.duration, false))
@@ -163,7 +175,10 @@ pub fn ui<'a>(
         );
     });
 
-    GroupResponse { clicked_track }
+    GroupResponse {
+        clicked_track,
+        clicked_heart,
+    }
 }
 
 pub fn line_count(group: &Group) -> usize {

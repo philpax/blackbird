@@ -21,7 +21,8 @@ pub struct AppState {
     pub queue: QueueState,
     pub volume: f32,
 
-    // Reverse lookup maps for efficient group shuffle navigation
+    // Reverse lookup maps
+    pub album_to_group_index: HashMap<AlbumId, usize>,
     pub track_to_group_index: HashMap<TrackId, usize>,
     pub track_to_group_track_index: HashMap<TrackId, usize>,
 
@@ -36,6 +37,26 @@ impl AppState {
         }
         old_starred
     }
+
+    pub fn set_album_starred(&mut self, album_id: &AlbumId, starred: bool) -> Option<bool> {
+        let mut old_starred = None;
+
+        if let Some(album) = self.albums.get_mut(album_id) {
+            old_starred = Some(album.starred);
+            album.starred = starred;
+        }
+        if let Some(group_idx) = self.album_to_group_index.get(album_id)
+            && let Some(group) = self.groups.get(*group_idx)
+        {
+            let group = Group {
+                starred,
+                ..(**group).clone()
+            };
+            self.groups[*group_idx] = Arc::new(group);
+        }
+
+        old_starred
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +67,8 @@ pub enum AppStateError {
     DecodeTrackFailed { track_id: TrackId, error: String },
     StarTrackFailed { track_id: TrackId, error: String },
     UnstarTrackFailed { track_id: TrackId, error: String },
+    StarAlbumFailed { album_id: AlbumId, error: String },
+    UnstarAlbumFailed { album_id: AlbumId, error: String },
 }
 impl AppStateError {
     /// Should be paired with [`Self::display_message`]
@@ -57,6 +80,8 @@ impl AppStateError {
             AppStateError::DecodeTrackFailed { .. } => "Failed to decode track",
             AppStateError::StarTrackFailed { .. } => "Failed to star track",
             AppStateError::UnstarTrackFailed { .. } => "Failed to unstar track",
+            AppStateError::StarAlbumFailed { .. } => "Failed to star album",
+            AppStateError::UnstarAlbumFailed { .. } => "Failed to unstar album",
         }
     }
 
@@ -91,6 +116,12 @@ impl AppStateError {
                     "Failed to unstar track `{}`: {error}",
                     TrackDisplayDetails::string_report(track_id, state)
                 )
+            }
+            AppStateError::StarAlbumFailed { album_id, error } => {
+                format!("Failed to star album `{}`: {error}", album_id,)
+            }
+            AppStateError::UnstarAlbumFailed { album_id, error } => {
+                format!("Failed to unstar album `{}`: {error}", album_id,)
             }
         }
     }

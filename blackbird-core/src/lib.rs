@@ -370,6 +370,43 @@ impl Logic {
             });
         });
     }
+
+    pub fn set_album_starred(&self, album_id: &AlbumId, starred: bool) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let album_id = album_id.clone();
+
+        self.tokio_thread.spawn(async move {
+            // Immediately update the album in the UI to avoid latency, and assume
+            // the server will confirm the operation.
+            let old_starred = state.write().unwrap().set_album_starred(&album_id, starred);
+            let operation = if starred {
+                client.star([], [album_id.0.clone()], []).await
+            } else {
+                client.unstar([], [album_id.0.clone()], []).await
+            };
+
+            let Err(e) = operation else {
+                return;
+            };
+
+            let album_id = album_id.clone();
+            let error = e.to_string();
+
+            if let Some(old_starred) = old_starred {
+                state
+                    .write()
+                    .unwrap()
+                    .set_album_starred(&album_id, old_starred);
+            }
+
+            state.write().unwrap().error = Some(if starred {
+                AppStateError::StarAlbumFailed { album_id, error }
+            } else {
+                AppStateError::UnstarAlbumFailed { album_id, error }
+            });
+        });
+    }
 }
 impl Logic {
     pub fn get_playing_track_id(&self) -> Option<TrackId> {
@@ -472,6 +509,9 @@ impl Logic {
                                     .track_to_group_track_index
                                     .insert(track_id.clone(), track_idx);
                             }
+                            state
+                                .album_to_group_index
+                                .insert(group.album_id.clone(), group_idx);
                         }
 
                         state.groups = result.groups;

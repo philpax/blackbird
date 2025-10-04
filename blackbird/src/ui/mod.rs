@@ -512,6 +512,10 @@ fn library(
                         logic.request_play_track(track_id);
                     }
 
+                    if group_response.clicked_heart {
+                        logic.set_album_starred(&group.album_id, !group.starred);
+                    }
+
                     current_row += group_lines;
                 }
             });

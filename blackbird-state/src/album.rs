@@ -1,7 +1,9 @@
+use serde::{Deserialize, Serialize};
+
 use crate::{ArtistId, bs};
 
 /// An album ID
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AlbumId(pub String);
 impl std::fmt::Display for AlbumId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -30,6 +32,8 @@ pub struct Album {
     pub year: Option<i32>,
     /// The genre of the album
     pub _genre: Option<String>,
+    /// Whether the album is starred.
+    pub starred: bool,
 }
 impl From<bs::AlbumID3> for Album {
     fn from(album: bs::AlbumID3) -> Self {
@@ -43,6 +47,7 @@ impl From<bs::AlbumID3> for Album {
             duration: album.duration,
             year: album.year,
             _genre: album.genre,
+            starred: album.starred.is_some(),
         }
     }
 }

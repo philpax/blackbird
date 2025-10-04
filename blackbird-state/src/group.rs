@@ -19,4 +19,6 @@ pub struct Group {
     pub cover_art_id: Option<String>,
     /// The associated album's ID
     pub album_id: AlbumId,
+    /// Whether the group is starred.
+    pub starred: bool,
 }

@@ -45,10 +45,11 @@ pub fn ui(
     let (heart_response, heart_size) = ui_util::draw_heart(
         ui,
         default_font.clone(),
-        right_x,
-        text_y,
+        ui_util::HeartPlacement::Position {
+            pos: pos2(right_x, text_y),
+            right_aligned: true,
+        },
         track.starred,
-        true,
     );
     right_x -= heart_size;
     if heart_response.clicked() {

@@ -180,6 +180,7 @@ pub async fn fetch_all(
                     tracks: vec![],
                     cover_art_id: album.cover_art_id.clone(),
                     album_id: album.id.clone(),
+                    starred: album.starred,
                 });
             }
 
