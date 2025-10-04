@@ -125,7 +125,8 @@ pub async fn fetch_all(
                 let is_various_artists = album_artist == "various artists";
                 (
                     id.clone(),
-                    (
+                    format!(
+                        "{} - {} - {} - {} - {} - {}",
                         album_artist,
                         album
                             .year
@@ -136,15 +137,31 @@ pub async fn fetch_all(
                                 !is_various_artists
                             })
                             .unwrap_or_default(),
-                        album.name.clone(),
+                        album.name,
                         track.disc_number.unwrap_or_default(),
                         track.track.unwrap_or_default(),
-                        track.title.clone(),
+                        track.title,
                     ),
                 )
             })
             .collect();
-        track_ids.sort_by_cached_key(|id| track_data.get(id).unwrap());
+
+        let mut collator_preferences = icu_collator::CollatorPreferences::default();
+        collator_preferences.numeric_ordering =
+            Some(icu_collator::preferences::CollationNumericOrdering::True);
+
+        let mut collator_options = icu_collator::options::CollatorOptions::default();
+        collator_options.strength = Some(icu_collator::options::Strength::Primary);
+        collator_options.case_level = Some(icu_collator::options::CaseLevel::Off);
+
+        let collator =
+            icu_collator::Collator::try_new(collator_preferences, collator_options).unwrap();
+
+        track_ids.sort_by(|a, b| {
+            let a = track_data.get(a).unwrap();
+            let b = track_data.get(b).unwrap();
+            collator.compare(a, b)
+        });
     }
 
     // Build groups.
