@@ -53,6 +53,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                 })
                 .collect(),
+            starred: group.starred,
         });
     }
 

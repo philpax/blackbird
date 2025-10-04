@@ -29,6 +29,8 @@ pub struct OutputGroup {
     pub year: Option<i32>,
     pub duration: u32,
     pub tracks: Vec<OutputTrack>,
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub starred: bool,
 }
 
 pub type Output = Vec<OutputGroup>;
