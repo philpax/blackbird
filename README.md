@@ -1,6 +1,6 @@
 # blackbird
 
-![blackbird as of 2025-09-18](./docs/2025-09-18.png)
+![blackbird as of 2025-10-06](./docs/2025-10-06.png)
 
 `blackbird` is a Subsonic protocol client by me, for me. I don't expect anyone to match my kind of freak, but I open-source most of my software, so here it is. It's designed to get as close to my original foobar2000 theme as possible, while being at least somewhat practical to use.
 
