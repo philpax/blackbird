@@ -232,7 +232,8 @@ fn playing_track_info(
                 } else {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| {
-                            let track_count = logic.get_state().read().unwrap().track_ids.len();
+                            let track_count =
+                                logic.get_state().read().unwrap().library.track_ids.len();
                             ui.add(
                                 Label::new(format!(
                                     "Nothing playing | {}{} tracks",

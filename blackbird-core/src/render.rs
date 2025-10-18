@@ -12,6 +12,7 @@ pub struct VisibleGroupSet {
 impl Logic {
     pub fn calculate_total_rows(&self, group_line_count_getter: impl Fn(&Group) -> usize) -> usize {
         self.read_state()
+            .library
             .groups
             .iter()
             .map(|group| group_line_count_getter(group))
@@ -25,14 +26,15 @@ impl Logic {
     ) -> VisibleGroupSet {
         let state = self.read_state();
         let mut current_row = 0;
-        let visible_groups = Vec::new();
+        let visible_groups = vec![];
 
         // Add buffer albums before and after visible range
         const BUFFER_ALBUMS: usize = 3;
 
         // First pass: find albums that intersect with visible range
-        let mut intersecting_album_indices = Vec::new();
-        for (album_index, group) in state.groups.iter().enumerate() {
+        let mut intersecting_album_indices = vec![];
+        let groups = &state.library.groups;
+        for (album_index, group) in groups.iter().enumerate() {
             let group_lines = group_line_count_getter(group);
             let group_range = current_row..(current_row + group_lines);
 
@@ -58,23 +60,18 @@ impl Logic {
         let last_intersecting = intersecting_album_indices[intersecting_album_indices.len() - 1];
 
         let start_album_index = first_intersecting.saturating_sub(BUFFER_ALBUMS);
-        let end_album_index = (last_intersecting + BUFFER_ALBUMS + 1).min(state.groups.len());
+        let end_album_index = (last_intersecting + BUFFER_ALBUMS + 1).min(groups.len());
 
         // Calculate start_row for the first album we'll include
         current_row = 0;
-        for i in 0..start_album_index {
-            let group = &state.groups[i];
+        for group in &groups[..start_album_index] {
             let group_lines = group_line_count_getter(group);
             current_row += group_lines;
         }
         let start_row = current_row;
 
         // Include the selected range of albums
-        let mut visible_groups = Vec::new();
-        for i in start_album_index..end_album_index {
-            visible_groups.push(state.groups[i].clone());
-        }
-
+        let visible_groups = groups[start_album_index..end_album_index].to_vec();
         VisibleGroupSet {
             groups: visible_groups,
             start_row,

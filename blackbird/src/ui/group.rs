@@ -99,7 +99,7 @@ pub fn ui<'a>(
         let track_row_height = ui.text_style_height(&TextStyle::Body);
 
         let state = logic.get_state();
-        let track_map = &state.read().unwrap().track_map;
+        let track_map = &state.read().unwrap().library.track_map;
 
         // Do a pre-pass to calculate the maximum track length width for visible tracks
         let max_track_length_width = tracks
@@ -195,11 +195,11 @@ pub fn target_scroll_height_for_track(
     spaced_row_height: f32,
     track_id: &TrackId,
 ) -> Option<f32> {
-    let track = state.track_map.get(track_id)?;
+    let track = state.library.track_map.get(track_id)?;
     let album_id = track.album_id.as_ref()?;
 
     let mut scroll_to_rows = 0;
-    for group in &state.groups {
+    for group in &state.library.groups {
         if group.album_id == *album_id {
             scroll_to_rows += GROUP_ARTIST_LINE_COUNT;
             scroll_to_rows += GROUP_ALBUM_LINE_COUNT;

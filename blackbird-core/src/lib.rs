@@ -81,8 +81,8 @@ impl TrackDisplayDetails {
         track_and_position: &TrackAndPosition,
         state: &AppState,
     ) -> Option<TrackDisplayDetails> {
-        let track = state.track_map.get(&track_and_position.track_id)?;
-        let album = state.albums.get(track.album_id.as_ref()?)?;
+        let track = state.library.track_map.get(&track_and_position.track_id)?;
+        let album = state.library.albums.get(track.album_id.as_ref()?)?;
         Some(TrackDisplayDetails {
             album_id: album.id.clone(),
             album_name: album.name.clone(),
@@ -341,7 +341,11 @@ impl Logic {
         self.tokio_thread.spawn(async move {
             // Immediately update the track in the UI to avoid latency, and assume
             // the server will confirm the operation.
-            let old_starred = state.write().unwrap().set_track_starred(&track_id, starred);
+            let old_starred = state
+                .write()
+                .unwrap()
+                .library
+                .set_track_starred(&track_id, starred);
 
             let operation = if starred {
                 client.star([track_id.0.clone()], [], []).await
@@ -360,6 +364,7 @@ impl Logic {
                 state
                     .write()
                     .unwrap()
+                    .library
                     .set_track_starred(&track_id, old_starred);
             }
 
@@ -379,7 +384,11 @@ impl Logic {
         self.tokio_thread.spawn(async move {
             // Immediately update the album in the UI to avoid latency, and assume
             // the server will confirm the operation.
-            let old_starred = state.write().unwrap().set_album_starred(&album_id, starred);
+            let old_starred = state
+                .write()
+                .unwrap()
+                .library
+                .set_album_starred(&album_id, starred);
             let operation = if starred {
                 client.star([], [album_id.0.clone()], []).await
             } else {
@@ -397,6 +406,7 @@ impl Logic {
                 state
                     .write()
                     .unwrap()
+                    .library
                     .set_album_starred(&album_id, old_starred);
             }
 
@@ -425,7 +435,7 @@ impl Logic {
             .is_some_and(|t| t.elapsed() > Duration::from_millis(100))
     }
     pub fn has_loaded_all_tracks(&self) -> bool {
-        self.read_state().has_loaded_all_tracks
+        self.read_state().library.has_loaded_all_tracks
     }
 
     pub fn get_track_display_details(&self) -> Option<TrackDisplayDetails> {
@@ -491,32 +501,12 @@ impl Logic {
                     })
                     .await?;
 
-                    {
-                        let mut state = state.write().unwrap();
-                        state.albums = result.albums;
-                        state.track_map = result.track_map;
-                        state.track_ids = result.track_ids;
-
-                        // Populate reverse lookup maps for efficient group shuffle navigation
-                        state.track_to_group_index.clear();
-                        state.track_to_group_track_index.clear();
-                        for (group_idx, group) in result.groups.iter().enumerate() {
-                            for (track_idx, track_id) in group.tracks.iter().enumerate() {
-                                state
-                                    .track_to_group_index
-                                    .insert(track_id.clone(), group_idx);
-                                state
-                                    .track_to_group_track_index
-                                    .insert(track_id.clone(), track_idx);
-                            }
-                            state
-                                .album_to_group_index
-                                .insert(group.album_id.clone(), group_idx);
-                        }
-
-                        state.groups = result.groups;
-                        state.has_loaded_all_tracks = true;
-                    }
+                    state.write().unwrap().library.populate(
+                        result.track_ids,
+                        result.track_map,
+                        result.groups,
+                        result.albums,
+                    );
 
                     bs::ClientResult::Ok(())
                 }

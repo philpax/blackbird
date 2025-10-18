@@ -6,12 +6,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use blackbird_state::{Group, TrackId};
+use blackbird_state::TrackId;
 use blackbird_subsonic::ClientResult;
 
 use crate::{
     AppState, Logic, PlaybackMode,
-    app_state::AppStateError,
+    app_state::{AppStateError, Library},
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
 
@@ -216,10 +216,7 @@ impl Logic {
     pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
         compute_neighbour(
-            &st.track_ids,
-            &st.groups,
-            &st.track_to_group_index,
-            &st.track_to_group_track_index,
+            &st.library,
             &st.queue,
             st.playback_mode,
             &st.current_track_and_position.as_ref()?.track_id,
@@ -230,10 +227,7 @@ impl Logic {
     pub(super) fn compute_previous_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
         compute_neighbour(
-            &st.track_ids,
-            &st.groups,
-            &st.track_to_group_index,
-            &st.track_to_group_track_index,
+            &st.library,
             &st.queue,
             st.playback_mode,
             &st.current_track_and_position.as_ref()?.track_id,
@@ -244,16 +238,7 @@ impl Logic {
     pub(super) fn ensure_cache_window(&self, center: &TrackId) {
         let window = {
             let st = self.read_state();
-            compute_window(
-                &st.track_ids,
-                &st.groups,
-                &st.track_to_group_index,
-                &st.track_to_group_track_index,
-                &st.queue,
-                st.playback_mode,
-                center,
-                2,
-            )
+            compute_window(&st.library, &st.queue, st.playback_mode, center, 2)
         };
 
         self.write_state()
@@ -309,12 +294,8 @@ fn next_seed(seed: u64) -> u64 {
     x.wrapping_mul(2685821657736338717)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn compute_window(
-    ordered_tracks: &[TrackId],
-    groups: &[Arc<Group>],
-    track_to_group_index: &HashMap<TrackId, usize>,
-    track_to_group_track_index: &HashMap<TrackId, usize>,
+    library: &Library,
     queue: &QueueState,
     mode: PlaybackMode,
     center: &TrackId,
@@ -324,31 +305,22 @@ fn compute_window(
     out.push(center.clone());
 
     // Collect neighbours in each direction in a single pass when possible
-    let prevs = compute_neighbours(
-        ordered_tracks,
-        groups,
-        track_to_group_index,
-        track_to_group_track_index,
+    out.extend(compute_neighbours(
+        library,
         queue,
         mode,
         center,
         Neighbour::Prev,
         radius,
-    );
-    out.extend(prevs);
-
-    let nexts = compute_neighbours(
-        ordered_tracks,
-        groups,
-        track_to_group_index,
-        track_to_group_track_index,
+    ));
+    out.extend(compute_neighbours(
+        library,
         queue,
         mode,
         center,
         Neighbour::Next,
         radius,
-    );
-    out.extend(nexts);
+    ));
 
     out
 }
@@ -360,35 +332,24 @@ enum Neighbour {
 }
 #[allow(clippy::too_many_arguments)]
 fn compute_neighbour(
-    ordered_tracks: &[TrackId],
-    groups: &[Arc<Group>],
-    track_to_group_index: &HashMap<TrackId, usize>,
-    track_to_group_track_index: &HashMap<TrackId, usize>,
+    library: &Library,
     queue: &QueueState,
     mode: PlaybackMode,
     center: &TrackId,
     dir: Neighbour,
 ) -> Option<TrackId> {
-    compute_neighbours(
-        ordered_tracks,
+    compute_neighbours(library, queue, mode, center, dir, 1)
+        .first()
+        .cloned()
+}
+fn compute_neighbours(
+    Library {
+        track_ids,
         groups,
         track_to_group_index,
         track_to_group_track_index,
-        queue,
-        mode,
-        center,
-        dir,
-        1,
-    )
-    .first()
-    .cloned()
-}
-#[allow(clippy::too_many_arguments)]
-fn compute_neighbours(
-    ordered_tracks: &[TrackId],
-    groups: &[Arc<Group>],
-    track_to_group_index: &HashMap<TrackId, usize>,
-    track_to_group_track_index: &HashMap<TrackId, usize>,
+        ..
+    }: &Library,
     queue: &QueueState,
     mode: PlaybackMode,
     center: &TrackId,
@@ -440,12 +401,12 @@ fn compute_neighbours(
             }
         }
         PlaybackMode::Sequential => {
-            let Some(idx) = ordered_tracks.iter().position(|s| s == center) else {
+            let Some(idx) = track_ids.iter().position(|s| s == center) else {
                 tracing::warn!("Center track {center} not found in ordered tracks");
                 return vec![];
             };
 
-            if ordered_tracks.len() <= 1 {
+            if track_ids.len() <= 1 {
                 return vec![];
             }
 
@@ -457,16 +418,16 @@ fn compute_neighbours(
                                 idx - i - 1
                             } else {
                                 // Wrap around: go to end and count backwards
-                                ordered_tracks.len() - (i + 1 - idx)
+                                track_ids.len() - (i + 1 - idx)
                             };
-                            ordered_tracks[pos].clone()
+                            track_ids[pos].clone()
                         })
                         .collect()
                 }
                 Neighbour::Next => (1..=count)
                     .map(|i| {
-                        let pos = (idx + i) % ordered_tracks.len();
-                        ordered_tracks[pos].clone()
+                        let pos = (idx + i) % track_ids.len();
+                        track_ids[pos].clone()
                     })
                     .collect(),
             }
@@ -474,7 +435,7 @@ fn compute_neighbours(
         PlaybackMode::Shuffle => {
             match dir {
                 Neighbour::Prev => get_tracks_shuffle_order(
-                    ordered_tracks,
+                    track_ids,
                     center,
                     queue.shuffle_seed,
                     count,
@@ -482,7 +443,7 @@ fn compute_neighbours(
                     |k, cur_key| k < cur_key, // filter: keys below current
                 ),
                 Neighbour::Next => get_tracks_shuffle_order(
-                    ordered_tracks,
+                    track_ids,
                     center,
                     queue.shuffle_seed,
                     count,
@@ -581,7 +542,7 @@ fn compute_neighbours(
 }
 
 fn get_tracks_shuffle_order<K: Ord + Copy>(
-    ordered_tracks: &[TrackId],
+    track_ids: &[TrackId],
     center: &TrackId,
     seed: u64,
     count: usize,
@@ -589,10 +550,7 @@ fn get_tracks_shuffle_order<K: Ord + Copy>(
     key_filter: impl Fn(u64, u64) -> bool,
 ) -> Vec<TrackId> {
     get_shuffle_order_impl(
-        ordered_tracks
-            .iter()
-            .filter(|&track| track != center)
-            .cloned(),
+        track_ids.iter().filter(|&track| track != center).cloned(),
         shuffle_key(center, seed),
         count,
         |track| shuffle_key(track, seed),
