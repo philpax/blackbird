@@ -277,21 +277,27 @@ fn shuffle_key(id: impl Hash, seed: u64) -> u64 {
     let mut hasher = DefaultHasher::new();
     id.hash(&mut hasher);
     let id_hash = hasher.finish();
-    // Mix with seed using xorshift-like mixing
+
+    // Use a strong mixing function (murmurhash3 finalizer)
+    // This provides excellent avalanche properties ensuring diverse shuffle orderings
     let mut x = id_hash ^ seed;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51afd7ed558ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+    x ^= x >> 33;
     x
 }
 
 fn next_seed(seed: u64) -> u64 {
-    // Simple xorshift* progression to derive next deterministic seed
-    let mut x = seed;
-    x ^= x >> 12;
-    x ^= x << 25;
-    x ^= x >> 27;
-    x.wrapping_mul(2685821657736338717)
+    // Use murmurhash3 finalizer for strong seed progression
+    let mut x = seed.wrapping_add(0x9e3779b97f4a7c15); // Add golden ratio to avoid trivial cycles
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xff51afd7ed558ccd);
+    x ^= x >> 33;
+    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
+    x ^= x >> 33;
+    x
 }
 
 fn compute_window(
