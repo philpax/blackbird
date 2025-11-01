@@ -8,11 +8,13 @@ mod style;
 mod track;
 mod util;
 
-use blackbird_core::{PlaybackMode, blackbird_state::TrackId, util::seconds_to_hms_string};
+use blackbird_core::{
+    PlaybackMode, TrackDisplayDetails, blackbird_state::TrackId, util::seconds_to_hms_string,
+};
 use egui::{
-    Align, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Label,
-    Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
-    TextStyle, Ui, UiBuilder, Vec2, Visuals, Window, pos2,
+    Align, Align2, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
+    Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
+    TextEdit, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -23,7 +25,13 @@ use crate::{App, bc, config::Config, cover_art_cache::CoverArtCache};
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
 
-pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
+#[derive(Default)]
+pub struct UiState {
+    search_open: bool,
+    search_query: String,
+}
+
+pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
     cc.egui_ctx.set_visuals(Visuals::dark());
     cc.egui_ctx.style_mut(|style| {
         style.visuals.panel_fill = config.style.background();
@@ -64,6 +72,8 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) {
     cc.egui_ctx.set_fonts(fonts);
 
     egui_extras::install_image_loaders(&cc.egui_ctx);
+
+    UiState::default()
 }
 
 impl App {
@@ -94,6 +104,21 @@ impl App {
             if !open {
                 logic.clear_error();
             }
+        }
+
+        ctx.input(|i| {
+            if i.modifiers.command && i.key_released(egui::Key::F) {
+                self.ui_state.search_open = !self.ui_state.search_open;
+            }
+        });
+
+        if self.ui_state.search_open {
+            search(
+                logic,
+                ctx,
+                &mut self.ui_state.search_open,
+                &mut self.ui_state.search_query,
+            );
         }
 
         let margin = 8;
@@ -546,4 +571,73 @@ fn control_button(
         .clicked()
     })
     .inner
+}
+
+fn search(logic: &mut bc::Logic, ctx: &Context, search_open: &mut bool, search_query: &mut String) {
+    let mut requested_track_id = None;
+    Window::new("Search")
+        .open(search_open)
+        .default_pos(ctx.screen_rect().center())
+        .default_size(ctx.screen_rect().size() * Vec2::new(0.75, 0.3))
+        .pivot(Align2::CENTER_CENTER)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            ui.add_sized(
+                Vec2::new(ui.available_width(), ui.text_style_height(&TextStyle::Body)),
+                TextEdit::singleline(search_query).hint_text("Your search here..."),
+            )
+            .request_focus();
+            egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+
+                let length = search_query.len();
+                if length == 0 {
+                    ui.label("Type something in to search...");
+                    return;
+                } else if length < 3 {
+                    ui.label("Query too short, please enter at least 3 characters...");
+                    return;
+                }
+
+                let app_state = logic.get_state();
+                let mut app_state = app_state.write().unwrap();
+                let results = app_state.library.search(search_query);
+                if results.is_empty() {
+                    ui.label("No results found...");
+                    return;
+                }
+
+                requested_track_id = egui::ScrollArea::new(Vec2b::TRUE)
+                    .auto_shrink(Vec2b::FALSE)
+                    .show_rows(
+                        ui,
+                        ui.text_style_height(&TextStyle::Body),
+                        results.len(),
+                        |ui, row_indices| {
+                            let mut requested_track_id = None;
+                            for id in &results[row_indices] {
+                                if let Some(details) =
+                                    TrackDisplayDetails::from_track_id(id, &app_state)
+                                {
+                                    let label = Label::new(details.to_string())
+                                        .wrap_mode(TextWrapMode::Extend)
+                                        .selectable(false)
+                                        .sense(Sense::click());
+                                    if ui.add(label).clicked() {
+                                        requested_track_id = Some(id.clone());
+                                    }
+                                }
+                            }
+                            requested_track_id
+                        },
+                    )
+                    .inner;
+            });
+        });
+
+    if let Some(track_id) = requested_track_id {
+        logic.request_play_track(&track_id);
+        *search_open = false;
+        search_query.clear();
+    }
 }

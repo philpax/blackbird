@@ -1,9 +1,9 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::time::Duration;
 
-use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
+use blackbird_state::{AlbumId, TrackId};
 use serde::{Deserialize, Serialize};
 
-use crate::{TrackDisplayDetails, queue::QueueState};
+use crate::{Library, TrackDisplayDetails, queue::QueueState};
 
 #[derive(Default)]
 pub struct AppState {
@@ -18,79 +18,6 @@ pub struct AppState {
     pub volume: f32,
 
     pub error: Option<AppStateError>,
-}
-
-#[derive(Default)]
-pub struct Library {
-    pub track_ids: Vec<TrackId>,
-    pub track_map: HashMap<TrackId, Track>,
-    pub groups: Vec<Arc<Group>>,
-    pub albums: HashMap<AlbumId, Album>,
-    pub has_loaded_all_tracks: bool,
-
-    // Reverse lookup maps
-    pub album_to_group_index: HashMap<AlbumId, usize>,
-    pub track_to_group_index: HashMap<TrackId, usize>,
-    pub track_to_group_track_index: HashMap<TrackId, usize>,
-}
-impl Library {
-    pub fn populate(
-        &mut self,
-        track_ids: Vec<TrackId>,
-        track_map: HashMap<TrackId, Track>,
-        groups: Vec<Arc<Group>>,
-        albums: HashMap<AlbumId, Album>,
-    ) {
-        self.albums = albums;
-        self.track_map = track_map;
-        self.track_ids = track_ids;
-
-        // Populate reverse lookup maps for efficient group shuffle navigation
-        self.track_to_group_index.clear();
-        self.track_to_group_track_index.clear();
-        for (group_idx, group) in groups.iter().enumerate() {
-            for (track_idx, track_id) in group.tracks.iter().enumerate() {
-                self.track_to_group_index
-                    .insert(track_id.clone(), group_idx);
-                self.track_to_group_track_index
-                    .insert(track_id.clone(), track_idx);
-            }
-            self.album_to_group_index
-                .insert(group.album_id.clone(), group_idx);
-        }
-
-        self.groups = groups;
-        self.has_loaded_all_tracks = true;
-    }
-
-    pub fn set_track_starred(&mut self, track_id: &TrackId, starred: bool) -> Option<bool> {
-        let mut old_starred = None;
-        if let Some(track) = self.track_map.get_mut(track_id) {
-            old_starred = Some(track.starred);
-            track.starred = starred;
-        }
-        old_starred
-    }
-
-    pub fn set_album_starred(&mut self, album_id: &AlbumId, starred: bool) -> Option<bool> {
-        let mut old_starred = None;
-
-        if let Some(album) = self.albums.get_mut(album_id) {
-            old_starred = Some(album.starred);
-            album.starred = starred;
-        }
-        if let Some(group_idx) = self.album_to_group_index.get(album_id)
-            && let Some(group) = self.groups.get(*group_idx)
-        {
-            let group = Group {
-                starred,
-                ..(**group).clone()
-            };
-            self.groups[*group_idx] = Arc::new(group);
-        }
-
-        old_starred
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

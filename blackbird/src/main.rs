@@ -74,6 +74,7 @@ pub struct App {
     cover_art_cache: cover_art_cache::CoverArtCache,
     current_window_position: Option<(i32, i32)>,
     current_window_size: Option<(u32, u32)>,
+    ui_state: ui::UiState,
 }
 impl App {
     pub fn new(
@@ -120,7 +121,7 @@ impl App {
             Some(ui::GROUP_ALBUM_ART_SIZE as usize),
         );
 
-        ui::initialize(cc, &config.read().unwrap());
+        let ui_state = ui::initialize(cc, &config.read().unwrap());
 
         App {
             config,
@@ -132,6 +133,7 @@ impl App {
             cover_art_cache,
             current_window_position: None,
             current_window_size: None,
+            ui_state,
         }
     }
 }

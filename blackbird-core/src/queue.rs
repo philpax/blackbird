@@ -11,7 +11,8 @@ use blackbird_subsonic::ClientResult;
 
 use crate::{
     AppState, Logic, PlaybackMode,
-    app_state::{AppStateError, Library},
+    app_state::AppStateError,
+    library::Library,
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
 

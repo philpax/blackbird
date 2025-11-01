@@ -24,6 +24,9 @@ mod queue;
 mod app_state;
 pub use app_state::{AppState, AppStateError, PlaybackMode, TrackAndPosition};
 
+mod library;
+pub use library::Library;
+
 pub struct Logic {
     tokio_thread: TokioThread,
 
@@ -119,14 +122,12 @@ impl std::fmt::Display for TrackDisplayDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let artist = self.track_artist.as_ref().unwrap_or(&self.album_artist);
         write!(f, "{} - {}", artist, self.track_title)?;
-        write!(f, " (")?;
         if artist != &self.album_artist {
-            write!(f, "{} - ", self.album_artist)?;
+            write!(f, " ({})", self.album_artist)?;
         }
         write!(
             f,
-            "{}) [{}/{}]",
-            self.album_artist,
+            " [{}/{}]",
             util::seconds_to_hms_string(self.track_position.as_secs() as u32, false),
             util::seconds_to_hms_string(self.track_duration.as_secs() as u32, false)
         )?;
