@@ -13,9 +13,9 @@ use blackbird_core::{
 };
 use egui::{
     Align, Align2, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
-    Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
-    TextEdit, TextFormat, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window,
-    pos2,
+    Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider,
+    Spinner, TextEdit, TextFormat, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals,
+    Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -583,6 +583,7 @@ fn search(
     search_query: &mut String,
 ) {
     let mut requested_track_id = None;
+    let mut clear = false;
 
     Window::new("Search")
         .open(search_open)
@@ -591,11 +592,16 @@ fn search(
         .pivot(Align2::CENTER_CENTER)
         .collapsible(false)
         .show(ctx, |ui| {
-            ui.add_sized(
+            let response = ui.add_sized(
                 Vec2::new(ui.available_width(), ui.text_style_height(&TextStyle::Body)),
                 TextEdit::singleline(search_query).hint_text("Your search here..."),
-            )
-            .request_focus();
+            );
+            response.request_focus();
+
+            if response.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+                clear = true;
+            }
+
             egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
                 ui.set_min_size(ui.available_size());
 
@@ -698,6 +704,10 @@ fn search(
 
     if let Some(track_id) = requested_track_id {
         logic.request_play_track(&track_id);
+        clear = true;
+    }
+
+    if clear {
         *search_open = false;
         search_query.clear();
     }
