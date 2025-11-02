@@ -75,6 +75,7 @@ pub struct App {
     current_window_position: Option<(i32, i32)>,
     current_window_size: Option<(u32, u32)>,
     ui_state: ui::UiState,
+    shutdown_initiated: bool,
 }
 impl App {
     pub fn new(
@@ -134,11 +135,25 @@ impl App {
             current_window_position: None,
             current_window_size: None,
             ui_state,
+            shutdown_initiated: false,
         }
     }
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Exit immediately if shutdown already initiated
+        if self.shutdown_initiated {
+            return;
+        }
+
+        // Check for shutdown signal from Tokio thread
+        if self.logic.should_shutdown() {
+            self.shutdown_initiated = true;
+            tracing::info!("Shutdown requested, closing application");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
         self.controls.update();
         self.logic.update();
         self.cover_art_cache.update(ctx);

@@ -480,6 +480,10 @@ impl Logic {
         self.playback_thread
             .send(LogicToPlaybackMessage::SetVolume(volume));
     }
+
+    pub fn should_shutdown(&self) -> bool {
+        self.tokio_thread.should_shutdown()
+    }
 }
 impl Logic {
     pub fn request_play_track(&self, track_id: &TrackId) {
