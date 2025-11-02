@@ -14,8 +14,7 @@ use blackbird_core::{
 use egui::{
     Align, Align2, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
     Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider,
-    Spinner, TextEdit, TextFormat, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals,
-    Window, pos2,
+    Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -644,54 +643,84 @@ fn search(
 
                                 let font_id = TextStyle::Body.resolve(ui.style());
 
-                                let mut layout_job = egui::text::LayoutJob::default();
-                                layout_job.append(
-                                    artist,
-                                    0.0,
-                                    TextFormat {
-                                        color: style::string_to_colour(artist).into(),
-                                        font_id: font_id.clone(),
-                                        ..Default::default()
-                                    },
-                                );
-                                layout_job.append(
-                                    " - ",
-                                    0.0,
-                                    TextFormat {
-                                        font_id: font_id.clone(),
-                                        ..Default::default()
-                                    },
-                                );
-                                layout_job.append(
-                                    &details.track_title,
-                                    0.0,
-                                    TextFormat {
-                                        color: style.track_name(),
-                                        font_id: font_id.clone(),
-                                        ..Default::default()
-                                    },
-                                );
-                                layout_job.append(
-                                    &format!(
-                                        " [{}]",
-                                        seconds_to_hms_string(
-                                            details.track_duration.as_secs() as u32,
-                                            false
-                                        )
+                                // Allocate space for this row and sense interaction
+                                let (rect, response) = ui.allocate_exact_size(
+                                    vec2(
+                                        ui.available_width(),
+                                        ui.text_style_height(&TextStyle::Body),
                                     ),
-                                    0.0,
-                                    TextFormat {
-                                        color: style.track_length(),
-                                        font_id: font_id.clone(),
-                                        ..Default::default()
-                                    },
+                                    Sense::click(),
                                 );
 
-                                let label = Label::new(layout_job)
-                                    .wrap_mode(TextWrapMode::Extend)
-                                    .selectable(false)
-                                    .sense(Sense::click());
-                                if ui.add(label).clicked() {
+                                let darken = |color: Color32| -> Color32 {
+                                    const DARKEN_FACTOR: f32 = 0.75;
+                                    let [r, g, b, a] = color.to_array();
+                                    Color32::from_rgba_unmultiplied(
+                                        (r as f32 * DARKEN_FACTOR) as u8,
+                                        (g as f32 * DARKEN_FACTOR) as u8,
+                                        (b as f32 * DARKEN_FACTOR) as u8,
+                                        a,
+                                    )
+                                };
+
+                                let is_hovered = response.hovered();
+                                let [artist_color, track_color, length_color] = [
+                                    style::string_to_colour(artist).into(),
+                                    style.track_name(),
+                                    style.track_length(),
+                                ]
+                                .map(|color| if is_hovered { color } else { darken(color) });
+                                let layout_job = {
+                                    let mut layout_job = egui::text::LayoutJob::default();
+                                    layout_job.append(
+                                        artist,
+                                        0.0,
+                                        TextFormat {
+                                            color: artist_color,
+                                            font_id: font_id.clone(),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    layout_job.append(
+                                        " - ",
+                                        0.0,
+                                        TextFormat {
+                                            font_id: font_id.clone(),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    layout_job.append(
+                                        &details.track_title,
+                                        0.0,
+                                        TextFormat {
+                                            color: track_color,
+                                            font_id: font_id.clone(),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    layout_job.append(
+                                        &format!(
+                                            " [{}]",
+                                            seconds_to_hms_string(
+                                                details.track_duration.as_secs() as u32,
+                                                false
+                                            )
+                                        ),
+                                        0.0,
+                                        TextFormat {
+                                            color: length_color,
+                                            font_id: font_id.clone(),
+                                            ..Default::default()
+                                        },
+                                    );
+                                    layout_job.wrap.max_width = f32::INFINITY;
+                                    layout_job
+                                };
+                                let galley = ui.fonts(|fonts| fonts.layout_job(layout_job));
+                                ui.painter()
+                                    .galley(rect.left_top(), galley, Color32::PLACEHOLDER);
+
+                                if response.clicked() {
                                     requested_track_id = Some(id.clone());
                                 }
                             }
