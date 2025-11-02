@@ -14,7 +14,8 @@ use blackbird_core::{
 use egui::{
     Align, Align2, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
     Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
-    TextEdit, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window, pos2,
+    TextEdit, TextFormat, TextStyle, TextWrapMode, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window,
+    pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -116,6 +117,7 @@ impl App {
             search(
                 logic,
                 ctx,
+                &config.style,
                 &mut self.ui_state.search_open,
                 &mut self.ui_state.search_query,
             );
@@ -573,8 +575,15 @@ fn control_button(
     .inner
 }
 
-fn search(logic: &mut bc::Logic, ctx: &Context, search_open: &mut bool, search_query: &mut String) {
+fn search(
+    logic: &mut bc::Logic,
+    ctx: &Context,
+    style: &style::Style,
+    search_open: &mut bool,
+    search_query: &mut String,
+) {
     let mut requested_track_id = None;
+
     Window::new("Search")
         .open(search_open)
         .default_pos(ctx.screen_rect().center())
@@ -616,16 +625,68 @@ fn search(logic: &mut bc::Logic, ctx: &Context, search_open: &mut bool, search_q
                         |ui, row_indices| {
                             let mut requested_track_id = None;
                             for id in &results[row_indices] {
-                                if let Some(details) =
+                                let Some(details) =
                                     TrackDisplayDetails::from_track_id(id, &app_state)
-                                {
-                                    let label = Label::new(details.to_string())
-                                        .wrap_mode(TextWrapMode::Extend)
-                                        .selectable(false)
-                                        .sense(Sense::click());
-                                    if ui.add(label).clicked() {
-                                        requested_track_id = Some(id.clone());
-                                    }
+                                else {
+                                    continue;
+                                };
+
+                                let artist = details
+                                    .track_artist
+                                    .as_deref()
+                                    .unwrap_or(&details.album_artist);
+
+                                let font_id = TextStyle::Body.resolve(ui.style());
+
+                                let mut layout_job = egui::text::LayoutJob::default();
+                                layout_job.append(
+                                    artist,
+                                    0.0,
+                                    TextFormat {
+                                        color: style::string_to_colour(artist).into(),
+                                        font_id: font_id.clone(),
+                                        ..Default::default()
+                                    },
+                                );
+                                layout_job.append(
+                                    " - ",
+                                    0.0,
+                                    TextFormat {
+                                        font_id: font_id.clone(),
+                                        ..Default::default()
+                                    },
+                                );
+                                layout_job.append(
+                                    &details.track_title,
+                                    0.0,
+                                    TextFormat {
+                                        color: style.track_name(),
+                                        font_id: font_id.clone(),
+                                        ..Default::default()
+                                    },
+                                );
+                                layout_job.append(
+                                    &format!(
+                                        " [{}]",
+                                        seconds_to_hms_string(
+                                            details.track_duration.as_secs() as u32,
+                                            false
+                                        )
+                                    ),
+                                    0.0,
+                                    TextFormat {
+                                        color: style.track_length(),
+                                        font_id: font_id.clone(),
+                                        ..Default::default()
+                                    },
+                                );
+
+                                let label = Label::new(layout_job)
+                                    .wrap_mode(TextWrapMode::Extend)
+                                    .selectable(false)
+                                    .sense(Sense::click());
+                                if ui.add(label).clicked() {
+                                    requested_track_id = Some(id.clone());
                                 }
                             }
                             requested_track_id
