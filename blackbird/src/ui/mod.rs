@@ -597,8 +597,13 @@ fn search(
             );
             response.request_focus();
 
-            if response.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
-                clear = true;
+            let mut play_first_track = false;
+            if response.has_focus() {
+                if ui.input(|i| i.key_pressed(Key::Escape)) {
+                    clear = true;
+                } else if ui.input(|i| i.key_pressed(Key::Enter)) {
+                    play_first_track = true;
+                }
             }
 
             egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
@@ -621,7 +626,12 @@ fn search(
                     return;
                 }
 
-                requested_track_id = egui::ScrollArea::new(Vec2b::TRUE)
+                // If Enter was pressed and we have results, select the first item
+                if play_first_track && !results.is_empty() {
+                    requested_track_id = Some(results[0].clone());
+                }
+
+                let response = egui::ScrollArea::new(Vec2b::TRUE)
                     .auto_shrink(Vec2b::FALSE)
                     .show_rows(
                         ui,
@@ -726,8 +736,11 @@ fn search(
                             }
                             requested_track_id
                         },
-                    )
-                    .inner;
+                    );
+
+                if requested_track_id.is_none() {
+                    requested_track_id = response.inner;
+                }
             });
         });
 
