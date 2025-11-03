@@ -85,7 +85,7 @@ impl PlaybackThread {
 
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(volume);
+        sink.set_volume(volume * volume);
 
         const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
 
@@ -192,7 +192,7 @@ impl PlaybackThread {
                         }
                     }
                     LTPM::SetVolume(volume) => {
-                        sink.set_volume(volume);
+                        sink.set_volume(volume * volume);
                     }
                 }
             }
