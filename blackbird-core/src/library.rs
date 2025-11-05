@@ -65,10 +65,10 @@ impl Library {
             for track_id in track_ids {
                 let track = track_map.get(track_id).unwrap();
                 let album = track.album_id.as_ref().and_then(|id| albums.get(id));
-                let artist = album
-                    .as_ref()
-                    .map(|a| a.artist.as_str())
-                    .or(track.artist.as_deref());
+                let artist = track
+                    .artist
+                    .as_deref()
+                    .or(album.as_ref().map(|a| a.artist.as_str()));
 
                 let mut query = String::new();
                 if let Some(artist) = artist {
