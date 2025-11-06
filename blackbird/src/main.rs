@@ -68,6 +68,7 @@ fn main() {
                 config.clone(),
                 logic,
                 cover_art_loaded_rx,
+                icon,
             )))
         }),
     )
@@ -86,6 +87,7 @@ pub struct App {
     current_window_size: Option<(u32, u32)>,
     ui_state: ui::UiState,
     shutdown_initiated: bool,
+    tray_icon: tray_icon::TrayIcon,
 }
 impl App {
     pub fn new(
@@ -93,6 +95,7 @@ impl App {
         config: Arc<RwLock<Config>>,
         logic: bc::Logic,
         cover_art_loaded_rx: std::sync::mpsc::Receiver<bc::CoverArt>,
+        icon: image::RgbaImage,
     ) -> Self {
         let _config_reload_thread = std::thread::spawn({
             let config = config.clone();
@@ -133,6 +136,7 @@ impl App {
         );
 
         let ui_state = ui::initialize(cc, &config.read().unwrap());
+        let tray_icon = Self::build_tray_icon(icon);
 
         App {
             config,
@@ -146,6 +150,26 @@ impl App {
             current_window_size: None,
             ui_state,
             shutdown_initiated: false,
+            tray_icon,
+        }
+    }
+
+    fn build_tray_icon(icon: image::RgbaImage) -> tray_icon::TrayIcon {
+        let (icon_width, icon_height) = icon.dimensions();
+        tray_icon::TrayIconBuilder::new()
+            .with_tooltip(Self::build_tooltip(None))
+            .with_icon(
+                tray_icon::Icon::from_rgba(icon.into_vec(), icon_width, icon_height).unwrap(),
+            )
+            .build()
+            .unwrap()
+    }
+
+    fn build_tooltip(track_display_details: Option<&bc::TrackDisplayDetails>) -> String {
+        if let Some(track_display_details) = track_display_details {
+            format!("{track_display_details}")
+        } else {
+            "Not playing".to_string()
         }
     }
 }
@@ -154,6 +178,16 @@ impl eframe::App for App {
         // Exit immediately if shutdown already initiated
         if self.shutdown_initiated {
             return;
+        }
+
+        while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+            if let tray_icon::TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                ..
+            } = event
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
         }
 
         // Check for shutdown signal from Tokio thread
@@ -167,6 +201,12 @@ impl eframe::App for App {
         self.controls.update();
         self.logic.update();
         self.cover_art_cache.update(ctx);
+
+        self.tray_icon
+            .set_tooltip(Some(Self::build_tooltip(
+                self.logic.get_track_display_details().as_ref(),
+            )))
+            .ok();
 
         // Update current window size
         ctx.input(|i| {

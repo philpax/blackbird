@@ -25,3 +25,4 @@ image = { version = "0.25", default-features = false, features = [
 egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
 souvlaki = "0.8.3"
 raw-window-handle = "0.6"
+tray-icon = "0.21.2"
