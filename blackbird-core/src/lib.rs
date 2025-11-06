@@ -99,6 +99,11 @@ impl TrackDisplayDetails {
         })
     }
 
+    /// Returns the artist name, or the album artist if the track artist is not set.
+    pub fn artist(&self) -> &str {
+        self.track_artist.as_deref().unwrap_or(&self.album_artist)
+    }
+
     /// Assumes a position of 0
     pub fn from_track_id(track_id: &TrackId, state: &AppState) -> Option<TrackDisplayDetails> {
         TrackDisplayDetails::from_track_and_position(
@@ -120,9 +125,9 @@ impl TrackDisplayDetails {
 }
 impl std::fmt::Display for TrackDisplayDetails {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let artist = self.track_artist.as_ref().unwrap_or(&self.album_artist);
+        let artist = self.artist();
         write!(f, "{} - {}", artist, self.track_title)?;
-        if artist != &self.album_artist {
+        if artist != self.album_artist {
             write!(f, " ({})", self.album_artist)?;
         }
         write!(

@@ -646,11 +646,6 @@ fn search(
                                     continue;
                                 };
 
-                                let artist = details
-                                    .track_artist
-                                    .as_deref()
-                                    .unwrap_or(&details.album_artist);
-
                                 let font_id = TextStyle::Body.resolve(ui.style());
 
                                 // Allocate space for this row and sense interaction
@@ -674,6 +669,7 @@ fn search(
                                 };
 
                                 let is_hovered = response.hovered();
+                                let artist = details.artist();
                                 let [artist_color, track_color, length_color] = [
                                     style::string_to_colour(artist).into(),
                                     style.track_name(),

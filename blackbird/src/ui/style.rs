@@ -1,4 +1,4 @@
-use egui::{ecolor::Hsva, Color32};
+use egui::{Color32, ecolor::Hsva};
 use serde::{Deserialize, Serialize};
 
 macro_rules! style_fields {
