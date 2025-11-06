@@ -8,6 +8,7 @@ mod ui;
 use blackbird_core as bc;
 
 use config::Config;
+use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {
@@ -18,6 +19,10 @@ fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blackbird=info")),
         )
         .init();
+
+    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
+        .unwrap()
+        .to_rgba8();
 
     // Load and save config at startup
     let config = Config::load();
@@ -43,7 +48,12 @@ fn main() {
             .with_inner_size([
                 config.general.window_width as f32,
                 config.general.window_height as f32,
-            ]),
+            ])
+            .with_icon(egui::IconData {
+                rgba: icon.as_bytes().into(),
+                width: icon.width() as u32,
+                height: icon.height() as u32,
+            }),
         ..eframe::NativeOptions::default()
     };
 
