@@ -78,6 +78,7 @@ pub struct TrackDisplayDetails {
     pub track_artist: Option<String>,
     pub track_duration: Duration,
     pub track_position: Duration,
+    pub show_time: bool,
 }
 impl TrackDisplayDetails {
     pub fn from_track_and_position(
@@ -96,12 +97,19 @@ impl TrackDisplayDetails {
             track_artist: track.artist.clone(),
             track_duration: Duration::from_secs(track.duration.unwrap_or(1) as u64),
             track_position: track_and_position.position,
+            show_time: true,
         })
     }
 
     /// Returns the artist name, or the album artist if the track artist is not set.
     pub fn artist(&self) -> &str {
         self.track_artist.as_deref().unwrap_or(&self.album_artist)
+    }
+
+    /// Sets whether to show the time in the string report.
+    pub fn set_show_time(mut self, show_time: bool) -> Self {
+        self.show_time = show_time;
+        self
     }
 
     /// Assumes a position of 0
@@ -117,9 +125,9 @@ impl TrackDisplayDetails {
 
     /// Returns a string representation of the track, including the album artist, track title, and duration,
     /// or the track ID if no information is available.
-    pub fn string_report(track_id: &TrackId, state: &AppState) -> String {
+    pub fn string_report_without_time(track_id: &TrackId, state: &AppState) -> String {
         TrackDisplayDetails::from_track_id(track_id, state)
-            .map(|i| i.to_string())
+            .map(|i| i.set_show_time(false).to_string())
             .unwrap_or_else(|| format!("unknown track {track_id}"))
     }
 }
@@ -130,12 +138,14 @@ impl std::fmt::Display for TrackDisplayDetails {
         if artist != self.album_artist {
             write!(f, " ({})", self.album_artist)?;
         }
-        write!(
-            f,
-            " [{}/{}]",
-            util::seconds_to_hms_string(self.track_position.as_secs() as u32, false),
-            util::seconds_to_hms_string(self.track_duration.as_secs() as u32, false)
-        )?;
+        if self.show_time {
+            write!(
+                f,
+                " [{}/{}]",
+                util::seconds_to_hms_string(self.track_position.as_secs() as u32, false),
+                util::seconds_to_hms_string(self.track_duration.as_secs() as u32, false)
+            )?;
+        }
         Ok(())
     }
 }
@@ -203,9 +213,9 @@ impl Logic {
                 PlaybackToLogicMessage::TrackStarted(track_and_position) => {
                     tracing::debug!(
                         "TrackStarted: {}",
-                        TrackDisplayDetails::string_report(
+                        TrackDisplayDetails::string_report_without_time(
                             &track_and_position.track_id,
-                            &self.state.read().unwrap()
+                            &self.state.read().unwrap(),
                         )
                     );
                     self.ensure_cache_window(&track_and_position.track_id);
@@ -224,7 +234,10 @@ impl Logic {
                 PlaybackToLogicMessage::FailedToPlayTrack(track_id, error) => {
                     tracing::error!(
                         "Failed to play track `{}`: {error}",
-                        TrackDisplayDetails::string_report(&track_id, &self.state.read().unwrap())
+                        TrackDisplayDetails::string_report_without_time(
+                            &track_id,
+                            &self.state.read().unwrap()
+                        )
                     );
                     self.write_state().error =
                         Some(AppStateError::DecodeTrackFailed { track_id, error });

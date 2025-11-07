@@ -57,25 +57,25 @@ impl AppStateError {
             AppStateError::LoadTrackFailed { track_id, error } => {
                 format!(
                     "Track `{}` failed to load: {error}",
-                    TrackDisplayDetails::string_report(track_id, state)
+                    TrackDisplayDetails::string_report_without_time(track_id, state)
                 )
             }
             AppStateError::DecodeTrackFailed { track_id, error } => {
                 format!(
                     "Track `{}` failed to decode: {error}",
-                    TrackDisplayDetails::string_report(track_id, state)
+                    TrackDisplayDetails::string_report_without_time(track_id, state)
                 )
             }
             AppStateError::StarTrackFailed { track_id, error } => {
                 format!(
                     "Failed to star track `{}`: {error}",
-                    TrackDisplayDetails::string_report(track_id, state)
+                    TrackDisplayDetails::string_report_without_time(track_id, state)
                 )
             }
             AppStateError::UnstarTrackFailed { track_id, error } => {
                 format!(
                     "Failed to unstar track `{}`: {error}",
-                    TrackDisplayDetails::string_report(track_id, state)
+                    TrackDisplayDetails::string_report_without_time(track_id, state)
                 )
             }
             AppStateError::StarAlbumFailed { album_id, error } => {
