@@ -165,10 +165,20 @@ impl App {
                     config,
                     has_loaded_all_tracks,
                     scroll_margin.into(),
-                    track_to_scroll_to,
+                    track_to_scroll_to.as_ref(),
                     &mut self.cover_art_cache,
                 );
             });
+
+        // If the track-to-scroll-to doesn't exist yet in the library, save it back
+        // and it will hopefully become available at some point in the future
+        if let Some(track_id) = track_to_scroll_to {
+            let state = logic.get_state();
+            let mut state = state.write().unwrap();
+            if !state.library.track_map.contains_key(&track_id) {
+                state.last_requested_track_for_ui_scroll = Some(track_id);
+            }
+        }
     }
 }
 
@@ -436,7 +446,7 @@ fn library(
     config: &Config,
     has_loaded_all_tracks: bool,
     scroll_margin: f32,
-    track_to_scroll_to: Option<TrackId>,
+    track_to_scroll_to: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
 ) {
     ui.scope(|ui| {
@@ -468,7 +478,7 @@ fn library(
                     group::target_scroll_height_for_track(
                         &logic.get_state().read().unwrap(),
                         spaced_row_height,
-                        &id,
+                        id,
                     )
                 }) {
                     let target_height = area_offset_y + scroll_to_height - viewport.min.y;

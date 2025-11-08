@@ -39,6 +39,14 @@ fn main() {
         cover_art_loaded_tx,
     });
 
+    // Restore last playback mode
+    logic.set_playback_mode(config.last_playback.playback_mode);
+
+    // Set the scroll target to the last played track
+    if let Some(track_id) = &config.last_playback.track_id {
+        logic.set_scroll_target(track_id);
+    }
+
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_position([
@@ -232,6 +240,13 @@ impl eframe::App for App {
             config.general.window_height = height;
         }
         config.general.volume = self.logic.get_volume();
+        config.last_playback.track_id = self.logic.get_playing_track_id();
+        config.last_playback.track_position_secs = self
+            .logic
+            .get_playing_position()
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+        config.last_playback.playback_mode = self.logic.get_playback_mode();
         config.save();
     }
 }

@@ -454,6 +454,13 @@ impl Logic {
             .map(|tp| tp.track_id.clone())
     }
 
+    pub fn get_playing_position(&self) -> Option<Duration> {
+        self.read_state()
+            .current_track_and_position
+            .as_ref()
+            .map(|tp| tp.position)
+    }
+
     pub fn is_track_loaded(&self) -> bool {
         self.read_state().current_track_and_position.is_some()
     }
@@ -506,6 +513,10 @@ impl Logic {
         self.write_state().volume = volume;
         self.playback_thread
             .send(LogicToPlaybackMessage::SetVolume(volume));
+    }
+
+    pub fn set_scroll_target(&self, track_id: &TrackId) {
+        self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
     }
 
     pub fn should_shutdown(&self) -> bool {
