@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::time::Duration;
+use std::{ffi::c_void, sync::Arc};
 
 mod group;
 pub use group::GROUP_ALBUM_ART_SIZE;
@@ -77,7 +77,7 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState 
 }
 
 impl App {
-    pub fn render(&mut self, ctx: &Context) {
+    pub fn render(&mut self, ctx: &Context, tray_icon_handle: *mut c_void) {
         let logic = &mut self.logic;
         let config = &self.config.read().unwrap();
 
@@ -89,6 +89,16 @@ impl App {
             .take();
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
+                #[cfg(target_os = "windows")]
+                show_windows_notification(
+                    tray_icon_handle,
+                    "Blackbird",
+                    &TrackDisplayDetails::string_report_without_time(
+                        &track_and_position.track_id,
+                        &logic.get_state().read().unwrap(),
+                    ),
+                );
+
                 track_to_scroll_to = Some(track_and_position.track_id);
             }
         }
@@ -748,5 +758,36 @@ fn search(
     if clear {
         *search_open = false;
         search_query.clear();
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn show_windows_notification(hwnd: *mut c_void, title: &str, message: &str) {
+    use windows::Win32::UI::Shell::{
+        NIF_INFO, NIIF_INFO, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW,
+    };
+
+    let mut title_wide: Vec<u16> = title.encode_utf16().collect();
+    let mut message_wide: Vec<u16> = message.encode_utf16().collect();
+
+    // Ensure null termination and proper sizing
+    title_wide.resize(64, 0);
+    message_wide.resize(256, 0);
+
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: windows::Win32::Foundation::HWND(hwnd),
+        uID: 1, // Should match your tray icon ID
+        uFlags: NIF_INFO,
+        dwInfoFlags: NIIF_INFO, // Can be NIIF_WARNING, NIIF_ERROR, or NIIF_NONE
+        ..Default::default()
+    };
+
+    // Copy strings into the fixed-size arrays
+    nid.szInfoTitle[..title_wide.len()].copy_from_slice(&title_wide);
+    nid.szInfo[..message_wide.len()].copy_from_slice(&message_wide);
+
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &nid);
     }
 }
