@@ -314,11 +314,11 @@ impl Logic {
     }
 
     pub fn previous(&self) {
-        // If we're past 5% of the track, seek to the start instead of going to previous track
+        // If we're past 5 seconds of the track, seek to the start instead of going to previous track
         // I bristle a little at pulling in unnecessary information just to get the position / duration,
         // but this is getting called once every few minutes, so I'll get over it.
         if let Some(details) = self.get_track_display_details()
-            && details.track_position > details.track_duration.mul_f32(0.05)
+            && details.track_position > Duration::from_secs(5)
         {
             self.seek_current(Duration::from_secs(0));
             return;
