@@ -2,7 +2,6 @@ use blackbird_core as bc;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 
 pub struct TrayMenu {
-    menu: Menu,
     current_track_item: MenuItem,
     prev_item: MenuItem,
     next_item: MenuItem,
@@ -64,7 +63,6 @@ impl TrayMenu {
         menu.append(&quit_item).unwrap();
 
         let tray_menu = Self {
-            menu: menu.clone(),
             current_track_item,
             prev_item,
             next_item,
@@ -92,17 +90,11 @@ impl TrayMenu {
     }
 
     fn build_tooltip(track_display_details: Option<&bc::TrackDisplayDetails>) -> String {
-        if let Some(track_display_details) = track_display_details {
-            format!("{track_display_details}")
-        } else {
-            "Not playing".to_string()
-        }
+        track_display_details.map_or_else(|| "Not playing".to_string(), |d| d.to_string())
     }
 
-    /// Handle menu events. Returns true if the application should quit.
-    pub fn handle_events(&self, logic: &bc::Logic, ctx: &egui::Context) -> bool {
-        let mut should_quit = false;
-
+    /// Handle menu events
+    pub fn handle_events(&self, logic: &bc::Logic, ctx: &egui::Context) {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.prev_item.id() {
                 logic.previous();
@@ -110,7 +102,6 @@ impl TrayMenu {
                 logic.next();
             } else if event.id == self.quit_item.id() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                should_quit = true;
             } else {
                 // Check if it's a playback mode item
                 for (mode, item) in &self.playback_mode_items {
@@ -121,8 +112,6 @@ impl TrayMenu {
                 }
             }
         }
-
-        should_quit
     }
 
     /// Update the menu state based on current playback state
@@ -137,11 +126,12 @@ impl TrayMenu {
         // Update menu current track display
         let track_display = logic
             .get_track_display_details()
-            .map(|details| format!("{}", details));
+            .map(|details| details.to_string());
         if track_display != self.last_track_display {
             let text = track_display
-                .clone()
-                .unwrap_or_else(|| "Not playing".to_string());
+                .as_deref()
+                .unwrap_or("Not playing")
+                .to_string();
             self.current_track_item.set_text(text);
             self.last_track_display = track_display;
         }
