@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 mod config;
 mod controls;
 mod cover_art_cache;
+mod tray;
 mod ui;
 
 use blackbird_core as bc;
@@ -10,7 +11,6 @@ use blackbird_core as bc;
 use config::Config;
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem, CheckMenuItem};
 
 fn main() {
     tracing_subscriber::registry()
@@ -97,18 +97,7 @@ pub struct App {
     ui_state: ui::UiState,
     shutdown_initiated: bool,
     tray_icon: tray_icon::TrayIcon,
-    tray_menu: Menu,
-    current_track_item: MenuItem,
-    prev_item: MenuItem,
-    next_item: MenuItem,
-    sequential_item: CheckMenuItem,
-    repeat_one_item: CheckMenuItem,
-    group_repeat_item: CheckMenuItem,
-    shuffle_item: CheckMenuItem,
-    group_shuffle_item: CheckMenuItem,
-    quit_item: MenuItem,
-    last_track_display: Option<String>,
-    last_playback_mode: bc::PlaybackMode,
+    tray_menu: tray::TrayMenu,
 }
 impl App {
     pub fn new(
@@ -159,20 +148,7 @@ impl App {
         let ui_state = ui::initialize(cc, &config.read().unwrap());
 
         let current_playback_mode = logic.get_playback_mode();
-        let (
-            tray_menu,
-            current_track_item,
-            prev_item,
-            next_item,
-            sequential_item,
-            repeat_one_item,
-            group_repeat_item,
-            shuffle_item,
-            group_shuffle_item,
-            quit_item,
-        ) = Self::build_tray_menu(current_playback_mode);
-
-        let tray_icon = Self::build_tray_icon(icon, &tray_menu);
+        let (tray_icon, tray_menu) = tray::TrayMenu::new(icon, current_playback_mode);
 
         App {
             config,
@@ -188,133 +164,6 @@ impl App {
             shutdown_initiated: false,
             tray_icon,
             tray_menu,
-            current_track_item,
-            prev_item,
-            next_item,
-            sequential_item,
-            repeat_one_item,
-            group_repeat_item,
-            shuffle_item,
-            group_shuffle_item,
-            quit_item,
-            last_track_display: None,
-            last_playback_mode: current_playback_mode,
-        }
-    }
-
-    fn build_tray_icon(icon: image::RgbaImage, menu: &Menu) -> tray_icon::TrayIcon {
-        let (icon_width, icon_height) = icon.dimensions();
-        tray_icon::TrayIconBuilder::new()
-            .with_tooltip(Self::build_tooltip(None))
-            .with_icon(
-                tray_icon::Icon::from_rgba(icon.into_vec(), icon_width, icon_height).unwrap(),
-            )
-            .with_menu(Box::new(menu.clone()))
-            .build()
-            .unwrap()
-    }
-
-    fn build_tray_menu(
-        current_playback_mode: bc::PlaybackMode,
-    ) -> (
-        Menu,
-        MenuItem,
-        MenuItem,
-        MenuItem,
-        CheckMenuItem,
-        CheckMenuItem,
-        CheckMenuItem,
-        CheckMenuItem,
-        CheckMenuItem,
-        MenuItem,
-    ) {
-        let menu = Menu::new();
-
-        // Current track (disabled, non-clickable)
-        let current_track_item = MenuItem::new("Not playing", false, None);
-        menu.append(&current_track_item).unwrap();
-
-        // Separator
-        menu.append(&PredefinedMenuItem::separator()).unwrap();
-
-        // Previous
-        let prev_item = MenuItem::new("Previous", true, None);
-        menu.append(&prev_item).unwrap();
-
-        // Next
-        let next_item = MenuItem::new("Next", true, None);
-        menu.append(&next_item).unwrap();
-
-        // Separator
-        menu.append(&PredefinedMenuItem::separator()).unwrap();
-
-        // Playback modes
-        let sequential_item = CheckMenuItem::new(
-            "Sequential",
-            true,
-            current_playback_mode == bc::PlaybackMode::Sequential,
-            None,
-        );
-        menu.append(&sequential_item).unwrap();
-
-        let repeat_one_item = CheckMenuItem::new(
-            "Repeat One",
-            true,
-            current_playback_mode == bc::PlaybackMode::RepeatOne,
-            None,
-        );
-        menu.append(&repeat_one_item).unwrap();
-
-        let group_repeat_item = CheckMenuItem::new(
-            "Group Repeat",
-            true,
-            current_playback_mode == bc::PlaybackMode::GroupRepeat,
-            None,
-        );
-        menu.append(&group_repeat_item).unwrap();
-
-        let shuffle_item = CheckMenuItem::new(
-            "Shuffle",
-            true,
-            current_playback_mode == bc::PlaybackMode::Shuffle,
-            None,
-        );
-        menu.append(&shuffle_item).unwrap();
-
-        let group_shuffle_item = CheckMenuItem::new(
-            "Group Shuffle",
-            true,
-            current_playback_mode == bc::PlaybackMode::GroupShuffle,
-            None,
-        );
-        menu.append(&group_shuffle_item).unwrap();
-
-        // Separator
-        menu.append(&PredefinedMenuItem::separator()).unwrap();
-
-        // Quit
-        let quit_item = MenuItem::new("Quit", true, None);
-        menu.append(&quit_item).unwrap();
-
-        (
-            menu,
-            current_track_item,
-            prev_item,
-            next_item,
-            sequential_item,
-            repeat_one_item,
-            group_repeat_item,
-            shuffle_item,
-            group_shuffle_item,
-            quit_item,
-        )
-    }
-
-    fn build_tooltip(track_display_details: Option<&bc::TrackDisplayDetails>) -> String {
-        if let Some(track_display_details) = track_display_details {
-            format!("{track_display_details}")
-        } else {
-            "Not playing".to_string()
         }
     }
 }
@@ -336,25 +185,7 @@ impl eframe::App for App {
         }
 
         // Handle menu events
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == self.prev_item.id() {
-                self.logic.previous();
-            } else if event.id == self.next_item.id() {
-                self.logic.next();
-            } else if event.id == self.sequential_item.id() {
-                self.logic.set_playback_mode(bc::PlaybackMode::Sequential);
-            } else if event.id == self.repeat_one_item.id() {
-                self.logic.set_playback_mode(bc::PlaybackMode::RepeatOne);
-            } else if event.id == self.group_repeat_item.id() {
-                self.logic.set_playback_mode(bc::PlaybackMode::GroupRepeat);
-            } else if event.id == self.shuffle_item.id() {
-                self.logic.set_playback_mode(bc::PlaybackMode::Shuffle);
-            } else if event.id == self.group_shuffle_item.id() {
-                self.logic.set_playback_mode(bc::PlaybackMode::GroupShuffle);
-            } else if event.id == self.quit_item.id() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
+        self.tray_menu.handle_events(&self.logic, ctx);
 
         // Check for shutdown signal from Tokio thread
         if self.logic.should_shutdown() {
@@ -368,38 +199,8 @@ impl eframe::App for App {
         self.logic.update();
         self.cover_art_cache.update(ctx);
 
-        self.tray_icon
-            .set_tooltip(Some(Self::build_tooltip(
-                self.logic.get_track_display_details().as_ref(),
-            )))
-            .ok();
-
-        // Update menu current track display
-        let track_display = self
-            .logic
-            .get_track_display_details()
-            .map(|details| format!("{}", details));
-        if track_display != self.last_track_display {
-            let text = track_display.clone().unwrap_or_else(|| "Not playing".to_string());
-            self.current_track_item.set_text(text);
-            self.last_track_display = track_display;
-        }
-
-        // Update menu playback mode checkmarks
-        let current_mode = self.logic.get_playback_mode();
-        if current_mode != self.last_playback_mode {
-            self.sequential_item
-                .set_checked(current_mode == bc::PlaybackMode::Sequential);
-            self.repeat_one_item
-                .set_checked(current_mode == bc::PlaybackMode::RepeatOne);
-            self.group_repeat_item
-                .set_checked(current_mode == bc::PlaybackMode::GroupRepeat);
-            self.shuffle_item
-                .set_checked(current_mode == bc::PlaybackMode::Shuffle);
-            self.group_shuffle_item
-                .set_checked(current_mode == bc::PlaybackMode::GroupShuffle);
-            self.last_playback_mode = current_mode;
-        }
+        // Update tray menu
+        self.tray_menu.update(&self.logic, &self.tray_icon);
 
         // Update current window size
         ctx.input(|i| {
