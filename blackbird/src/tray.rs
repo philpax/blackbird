@@ -98,8 +98,10 @@ impl TrayMenu {
         if let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == self.prev_item.id() {
                 logic.previous();
+                ctx.request_repaint();
             } else if event.id == self.next_item.id() {
                 logic.next();
+                ctx.request_repaint();
             } else if event.id == self.quit_item.id() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
@@ -107,6 +109,7 @@ impl TrayMenu {
                 for (mode, item) in &self.playback_mode_items {
                     if event.id == item.id() {
                         logic.set_playback_mode(*mode);
+                        ctx.request_repaint();
                         break;
                     }
                 }
