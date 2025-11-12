@@ -13,7 +13,10 @@ pub struct TrayMenu {
 }
 
 impl TrayMenu {
-    pub fn new(icon: image::RgbaImage, current_playback_mode: bc::PlaybackMode) -> (tray_icon::TrayIcon, Self) {
+    pub fn new(
+        icon: image::RgbaImage,
+        current_playback_mode: bc::PlaybackMode,
+    ) -> (tray_icon::TrayIcon, Self) {
         let menu = Menu::new();
 
         // Current track (disabled, non-clickable)
@@ -46,12 +49,8 @@ impl TrayMenu {
         let playback_mode_items: Vec<(bc::PlaybackMode, CheckMenuItem)> = playback_modes
             .iter()
             .map(|&mode| {
-                let item = CheckMenuItem::new(
-                    mode.as_str(),
-                    true,
-                    mode == current_playback_mode,
-                    None,
-                );
+                let item =
+                    CheckMenuItem::new(mode.as_str(), true, mode == current_playback_mode, None);
                 menu.append(&item).unwrap();
                 (mode, item)
             })
