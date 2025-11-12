@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 mod config;
 mod controls;
 mod cover_art_cache;
+mod tray;
 mod ui;
 
 use blackbird_core as bc;
@@ -96,6 +97,7 @@ pub struct App {
     ui_state: ui::UiState,
     shutdown_initiated: bool,
     tray_icon: tray_icon::TrayIcon,
+    tray_menu: tray::TrayMenu,
 }
 impl App {
     pub fn new(
@@ -144,7 +146,9 @@ impl App {
         );
 
         let ui_state = ui::initialize(cc, &config.read().unwrap());
-        let tray_icon = Self::build_tray_icon(icon);
+
+        let current_playback_mode = logic.get_playback_mode();
+        let (tray_icon, tray_menu) = tray::TrayMenu::new(icon, current_playback_mode);
 
         App {
             config,
@@ -159,25 +163,7 @@ impl App {
             ui_state,
             shutdown_initiated: false,
             tray_icon,
-        }
-    }
-
-    fn build_tray_icon(icon: image::RgbaImage) -> tray_icon::TrayIcon {
-        let (icon_width, icon_height) = icon.dimensions();
-        tray_icon::TrayIconBuilder::new()
-            .with_tooltip(Self::build_tooltip(None))
-            .with_icon(
-                tray_icon::Icon::from_rgba(icon.into_vec(), icon_width, icon_height).unwrap(),
-            )
-            .build()
-            .unwrap()
-    }
-
-    fn build_tooltip(track_display_details: Option<&bc::TrackDisplayDetails>) -> String {
-        if let Some(track_display_details) = track_display_details {
-            format!("{track_display_details}")
-        } else {
-            "Not playing".to_string()
+            tray_menu,
         }
     }
 }
@@ -198,6 +184,9 @@ impl eframe::App for App {
             }
         }
 
+        // Handle menu events
+        self.tray_menu.handle_events(&self.logic, ctx);
+
         // Check for shutdown signal from Tokio thread
         if self.logic.should_shutdown() {
             self.shutdown_initiated = true;
@@ -210,11 +199,8 @@ impl eframe::App for App {
         self.logic.update();
         self.cover_art_cache.update(ctx);
 
-        self.tray_icon
-            .set_tooltip(Some(Self::build_tooltip(
-                self.logic.get_track_display_details().as_ref(),
-            )))
-            .ok();
+        // Update tray menu
+        self.tray_menu.update(&self.logic, &self.tray_icon);
 
         // Update current window size
         ctx.input(|i| {
