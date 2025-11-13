@@ -85,6 +85,7 @@ impl TrayMenu {
                 tray_icon::Icon::from_rgba(icon.into_vec(), icon_width, icon_height).unwrap(),
             )
             .with_menu(Box::new(menu.clone()))
+            .with_menu_on_left_click(false)
             .build()
             .unwrap()
     }
