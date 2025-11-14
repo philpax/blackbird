@@ -212,7 +212,11 @@ impl eframe::App for App {
             }
         });
 
-        self.render(ctx);
+        #[cfg(not(target_os = "windows"))]
+        let tray_icon_handle = std::ptr::null_mut();
+        #[cfg(target_os = "windows")]
+        let tray_icon_handle = self.tray_icon.window_handle();
+        self.render(ctx, tray_icon_handle);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
