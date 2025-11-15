@@ -79,6 +79,7 @@ pub struct TrackDisplayDetails {
     pub track_duration: Duration,
     pub track_position: Duration,
     pub show_time: bool,
+    pub starred: bool,
 }
 impl TrackDisplayDetails {
     pub fn from_track_and_position(
@@ -98,6 +99,7 @@ impl TrackDisplayDetails {
             track_duration: Duration::from_secs(track.duration.unwrap_or(1) as u64),
             track_position: track_and_position.position,
             show_time: true,
+            starred: track.starred,
         })
     }
 
