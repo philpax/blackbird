@@ -194,7 +194,12 @@ fn playing_track_info(
     let track_id = track_display_details
         .as_ref()
         .map(|tdd| tdd.track_id.clone());
+    let album_id = track_display_details
+        .as_ref()
+        .map(|tdd| tdd.album_id.clone());
     let mut track_clicked = false;
+    let mut track_heart_clicked = false;
+    let mut album_heart_clicked = false;
 
     ui.horizontal(|ui| {
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
@@ -206,6 +211,17 @@ fn playing_track_info(
                 }
 
                 if let Some(tdd) = track_display_details {
+                    // Get album starred status
+                    let album_starred = logic
+                        .get_state()
+                        .read()
+                        .unwrap()
+                        .library
+                        .albums
+                        .get(&tdd.album_id)
+                        .map(|album| album.starred)
+                        .unwrap_or(false);
+
                     let ui_builder = UiBuilder::new()
                         .layout(Layout::left_to_right(Align::Min))
                         .sense(Sense::click());
@@ -245,6 +261,17 @@ fn playing_track_info(
                                     )
                                     .selectable(false),
                                 );
+
+                                // Add heart for track
+                                let (heart_response, _) = util::draw_heart(
+                                    ui,
+                                    TextStyle::Body.resolve(ui.style()),
+                                    util::HeartPlacement::Space,
+                                    tdd.starred,
+                                );
+                                if heart_response.clicked() {
+                                    track_heart_clicked = true;
+                                }
                             });
                             ui.horizontal(|ui| {
                                 ui.add(
@@ -261,6 +288,17 @@ fn playing_track_info(
                                     )
                                     .selectable(false),
                                 );
+
+                                // Add heart for album
+                                let (heart_response, _) = util::draw_heart(
+                                    ui,
+                                    TextStyle::Body.resolve(ui.style()),
+                                    util::HeartPlacement::Space,
+                                    album_starred,
+                                );
+                                if heart_response.clicked() {
+                                    album_heart_clicked = true;
+                                }
                             });
                         });
                     });
@@ -379,6 +417,36 @@ fn playing_track_info(
 
     if track_clicked && let Some(track_id) = track_id {
         *track_to_scroll_to = Some(track_id);
+    }
+
+    if track_heart_clicked {
+        if let Some(ref track_id) = track_id {
+            let starred = logic
+                .get_state()
+                .read()
+                .unwrap()
+                .library
+                .track_map
+                .get(track_id)
+                .map(|track| track.starred)
+                .unwrap_or(false);
+            logic.set_track_starred(track_id, !starred);
+        }
+    }
+
+    if album_heart_clicked {
+        if let Some(ref album_id) = album_id {
+            let starred = logic
+                .get_state()
+                .read()
+                .unwrap()
+                .library
+                .albums
+                .get(album_id)
+                .map(|album| album.starred)
+                .unwrap_or(false);
+            logic.set_album_starred(album_id, !starred);
+        }
     }
 }
 
