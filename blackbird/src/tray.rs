@@ -3,12 +3,14 @@ use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuIt
 
 pub struct TrayMenu {
     current_track_item: MenuItem,
+    liked_item: CheckMenuItem,
     prev_item: MenuItem,
     next_item: MenuItem,
     playback_mode_items: Vec<(bc::PlaybackMode, CheckMenuItem)>,
     quit_item: MenuItem,
     last_track_display: Option<String>,
     last_playback_mode: bc::PlaybackMode,
+    last_starred: Option<bool>,
 }
 
 impl TrayMenu {
@@ -21,6 +23,10 @@ impl TrayMenu {
         // Current track (disabled, non-clickable)
         let current_track_item = MenuItem::new("Not playing", false, None);
         menu.append(&current_track_item).unwrap();
+
+        // Liked checkbox
+        let liked_item = CheckMenuItem::new("Liked", true, false, None);
+        menu.append(&liked_item).unwrap();
 
         // Separator
         menu.append(&PredefinedMenuItem::separator()).unwrap();
@@ -64,12 +70,14 @@ impl TrayMenu {
 
         let tray_menu = Self {
             current_track_item,
+            liked_item,
             prev_item,
             next_item,
             playback_mode_items,
             quit_item,
             last_track_display: None,
             last_playback_mode: current_playback_mode,
+            last_starred: None,
         };
 
         let tray_icon = Self::build_tray_icon(icon, &menu);
@@ -103,6 +111,12 @@ impl TrayMenu {
             } else if event.id == self.next_item.id() {
                 logic.next();
                 ctx.request_repaint();
+            } else if event.id == self.liked_item.id() {
+                // Toggle liked status for the current track
+                if let Some(details) = logic.get_track_display_details() {
+                    logic.set_track_starred(&details.track_id, !details.starred);
+                    ctx.request_repaint();
+                }
             } else if event.id == self.quit_item.id() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             } else {
@@ -127,10 +141,9 @@ impl TrayMenu {
             )))
             .ok();
 
-        // Update menu current track display
-        let track_display = logic
-            .get_track_display_details()
-            .map(|details| details.to_string());
+        // Update menu current track display and liked status
+        let track_details = logic.get_track_display_details();
+        let track_display = track_details.as_ref().map(|details| details.to_string());
         if track_display != self.last_track_display {
             let text = track_display
                 .as_deref()
@@ -138,6 +151,19 @@ impl TrayMenu {
                 .to_string();
             self.current_track_item.set_text(text);
             self.last_track_display = track_display;
+        }
+
+        // Update liked checkbox
+        let current_starred = track_details.as_ref().map(|d| d.starred);
+        if current_starred != self.last_starred {
+            if let Some(starred) = current_starred {
+                self.liked_item.set_checked(starred);
+                self.liked_item.set_enabled(true);
+            } else {
+                self.liked_item.set_checked(false);
+                self.liked_item.set_enabled(false);
+            }
+            self.last_starred = current_starred;
         }
 
         // Update menu playback mode checkmarks
