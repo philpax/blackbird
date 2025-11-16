@@ -18,6 +18,7 @@ impl PlaybackThreadSendHandle {
     }
 }
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     PlayTrack(TrackId, Vec<u8>),
     TogglePlayback,
