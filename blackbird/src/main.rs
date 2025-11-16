@@ -3,6 +3,7 @@ use std::sync::{Arc, RwLock};
 mod config;
 mod controls;
 mod cover_art_cache;
+#[cfg(feature = "tray-icon")]
 mod tray;
 mod ui;
 
@@ -96,7 +97,9 @@ pub struct App {
     current_window_size: Option<(u32, u32)>,
     ui_state: ui::UiState,
     shutdown_initiated: bool,
+    #[cfg(feature = "tray-icon")]
     tray_icon: tray_icon::TrayIcon,
+    #[cfg(feature = "tray-icon")]
     tray_menu: tray::TrayMenu,
 }
 impl App {
@@ -105,7 +108,7 @@ impl App {
         config: Arc<RwLock<Config>>,
         logic: bc::Logic,
         cover_art_loaded_rx: std::sync::mpsc::Receiver<bc::CoverArt>,
-        icon: image::RgbaImage,
+        #[cfg_attr(not(feature = "tray-icon"), allow(unused_variables))] icon: image::RgbaImage,
     ) -> Self {
         let _config_reload_thread = std::thread::spawn({
             let config = config.clone();
@@ -147,8 +150,11 @@ impl App {
 
         let ui_state = ui::initialize(cc, &config.read().unwrap());
 
-        let current_playback_mode = logic.get_playback_mode();
-        let (tray_icon, tray_menu) = tray::TrayMenu::new(icon, current_playback_mode);
+        #[cfg(feature = "tray-icon")]
+        let (tray_icon, tray_menu) = {
+            let current_playback_mode = logic.get_playback_mode();
+            tray::TrayMenu::new(icon, current_playback_mode)
+        };
 
         App {
             config,
@@ -162,7 +168,9 @@ impl App {
             current_window_size: None,
             ui_state,
             shutdown_initiated: false,
+            #[cfg(feature = "tray-icon")]
             tray_icon,
+            #[cfg(feature = "tray-icon")]
             tray_menu,
         }
     }
@@ -174,18 +182,21 @@ impl eframe::App for App {
             return;
         }
 
-        while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-            if let tray_icon::TrayIconEvent::Click {
-                button: tray_icon::MouseButton::Left,
-                ..
-            } = event
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        #[cfg(feature = "tray-icon")]
+        {
+            while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+                if let tray_icon::TrayIconEvent::Click {
+                    button: tray_icon::MouseButton::Left,
+                    ..
+                } = event
+                {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
             }
-        }
 
-        // Handle menu events
-        self.tray_menu.handle_events(&self.logic, ctx);
+            // Handle menu events
+            self.tray_menu.handle_events(&self.logic, ctx);
+        }
 
         // Check for shutdown signal from Tokio thread
         if self.logic.should_shutdown() {
@@ -200,6 +211,7 @@ impl eframe::App for App {
         self.cover_art_cache.update(ctx);
 
         // Update tray menu
+        #[cfg(feature = "tray-icon")]
         self.tray_menu.update(&self.logic, &self.tray_icon);
 
         // Update current window size
