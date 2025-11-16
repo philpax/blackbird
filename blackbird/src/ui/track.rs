@@ -50,6 +50,7 @@ pub fn ui(
             right_aligned: true,
         },
         track.starred,
+        false,
     );
     right_x -= heart_size;
     if heart_response.clicked() {

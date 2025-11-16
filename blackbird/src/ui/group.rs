@@ -76,6 +76,7 @@ pub fn ui<'a>(
                         TextStyle::Body.resolve(ui.style()),
                         ui_util::HeartPlacement::Space,
                         group.starred,
+                        false,
                     );
 
                     if heart_response.clicked() {
