@@ -551,6 +551,18 @@ impl Logic {
     /// - Either 30 seconds OR 50% of track duration (whichever comes first)
     fn update_scrobble_state(&self, track_and_position: &TrackAndPosition) {
         let mut state = self.write_state();
+
+        // Get track duration first (before taking mutable borrow)
+        let Some(track_duration) = state
+            .library
+            .track_map
+            .get(&track_and_position.track_id)
+            .and_then(|track| track.duration)
+            .map(|duration| Duration::from_secs(duration as u64))
+        else {
+            return;
+        };
+
         let scrobble_state = &mut state.scrobble_state;
 
         // Ensure we're tracking the correct track
@@ -592,17 +604,6 @@ impl Logic {
         scrobble_state.last_position = current_position;
 
         let accumulated_time = scrobble_state.accumulated_listening_time;
-
-        // Get track duration
-        let track = match state.library.track_map.get(&track_and_position.track_id) {
-            Some(track) => track,
-            None => return,
-        };
-
-        let track_duration = match track.duration {
-            Some(duration) => Duration::from_secs(duration as u64),
-            None => return, // Can't scrobble tracks without known duration
-        };
 
         // Check scrobble criteria:
         // 1. Minimum 10 seconds of listening
