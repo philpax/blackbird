@@ -240,6 +240,19 @@ fn playing_track_info(
 
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
+                                // Add heart for track
+                                let (heart_response, _) = util::draw_heart(
+                                    ui,
+                                    TextStyle::Body.resolve(ui.style()),
+                                    util::HeartPlacement::Space,
+                                    tdd.starred,
+                                    true,
+                                );
+                                if heart_response.clicked() {
+                                    track_heart_clicked = true;
+                                }
+                                ui.add_space(4.0);
+
                                 if let Some(artist) = tdd
                                     .track_artist
                                     .as_ref()
@@ -261,19 +274,21 @@ fn playing_track_info(
                                     )
                                     .selectable(false),
                                 );
-
-                                // Add heart for track
+                            });
+                            ui.horizontal(|ui| {
+                                // Add heart for album
                                 let (heart_response, _) = util::draw_heart(
                                     ui,
                                     TextStyle::Body.resolve(ui.style()),
                                     util::HeartPlacement::Space,
-                                    tdd.starred,
+                                    album_starred,
+                                    true,
                                 );
                                 if heart_response.clicked() {
-                                    track_heart_clicked = true;
+                                    album_heart_clicked = true;
                                 }
-                            });
-                            ui.horizontal(|ui| {
+                                ui.add_space(4.0);
+
                                 ui.add(
                                     Label::new(
                                         RichText::new(&tdd.album_name).color(config.style.album()),
@@ -288,17 +303,6 @@ fn playing_track_info(
                                     )
                                     .selectable(false),
                                 );
-
-                                // Add heart for album
-                                let (heart_response, _) = util::draw_heart(
-                                    ui,
-                                    TextStyle::Body.resolve(ui.style()),
-                                    util::HeartPlacement::Space,
-                                    album_starred,
-                                );
-                                if heart_response.clicked() {
-                                    album_heart_clicked = true;
-                                }
                             });
                         });
                     });
@@ -415,38 +419,34 @@ fn playing_track_info(
         }
     });
 
-    if track_clicked && let Some(track_id) = track_id {
-        *track_to_scroll_to = Some(track_id);
+    if track_clicked && let Some(ref track_id) = track_id {
+        *track_to_scroll_to = Some(track_id.clone());
     }
 
-    if track_heart_clicked {
-        if let Some(ref track_id) = track_id {
-            let starred = logic
-                .get_state()
-                .read()
-                .unwrap()
-                .library
-                .track_map
-                .get(track_id)
-                .map(|track| track.starred)
-                .unwrap_or(false);
-            logic.set_track_starred(track_id, !starred);
-        }
+    if track_heart_clicked && let Some(ref track_id) = track_id {
+        let starred = logic
+            .get_state()
+            .read()
+            .unwrap()
+            .library
+            .track_map
+            .get(track_id)
+            .map(|track| track.starred)
+            .unwrap_or(false);
+        logic.set_track_starred(track_id, !starred);
     }
 
-    if album_heart_clicked {
-        if let Some(ref album_id) = album_id {
-            let starred = logic
-                .get_state()
-                .read()
-                .unwrap()
-                .library
-                .albums
-                .get(album_id)
-                .map(|album| album.starred)
-                .unwrap_or(false);
-            logic.set_album_starred(album_id, !starred);
-        }
+    if album_heart_clicked && let Some(ref album_id) = album_id {
+        let starred = logic
+            .get_state()
+            .read()
+            .unwrap()
+            .library
+            .albums
+            .get(album_id)
+            .map(|album| album.starred)
+            .unwrap_or(false);
+        logic.set_album_starred(album_id, !starred);
     }
 }
 

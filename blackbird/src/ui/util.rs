@@ -21,6 +21,7 @@ pub fn draw_heart(
     font: egui::FontId,
     placement: HeartPlacement,
     active: bool,
+    show_outline_when_inactive: bool,
 ) -> (egui::Response, f32) {
     let size = ui.fonts(|f| f.row_height(&font));
 
@@ -35,11 +36,11 @@ pub fn draw_heart(
     let hovered = response.hovered();
 
     // If:
-    // - unstarred, unhovered: invisible
+    // - unstarred, unhovered: invisible (or white outline if show_outline_when_inactive)
     // - unstarred, hovered: unfilled, red
     // - starred, unhovered: filled, red
     // - starred, hovered: unfilled, white
-    let visible = active || hovered;
+    let visible = active || hovered || show_outline_when_inactive;
     let filled = active && !hovered;
     let is_red = (!active && hovered) || (active && !hovered);
 
