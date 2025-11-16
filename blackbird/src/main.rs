@@ -90,6 +90,7 @@ pub struct App {
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
     playback_to_logic_rx: bc::PlaybackToLogicRx,
+    #[cfg(feature = "media-controls")]
     controls: controls::Controls,
     logic: bc::Logic,
     cover_art_cache: cover_art_cache::CoverArtCache,
@@ -135,6 +136,7 @@ impl App {
             }
         });
 
+        #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
             Some(cc),
             logic.subscribe_to_playback_events(),
@@ -161,6 +163,7 @@ impl App {
             _config_reload_thread,
             _repaint_thread,
             playback_to_logic_rx: logic.subscribe_to_playback_events(),
+            #[cfg(feature = "media-controls")]
             controls,
             logic,
             cover_art_cache,
@@ -206,6 +209,7 @@ impl eframe::App for App {
             return;
         }
 
+        #[cfg(feature = "media-controls")]
         self.controls.update();
         self.logic.update();
         self.cover_art_cache.update(ctx);

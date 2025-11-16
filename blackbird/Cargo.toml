@@ -4,11 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["tray-icon"]
+default = ["tray-icon", "audio", "media-controls"]
 tray-icon = ["dep:tray-icon"]
+audio = ["blackbird-core/audio"]
+media-controls = ["dep:souvlaki"]
 
 [dependencies]
-blackbird-core = { path = "../blackbird-core" }
+blackbird-core = { path = "../blackbird-core", default-features = false }
 blackbird-shared = { path = "../blackbird-shared" }
 
 anyhow = { workspace = true }
@@ -27,6 +29,6 @@ image = { version = "0.25", default-features = false, features = [
     "gif",
 ] }
 egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
-souvlaki = "0.8.3"
+souvlaki = { version = "0.8.3", optional = true }
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.2", optional = true }

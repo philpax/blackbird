@@ -1,19 +1,25 @@
+#[cfg(feature = "media-controls")]
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "media-controls")]
 use blackbird_core::{
     AppState, LogicRequestHandle, LogicRequestMessage, PlaybackState, PlaybackToLogicMessage,
     PlaybackToLogicRx, TrackDisplayDetails,
 };
+#[cfg(feature = "media-controls")]
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+#[cfg(feature = "media-controls")]
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig, SeekDirection,
 };
 
+#[cfg(feature = "media-controls")]
 pub struct Controls {
     controls: MediaControls,
     playback_to_logic_rx: PlaybackToLogicRx,
     state: Arc<RwLock<AppState>>,
 }
+#[cfg(feature = "media-controls")]
 impl Controls {
     pub fn new(
         window_handle: Option<&dyn HasWindowHandle>,
@@ -128,6 +134,7 @@ impl Controls {
     }
 }
 
+#[cfg(feature = "media-controls")]
 fn seek_direction_to_sign(direction: SeekDirection) -> i64 {
     if direction == SeekDirection::Forward {
         1

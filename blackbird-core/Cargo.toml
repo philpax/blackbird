@@ -3,6 +3,10 @@ name = "blackbird-core"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["audio"]
+audio = ["dep:rodio"]
+
 [dependencies]
 rand = { workspace = true }
 serde = { workspace = true }
@@ -12,4 +16,4 @@ tracing = { workspace = true }
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 blackbird-state = { path = "../blackbird-state" }
 
-rodio = { git = "https://github.com/philpax/rodio.git", branch = "latest-cpal-fixes" }
+rodio = { git = "https://github.com/philpax/rodio.git", branch = "latest-cpal-fixes", optional = true }
