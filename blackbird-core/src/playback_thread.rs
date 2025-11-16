@@ -224,61 +224,10 @@ impl PlaybackThread {
 
     #[cfg(not(feature = "audio"))]
     fn run(
-        playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
-        logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
+        _playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
+        _logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         _volume: f32,
     ) {
-        use LogicToPlaybackMessage as LTPM;
-        use PlaybackToLogicMessage as PTLM;
-
-        tracing::warn!("Audio playback is disabled - running in no-op mode");
-
-        let mut state = PlaybackState::Stopped;
-        fn update_and_send_state(
-            logic_tx: &tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
-            state: &mut PlaybackState,
-            new_state: PlaybackState,
-        ) {
-            *state = new_state;
-            let _ = logic_tx.send(PTLM::PlaybackStateChanged(*state));
-        }
-
-        loop {
-            // Process all available messages without blocking
-            while let Ok(msg) = playback_rx.try_recv() {
-                match msg {
-                    LTPM::PlayTrack(track_id, _data) => {
-                        tracing::info!("No-op playback: would play track {}", track_id.0);
-                        let _ = logic_tx.send(PTLM::FailedToPlayTrack(
-                            track_id,
-                            "Audio playback is disabled - blackbird-core was built without the 'audio' feature".to_string(),
-                        ));
-                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
-                    }
-                    LTPM::TogglePlayback => {
-                        tracing::debug!("No-op playback: toggle playback");
-                    }
-                    LTPM::Play => {
-                        tracing::debug!("No-op playback: play");
-                    }
-                    LTPM::Pause => {
-                        tracing::debug!("No-op playback: pause");
-                    }
-                    LTPM::StopPlayback => {
-                        tracing::debug!("No-op playback: stop");
-                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
-                    }
-                    LTPM::Seek(_position) => {
-                        tracing::debug!("No-op playback: seek");
-                    }
-                    LTPM::SetVolume(_volume) => {
-                        tracing::debug!("No-op playback: set volume");
-                    }
-                }
-            }
-
-            // Sleep for 10ms between iterations
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        unimplemented!("Audio playback is disabled - blackbird-core was built without the 'audio' feature")
     }
 }
