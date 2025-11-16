@@ -17,7 +17,22 @@ pub struct AppState {
     pub queue: QueueState,
     pub volume: f32,
 
+    pub scrobble_state: ScrobbleState,
+
     pub error: Option<AppStateError>,
+}
+
+/// Tracks scrobbling state for the currently playing track.
+#[derive(Debug, Default, Clone)]
+pub struct ScrobbleState {
+    /// The track we're tracking scrobble state for
+    pub track_id: Option<TrackId>,
+    /// Whether we've already scrobbled this track in the current listening session
+    pub has_scrobbled: bool,
+    /// Total accumulated listening time for this track (handles pauses and seeks)
+    pub accumulated_listening_time: Duration,
+    /// The last position we observed (to detect seeks backward)
+    pub last_position: Duration,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -22,7 +22,7 @@ use tokio_thread::TokioThread;
 mod queue;
 
 mod app_state;
-pub use app_state::{AppState, AppStateError, PlaybackMode, TrackAndPosition};
+pub use app_state::{AppState, AppStateError, PlaybackMode, ScrobbleState, TrackAndPosition};
 
 mod library;
 pub use library::Library;
@@ -223,11 +223,20 @@ impl Logic {
                     self.ensure_cache_window(&track_and_position.track_id);
 
                     let mut st = self.write_state();
-                    st.current_track_and_position = Some(track_and_position);
+                    st.current_track_and_position = Some(track_and_position.clone());
                     st.started_loading_track = None;
+
+                    // Reset scrobble state for new track
+                    st.scrobble_state = ScrobbleState {
+                        track_id: Some(track_and_position.track_id),
+                        has_scrobbled: false,
+                        accumulated_listening_time: Duration::ZERO,
+                        last_position: Duration::ZERO,
+                    };
                 }
                 PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
-                    self.write_state().current_track_and_position = Some(track_and_duration);
+                    self.write_state().current_track_and_position = Some(track_and_duration.clone());
+                    self.update_scrobble_state(&track_and_duration);
                 }
                 PlaybackToLogicMessage::TrackEnded => {
                     tracing::debug!("TrackEnded: scheduling advance to next track");
@@ -529,6 +538,91 @@ impl Logic {
     pub fn request_play_track(&self, track_id: &TrackId) {
         // Public API used by UI: keep current playing until new track is ready
         self.schedule_play_track(track_id);
+    }
+
+    /// Updates the scrobble state based on current playback position.
+    /// Scrobbles the track when criteria are met:
+    /// - Minimum 10 seconds of listening time
+    /// - Either 30 seconds OR 50% of track duration (whichever comes first)
+    fn update_scrobble_state(&self, track_and_position: &TrackAndPosition) {
+        let mut state = self.write_state();
+        let scrobble_state = &mut state.scrobble_state;
+
+        // Ensure we're tracking the correct track
+        if scrobble_state.track_id.as_ref() != Some(&track_and_position.track_id) {
+            return;
+        }
+
+        // If already scrobbled, nothing to do
+        if scrobble_state.has_scrobbled {
+            return;
+        }
+
+        let current_position = track_and_position.position;
+        let last_position = scrobble_state.last_position;
+
+        // Update accumulated listening time
+        // If the position moved forward naturally (not a seek backward), add the difference
+        if current_position >= last_position {
+            let delta = current_position - last_position;
+            scrobble_state.accumulated_listening_time += delta;
+        }
+        scrobble_state.last_position = current_position;
+
+        let accumulated_time = scrobble_state.accumulated_listening_time;
+
+        // Get track duration
+        let track = match state.library.track_map.get(&track_and_position.track_id) {
+            Some(track) => track,
+            None => return,
+        };
+
+        let track_duration = match track.duration {
+            Some(duration) => Duration::from_secs(duration as u64),
+            None => return, // Can't scrobble tracks without known duration
+        };
+
+        // Check scrobble criteria:
+        // 1. Minimum 10 seconds of listening
+        const MIN_LISTENING_TIME: Duration = Duration::from_secs(10);
+        if accumulated_time < MIN_LISTENING_TIME {
+            return;
+        }
+
+        // 2. Either 30 seconds OR 50% of track (whichever comes first)
+        const SCROBBLE_TIME_THRESHOLD: Duration = Duration::from_secs(30);
+        let half_duration = track_duration / 2;
+        let scrobble_threshold = SCROBBLE_TIME_THRESHOLD.min(half_duration);
+
+        if accumulated_time >= scrobble_threshold {
+            // Mark as scrobbled immediately to prevent duplicate scrobbles
+            scrobble_state.has_scrobbled = true;
+
+            // Get current timestamp in milliseconds since epoch
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+
+            tracing::info!(
+                "Scrobbling track: {} (listened: {:.1}s / {:.1}s)",
+                track_and_position.track_id.0,
+                accumulated_time.as_secs_f32(),
+                track_duration.as_secs_f32()
+            );
+
+            // Make async API call
+            let client = self.client.clone();
+            let track_id = track_and_position.track_id.clone();
+
+            self.tokio_thread.spawn(async move {
+                if let Err(e) = client.scrobble(&track_id.0, Some(timestamp), Some(true)).await {
+                    tracing::error!("Failed to scrobble track {}: {}", track_id.0, e);
+                    // Note: We don't update the UI error state for scrobble failures
+                    // as they're not critical to the user experience
+                }
+            });
+        }
     }
 }
 impl Logic {
