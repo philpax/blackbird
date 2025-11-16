@@ -63,4 +63,35 @@ impl Client {
 
         self.request::<()>("unstar", &parameters).await
     }
+
+    /// Scrobble a track to register local playback.
+    ///
+    /// This endpoint:
+    /// - Scrobbles to last.fm if user credentials are configured
+    /// - Updates play count and last played timestamp
+    /// - Updates the "Now playing" page
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The track ID to scrobble
+    /// * `time` - Optional timestamp (in milliseconds since 1 Jan 1970) when the track was played
+    /// * `submission` - If true (default), registers a scrobble. If false, only updates "now playing"
+    pub async fn scrobble(
+        &self,
+        id: impl Into<String>,
+        time: Option<u64>,
+        submission: Option<bool>,
+    ) -> ClientResult<()> {
+        let mut parameters = vec![("id", id.into())];
+
+        if let Some(time) = time {
+            parameters.push(("time", time.to_string()));
+        }
+
+        if let Some(submission) = submission {
+            parameters.push(("submission", submission.to_string()));
+        }
+
+        self.request::<()>("scrobble", &parameters).await
+    }
 }
