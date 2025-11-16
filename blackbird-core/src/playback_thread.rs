@@ -18,6 +18,7 @@ impl PlaybackThreadSendHandle {
     }
 }
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     PlayTrack(TrackId, Vec<u8>),
     TogglePlayback,
@@ -75,6 +76,7 @@ impl PlaybackThread {
         self.playback_to_logic_rx.resubscribe()
     }
 
+    #[cfg(feature = "audio")]
     fn run(
         playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
         logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
@@ -219,5 +221,14 @@ impl PlaybackThread {
             // Sleep for 10ms between iterations
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+    }
+
+    #[cfg(not(feature = "audio"))]
+    fn run(
+        _playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
+        _logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
+        _volume: f32,
+    ) {
+        unimplemented!("Audio playback is disabled - blackbird-core was built without the 'audio' feature")
     }
 }
