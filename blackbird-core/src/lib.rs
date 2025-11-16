@@ -228,11 +228,15 @@ impl Logic {
 
                     // Reset scrobble state for new track
                     st.scrobble_state = ScrobbleState {
-                        track_id: Some(track_and_position.track_id),
+                        track_id: Some(track_and_position.track_id.clone()),
                         has_scrobbled: false,
                         accumulated_listening_time: Duration::ZERO,
                         last_position: Duration::ZERO,
                     };
+                    tracing::debug!(
+                        "Scrobble state reset for track: {}",
+                        track_and_position.track_id.0
+                    );
                 }
                 PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
                     self.write_state().current_track_and_position = Some(track_and_duration.clone());
@@ -550,6 +554,11 @@ impl Logic {
 
         // Ensure we're tracking the correct track
         if scrobble_state.track_id.as_ref() != Some(&track_and_position.track_id) {
+            tracing::debug!(
+                "Scrobble state track mismatch: expected {:?}, got {}",
+                scrobble_state.track_id,
+                track_and_position.track_id.0
+            );
             return;
         }
 
@@ -566,6 +575,18 @@ impl Logic {
         if current_position >= last_position {
             let delta = current_position - last_position;
             scrobble_state.accumulated_listening_time += delta;
+            tracing::trace!(
+                "Scrobble: position advanced +{:.1}s, accumulated: {:.1}s",
+                delta.as_secs_f32(),
+                scrobble_state.accumulated_listening_time.as_secs_f32()
+            );
+        } else {
+            tracing::debug!(
+                "Scrobble: seek backward detected ({:.1}s -> {:.1}s), accumulated time unchanged: {:.1}s",
+                last_position.as_secs_f32(),
+                current_position.as_secs_f32(),
+                scrobble_state.accumulated_listening_time.as_secs_f32()
+            );
         }
         scrobble_state.last_position = current_position;
 
@@ -586,6 +607,11 @@ impl Logic {
         // 1. Minimum 10 seconds of listening
         const MIN_LISTENING_TIME: Duration = Duration::from_secs(10);
         if accumulated_time < MIN_LISTENING_TIME {
+            tracing::trace!(
+                "Scrobble: minimum listening time not met ({:.1}s / {:.1}s)",
+                accumulated_time.as_secs_f32(),
+                MIN_LISTENING_TIME.as_secs_f32()
+            );
             return;
         }
 
@@ -593,6 +619,13 @@ impl Logic {
         const SCROBBLE_TIME_THRESHOLD: Duration = Duration::from_secs(30);
         let half_duration = track_duration / 2;
         let scrobble_threshold = SCROBBLE_TIME_THRESHOLD.min(half_duration);
+
+        tracing::debug!(
+            "Scrobble: checking threshold - accumulated: {:.1}s, threshold: {:.1}s (50% of {:.1}s)",
+            accumulated_time.as_secs_f32(),
+            scrobble_threshold.as_secs_f32(),
+            track_duration.as_secs_f32()
+        );
 
         if accumulated_time >= scrobble_threshold {
             // Mark as scrobbled immediately to prevent duplicate scrobbles
