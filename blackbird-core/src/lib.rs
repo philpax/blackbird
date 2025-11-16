@@ -239,7 +239,8 @@ impl Logic {
                     );
                 }
                 PlaybackToLogicMessage::PositionChanged(track_and_duration) => {
-                    self.write_state().current_track_and_position = Some(track_and_duration.clone());
+                    self.write_state().current_track_and_position =
+                        Some(track_and_duration.clone());
                     self.update_scrobble_state(&track_and_duration);
                 }
                 PlaybackToLogicMessage::TrackEnded => {
@@ -649,7 +650,10 @@ impl Logic {
             let track_id = track_and_position.track_id.clone();
 
             self.tokio_thread.spawn(async move {
-                if let Err(e) = client.scrobble(&track_id.0, Some(timestamp), Some(true)).await {
+                if let Err(e) = client
+                    .scrobble(&track_id.0, Some(timestamp), Some(true))
+                    .await
+                {
                     tracing::error!("Failed to scrobble track {}: {}", track_id.0, e);
                     // Note: We don't update the UI error state for scrobble failures
                     // as they're not critical to the user experience
