@@ -110,7 +110,9 @@ pub enum PlaybackMode {
     RepeatOne,
     GroupRepeat,
     Shuffle,
+    LikedShuffle,
     GroupShuffle,
+    LikedGroupShuffle,
 }
 impl PlaybackMode {
     pub fn as_str(&self) -> &'static str {
@@ -119,7 +121,9 @@ impl PlaybackMode {
             PlaybackMode::RepeatOne => "Repeat One",
             PlaybackMode::GroupRepeat => "Group Repeat",
             PlaybackMode::Shuffle => "Shuffle",
+            PlaybackMode::LikedShuffle => "Liked Shuffle",
             PlaybackMode::GroupShuffle => "Group Shuffle",
+            PlaybackMode::LikedGroupShuffle => "Liked Group Shuffle",
         }
     }
 }

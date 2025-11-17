@@ -355,6 +355,7 @@ fn compute_neighbours(
         groups,
         track_to_group_index,
         track_to_group_track_index,
+        track_map,
         ..
     }: &Library,
     queue: &QueueState,
@@ -459,6 +460,33 @@ fn compute_neighbours(
                 ),
             }
         }
+        PlaybackMode::LikedShuffle => {
+            // Filter to only include starred (liked) tracks
+            let liked_track_ids: Vec<TrackId> = track_ids
+                .iter()
+                .filter(|tid| track_map.get(tid).map_or(false, |t| t.starred))
+                .cloned()
+                .collect();
+
+            match dir {
+                Neighbour::Prev => get_tracks_shuffle_order(
+                    &liked_track_ids,
+                    center,
+                    queue.shuffle_seed,
+                    count,
+                    Reverse,                  // reverse mapping for descending order
+                    |k, cur_key| k < cur_key, // filter: keys below current
+                ),
+                Neighbour::Next => get_tracks_shuffle_order(
+                    &liked_track_ids,
+                    center,
+                    queue.shuffle_seed,
+                    count,
+                    |k| k,                    // identity mapping
+                    |k, cur_key| k > cur_key, // filter: keys above current
+                ),
+            }
+        }
         PlaybackMode::GroupShuffle => {
             let (current_group_idx, current_track_idx) = {
                 let group_idx = track_to_group_index.get(center).copied();
@@ -545,6 +573,100 @@ fn compute_neighbours(
 
             result
         }
+        PlaybackMode::LikedGroupShuffle => {
+            // Filter to only include starred (liked) groups
+            let liked_group_indices: Vec<usize> = groups
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.starred)
+                .map(|(idx, _)| idx)
+                .collect();
+
+            let (current_group_idx, current_track_idx) = {
+                let group_idx = track_to_group_index.get(center).copied();
+                let track_idx = track_to_group_track_index.get(center).copied();
+
+                let Some(group_idx) = group_idx else {
+                    tracing::warn!("Center track {center} not found in group index map");
+                    return vec![];
+                };
+                (group_idx, track_idx.unwrap_or(0))
+            };
+
+            if current_group_idx >= groups.len() {
+                return vec![];
+            }
+
+            let current_group = &groups[current_group_idx];
+            let mut result = Vec::new();
+            let mut remaining = count;
+
+            match dir {
+                Neighbour::Next => {
+                    // Try to get next track in current group first (if current group is liked)
+                    if current_group.starred && current_track_idx + 1 < current_group.tracks.len() {
+                        result.push(current_group.tracks[current_track_idx + 1].clone());
+                        remaining -= 1;
+                    }
+
+                    // If we need more tracks, get next groups using shuffle-like ordering
+                    if remaining > 0 && liked_group_indices.len() > 1 {
+                        let next_groups = get_liked_groups_shuffle_order(
+                            &liked_group_indices,
+                            current_group_idx,
+                            queue.group_shuffle_seed,
+                            remaining,
+                            |k| k,                    // identity mapping
+                            |k, cur_key| k > cur_key, // filter: keys above current
+                        );
+                        for next_group_idx in next_groups {
+                            if next_group_idx < groups.len()
+                                && !groups[next_group_idx].tracks.is_empty()
+                            {
+                                result.push(groups[next_group_idx].tracks[0].clone());
+                                remaining -= 1;
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                Neighbour::Prev => {
+                    // Try to get previous track in current group first (if current group is liked)
+                    if current_group.starred && current_track_idx > 0 {
+                        result.push(current_group.tracks[current_track_idx - 1].clone());
+                        remaining -= 1;
+                    }
+
+                    // If we need more tracks, get previous groups using shuffle-like ordering
+                    if remaining > 0 && liked_group_indices.len() > 1 {
+                        let prev_groups = get_liked_groups_shuffle_order(
+                            &liked_group_indices,
+                            current_group_idx,
+                            queue.group_shuffle_seed,
+                            remaining,
+                            Reverse,                  // reverse mapping for descending order
+                            |k, cur_key| k < cur_key, // filter: keys below current
+                        );
+                        for prev_group_idx in prev_groups {
+                            if prev_group_idx < groups.len()
+                                && !groups[prev_group_idx].tracks.is_empty()
+                            {
+                                let last_track_idx = groups[prev_group_idx].tracks.len() - 1;
+                                result.push(groups[prev_group_idx].tracks[last_track_idx].clone());
+                                remaining -= 1;
+                                if remaining == 0 {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            result
+        }
     }
 }
 
@@ -576,6 +698,27 @@ fn get_groups_shuffle_order<K: Ord + Copy>(
 ) -> Vec<usize> {
     get_shuffle_order_impl(
         (0..total_groups).filter(|&group_idx| group_idx != current_group_idx),
+        shuffle_key(current_group_idx, seed),
+        count,
+        |group_idx| shuffle_key(*group_idx, seed),
+        key_mapper,
+        key_filter,
+    )
+}
+
+fn get_liked_groups_shuffle_order<K: Ord + Copy>(
+    liked_group_indices: &[usize],
+    current_group_idx: usize,
+    seed: u64,
+    count: usize,
+    key_mapper: impl Fn(u64) -> K,
+    key_filter: impl Fn(u64, u64) -> bool,
+) -> Vec<usize> {
+    get_shuffle_order_impl(
+        liked_group_indices
+            .iter()
+            .copied()
+            .filter(|&group_idx| group_idx != current_group_idx),
         shuffle_key(current_group_idx, seed),
         count,
         |group_idx| shuffle_key(*group_idx, seed),
