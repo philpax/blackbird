@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::VecDeque, time::Duration};
 
 use blackbird_state::TrackId;
 
@@ -21,6 +21,7 @@ impl PlaybackThreadSendHandle {
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     PlayTrack(TrackId, Vec<u8>),
+    AppendNextTrack(TrackId, Vec<u8>),
     TogglePlayback,
     Play,
     Pause,
@@ -96,6 +97,7 @@ impl PlaybackThread {
         let mut last_position_update = std::time::Instant::now();
 
         let mut state = PlaybackState::Stopped;
+        let mut queued_tracks: VecDeque<TrackId> = VecDeque::new();
         fn update_and_send_state(
             logic_tx: &tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
             state: &mut PlaybackState,
@@ -110,7 +112,10 @@ impl PlaybackThread {
             while let Ok(msg) = playback_rx.try_recv() {
                 match msg {
                     LTPM::PlayTrack(track_id, data) => {
-                        let need_to_skip = !sink.empty();
+                        // Clear all tracks from the sink for a fresh start
+                        while !sink.empty() {
+                            sink.skip_one();
+                        }
 
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
@@ -138,16 +143,47 @@ impl PlaybackThread {
                         };
 
                         sink.append(decoder);
-                        if need_to_skip {
-                            sink.skip_one();
-                        }
                         sink.play();
+
+                        // Reset queue tracking - only this track is now queued
+                        queued_tracks.clear();
+                        queued_tracks.push_back(track_id.clone());
+
                         last_track_id = Some(track_id.clone());
                         let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
                             track_id,
                             position: Duration::from_secs(0),
                         }));
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
+                    }
+                    LTPM::AppendNextTrack(track_id, data) => {
+                        let decoder = rodio::decoder::DecoderBuilder::new()
+                            .with_byte_len(data.len() as u64)
+                            .with_data(std::io::Cursor::new(data))
+                            .build();
+
+                        let decoder = match decoder {
+                            Ok(decoder) => decoder,
+                            Err(err) => {
+                                tracing::warn!(
+                                    "Failed to decode next track {}: {}",
+                                    track_id.0,
+                                    err
+                                );
+                                let _ = logic_tx
+                                    .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
+                                continue;
+                            }
+                        };
+
+                        // Append to sink for gapless playback
+                        sink.append(decoder);
+                        queued_tracks.push_back(track_id.clone());
+                        tracing::debug!(
+                            "Appended next track {} (queue length: {})",
+                            track_id.0,
+                            queued_tracks.len()
+                        );
                     }
                     LTPM::TogglePlayback => {
                         if sink.is_paused() {
@@ -199,8 +235,34 @@ impl PlaybackThread {
                 }
             }
 
+            // Check for track transitions (gapless playback)
+            let current_sink_len = sink.len();
+            let expected_len = queued_tracks.len();
+            if current_sink_len < expected_len {
+                // One or more tracks have finished
+                let finished_count = expected_len - current_sink_len;
+                for _ in 0..finished_count {
+                    queued_tracks.pop_front();
+                }
+
+                // If we still have tracks queued, send TrackStarted for the new current track
+                if let Some(new_current_id) = queued_tracks.front() {
+                    last_track_id = Some(new_current_id.clone());
+                    let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
+                        track_id: new_current_id.clone(),
+                        position: sink.get_pos(),
+                    }));
+                    tracing::debug!(
+                        "Track transition: now playing {} (queue length: {})",
+                        new_current_id.0,
+                        queued_tracks.len()
+                    );
+                }
+            }
+
             // Check if we should auto-advance to next track
             if sink.empty() && state == PlaybackState::Playing {
+                queued_tracks.clear();
                 update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
                 let _ = logic_tx.send(PTLM::TrackEnded);
             }

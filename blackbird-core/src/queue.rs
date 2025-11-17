@@ -27,6 +27,7 @@ pub struct QueueState {
     pub current_target_request_id: Option<u64>,
     pub pending_skip_after_error: bool,
     pub group_shuffle_seed: u64,
+    pub next_track_appended: Option<TrackId>,
 }
 impl QueueState {
     pub fn new() -> Self {
