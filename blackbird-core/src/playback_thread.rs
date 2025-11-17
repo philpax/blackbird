@@ -1,8 +1,11 @@
-use std::{collections::VecDeque, time::Duration};
+use std::time::Duration;
 
 use blackbird_state::TrackId;
 
 use crate::app_state::TrackAndPosition;
+
+#[cfg(feature = "audio")]
+use std::collections::VecDeque;
 
 pub struct PlaybackThread {
     logic_to_playback_tx: PlaybackThreadSendHandle,

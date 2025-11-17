@@ -304,25 +304,25 @@ impl Logic {
         }
 
         // Gapless playback: Try to append next track if available
-        if let Some(current_id) = self.get_playing_track_id() {
-            if let Some(next_id) = self.compute_next_track_id() {
-                let st = self.read_state();
-                let already_appended = st.queue.next_track_appended.as_ref() == Some(&next_id);
-                let audio_data = st.queue.audio_cache.get(&next_id).cloned();
-                drop(st);
+        if self.get_playing_track_id().is_some()
+            && let Some(next_id) = self.compute_next_track_id()
+        {
+            let st = self.read_state();
+            let already_appended = st.queue.next_track_appended.as_ref() == Some(&next_id);
+            let audio_data = st.queue.audio_cache.get(&next_id).cloned();
+            drop(st);
 
-                if !already_appended {
-                    if let Some(data) = audio_data {
-                        tracing::debug!(
-                            "Appending next track for gapless playback: {}",
-                            next_id.0
-                        );
-                        self.playback_thread.send(
-                            LogicToPlaybackMessage::AppendNextTrack(next_id.clone(), data),
-                        );
-                        self.write_state().queue.next_track_appended = Some(next_id);
-                    }
-                }
+            if !already_appended
+                && let Some(data) = audio_data
+            {
+                tracing::debug!(
+                    "Appending next track for gapless playback: {}",
+                    next_id.0
+                );
+                self.playback_thread.send(
+                    LogicToPlaybackMessage::AppendNextTrack(next_id.clone(), data),
+                );
+                self.write_state().queue.next_track_appended = Some(next_id);
             }
         }
     }
