@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
@@ -151,10 +151,10 @@ impl CoverArtCache {
         cache_entry.priority = priority;
 
         // Check disk cache if we haven't loaded anything yet
-        if let CacheEntryState::Unloaded = cache_entry.state {
-            if let Some(low_res_data) = load_from_disk_cache(&self.cache_dir, cover_art_id) {
-                cache_entry.state = CacheEntryState::LoadedLowRes(low_res_data);
-            }
+        if let CacheEntryState::Unloaded = cache_entry.state
+            && let Some(low_res_data) = load_from_disk_cache(&self.cache_dir, cover_art_id)
+        {
+            cache_entry.state = CacheEntryState::LoadedLowRes(low_res_data);
         }
 
         // Request from network after the initial delay, if we don't have high-res yet
@@ -190,13 +190,13 @@ fn cover_art_id_to_url(cover_art_id: &str) -> String {
     format!("bytes://{cover_art_id}")
 }
 
-fn get_cache_path(cache_dir: &PathBuf, cover_art_id: &str) -> PathBuf {
+fn get_cache_path(cache_dir: &Path, cover_art_id: &str) -> PathBuf {
     // Sanitize the cover_art_id to make it a valid filename
     let safe_filename = cover_art_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
     cache_dir.join(format!("{}.png", safe_filename))
 }
 
-fn load_from_disk_cache(cache_dir: &PathBuf, cover_art_id: &str) -> Option<Arc<[u8]>> {
+fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]>> {
     let path = get_cache_path(cache_dir, cover_art_id);
     match std::fs::read(&path) {
         Ok(data) => {
@@ -207,7 +207,7 @@ fn load_from_disk_cache(cache_dir: &PathBuf, cover_art_id: &str) -> Option<Arc<[
     }
 }
 
-fn save_to_disk_cache(cache_dir: &PathBuf, cover_art_id: &str, image_data: &[u8]) {
+fn save_to_disk_cache(cache_dir: &Path, cover_art_id: &str, image_data: &[u8]) {
     // Decode the image
     let Ok(img) = image::load_from_memory(image_data) else {
         tracing::warn!("Failed to decode image for {}", cover_art_id);
