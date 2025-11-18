@@ -19,4 +19,7 @@ pub use search::*;
 
 mod misc;
 
+mod lyrics;
+pub use lyrics::*;
+
 mod request;

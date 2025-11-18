@@ -29,6 +29,10 @@ const CONTROL_BUTTON_SIZE: f32 = 28.0;
 pub struct UiState {
     search_open: bool,
     search_query: String,
+    lyrics_open: bool,
+    lyrics_track_id: Option<TrackId>,
+    lyrics_data: Option<bc::bs::StructuredLyrics>,
+    lyrics_loading: bool,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -110,7 +114,26 @@ impl App {
             if i.modifiers.command && i.key_released(egui::Key::F) {
                 self.ui_state.search_open = !self.ui_state.search_open;
             }
+            if i.modifiers.command && i.key_released(egui::Key::L) {
+                self.ui_state.lyrics_open = !self.ui_state.lyrics_open;
+                // Request lyrics for the currently playing track when opening the window
+                if self.ui_state.lyrics_open
+                    && let Some(track_id) = logic.get_playing_track_id()
+                {
+                    self.ui_state.lyrics_track_id = Some(track_id.clone());
+                    self.ui_state.lyrics_loading = true;
+                    logic.request_lyrics(&track_id);
+                }
+            }
         });
+
+        // Process incoming lyrics data
+        while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
+            if Some(&lyrics_data.track_id) == self.ui_state.lyrics_track_id.as_ref() {
+                self.ui_state.lyrics_data = lyrics_data.lyrics;
+                self.ui_state.lyrics_loading = false;
+            }
+        }
 
         if self.ui_state.search_open {
             search(
@@ -119,6 +142,17 @@ impl App {
                 &config.style,
                 &mut self.ui_state.search_open,
                 &mut self.ui_state.search_query,
+            );
+        }
+
+        if self.ui_state.lyrics_open {
+            lyrics_window(
+                logic,
+                ctx,
+                &config.style,
+                &mut self.ui_state.lyrics_open,
+                &mut self.ui_state.lyrics_data,
+                &mut self.ui_state.lyrics_loading,
             );
         }
 
@@ -837,4 +871,119 @@ fn search(
         *search_open = false;
         search_query.clear();
     }
+}
+
+fn lyrics_window(
+    logic: &mut bc::Logic,
+    ctx: &Context,
+    style: &style::Style,
+    lyrics_open: &mut bool,
+    lyrics_data: &mut Option<bc::bs::StructuredLyrics>,
+    lyrics_loading: &mut bool,
+) {
+    Window::new("Lyrics")
+        .open(lyrics_open)
+        .default_pos(ctx.screen_rect().center())
+        .default_size(ctx.screen_rect().size() * Vec2::new(0.5, 0.6))
+        .pivot(Align2::CENTER_CENTER)
+        .collapsible(false)
+        .show(ctx, |ui| {
+            if *lyrics_loading {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.add(Spinner::new());
+                    ui.add_space(10.0);
+                    ui.label("Loading lyrics...");
+                });
+                return;
+            }
+
+            let Some(lyrics) = lyrics_data else {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label("No lyrics available for this track.");
+                });
+                return;
+            };
+
+            if lyrics.line.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(20.0);
+                    ui.label("No lyrics available for this track.");
+                });
+                return;
+            }
+
+            // Get current playback position in milliseconds
+            let current_position_ms = logic
+                .get_playing_position()
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+
+            // Apply offset if present
+            let adjusted_position_ms = current_position_ms + lyrics.offset.unwrap_or(0);
+
+            // Find the current line index based on playback position
+            let current_line_idx = if lyrics.synced {
+                lyrics
+                    .line
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, line)| {
+                        line.start.unwrap_or(0) <= adjusted_position_ms
+                    })
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(0)
+            } else {
+                0 // For unsynced lyrics, don't highlight any line
+            };
+
+            ScrollArea::vertical()
+                .auto_shrink(Vec2b::FALSE)
+                .show(ui, |ui| {
+                    ui.set_min_width(ui.available_width());
+
+                    for (idx, line) in lyrics.line.iter().enumerate() {
+                        let is_current = lyrics.synced && idx == current_line_idx;
+                        let is_past = lyrics.synced && idx < current_line_idx;
+
+                        let text_color = if is_current {
+                            style.text()
+                        } else if is_past {
+                            // Dim past lyrics
+                            let [r, g, b, a] = style.text().to_array();
+                            Color32::from_rgba_unmultiplied(
+                                (r as f32 * 0.5) as u8,
+                                (g as f32 * 0.5) as u8,
+                                (b as f32 * 0.5) as u8,
+                                a,
+                            )
+                        } else {
+                            // Dim future lyrics
+                            let [r, g, b, a] = style.text().to_array();
+                            Color32::from_rgba_unmultiplied(
+                                (r as f32 * 0.7) as u8,
+                                (g as f32 * 0.7) as u8,
+                                (b as f32 * 0.7) as u8,
+                                a,
+                            )
+                        };
+
+                        let rich_text = RichText::new(&line.value)
+                            .color(text_color)
+                            .size(if is_current { 18.0 } else { 16.0 });
+
+                        if is_current {
+                            let response = ui.label(rich_text.strong());
+                            // Scroll to keep the current line visible
+                            response.scroll_to_me(Some(Align::Center));
+                        } else {
+                            ui.label(rich_text);
+                        }
+
+                        ui.add_space(4.0);
+                    }
+                });
+        });
 }
