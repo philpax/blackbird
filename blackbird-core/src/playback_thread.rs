@@ -147,6 +147,12 @@ impl PlaybackThread {
                         };
 
                         sink.append(decoder);
+
+                        // Seek to the beginning to ensure fresh start
+                        if let Err(e) = sink.try_seek(Duration::ZERO) {
+                            tracing::warn!("Failed to seek to start of track: {e}");
+                        }
+
                         sink.play();
 
                         // Reset queue tracking - only this track is now queued
