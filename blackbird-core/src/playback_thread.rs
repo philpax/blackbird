@@ -229,6 +229,8 @@ impl PlaybackThread {
         _logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         _volume: f32,
     ) {
-        unimplemented!("Audio playback is disabled - blackbird-core was built without the 'audio' feature")
+        unimplemented!(
+            "Audio playback is disabled - blackbird-core was built without the 'audio' feature"
+        )
     }
 }
