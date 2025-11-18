@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod group;
 pub use group::GROUP_ALBUM_ART_SIZE;
@@ -35,6 +35,9 @@ pub struct UiState {
     lyrics_data: Option<bc::bs::StructuredLyrics>,
     lyrics_loading: bool,
     lyrics_auto_scroll: bool,
+    // Incremental search (type-to-search)
+    incremental_search_query: String,
+    incremental_search_last_input: Option<Instant>,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -214,6 +217,7 @@ impl App {
                     scroll_margin.into(),
                     track_to_scroll_to.as_ref(),
                     &mut self.cover_art_cache,
+                    &mut self.ui_state,
                 );
             });
 
@@ -574,11 +578,66 @@ fn library(
     scroll_margin: f32,
     track_to_scroll_to: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
+    ui_state: &mut UiState,
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
             ui.add_sized(ui.available_size(), Spinner::new());
             return;
+        }
+
+        // Handle incremental search (type-to-search)
+        // Timeout for clearing the search buffer (500ms)
+        const SEARCH_TIMEOUT: Duration = Duration::from_millis(500);
+
+        // Clear search query if timeout has elapsed
+        if let Some(last_input) = ui_state.incremental_search_last_input {
+            if last_input.elapsed() > SEARCH_TIMEOUT {
+                ui_state.incremental_search_query.clear();
+                ui_state.incremental_search_last_input = None;
+            }
+        }
+
+        // Track ID to scroll to from incremental search
+        let mut incremental_search_scroll_target: Option<TrackId> = None;
+
+        // Only capture keyboard input if search modal and lyrics window are not open
+        let can_handle_incremental_search = !ui_state.search_open && !ui_state.lyrics_open;
+
+        // Capture keyboard input for incremental search
+        if can_handle_incremental_search {
+            ui.input(|i| {
+            // Handle text input (printable characters)
+            for event in &i.events {
+                if let egui::Event::Text(text) = event {
+                    // Only capture single characters (ignore paste operations)
+                    if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
+                        ui_state.incremental_search_query.push_str(text);
+                        ui_state.incremental_search_last_input = Some(Instant::now());
+                    }
+                }
+            }
+
+            // Handle backspace
+            if i.key_pressed(Key::Backspace) && !ui_state.incremental_search_query.is_empty() {
+                ui_state.incremental_search_query.pop();
+                ui_state.incremental_search_last_input = Some(Instant::now());
+            }
+
+            // Handle escape to clear search
+            if i.key_pressed(Key::Escape) && !ui_state.incremental_search_query.is_empty() {
+                ui_state.incremental_search_query.clear();
+                ui_state.incremental_search_last_input = None;
+            }
+            });
+        }
+
+        // If we have a search query, find the first matching track
+        if !ui_state.incremental_search_query.is_empty() {
+            let search_results = logic.get_state().write().unwrap().library.search(&ui_state.incremental_search_query);
+            if let Some(first_match) = search_results.first() {
+                incremental_search_scroll_target = Some(first_match.clone());
+            }
         }
 
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
@@ -600,7 +659,12 @@ fn library(
         ScrollArea::vertical()
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
-                if let Some(scroll_to_height) = track_to_scroll_to.and_then(|id| {
+                // Determine which track to scroll to (prioritize incremental search)
+                let scroll_target = incremental_search_scroll_target
+                    .as_ref()
+                    .or(track_to_scroll_to);
+
+                if let Some(scroll_to_height) = scroll_target.and_then(|id| {
                     group::target_scroll_height_for_track(
                         &logic.get_state().read().unwrap(),
                         spaced_row_height,
@@ -682,6 +746,39 @@ fn library(
                     current_row += group_lines;
                 }
             });
+
+        // Display incremental search query overlay at the bottom
+        if !ui_state.incremental_search_query.is_empty() {
+            // Position the overlay at the bottom of the UI
+            let overlay_height = 30.0;
+            let overlay_padding = 8.0;
+            let overlay_rect = Rect::from_min_size(
+                pos2(
+                    ui.min_rect().left() + overlay_padding,
+                    ui.min_rect().bottom() - overlay_height - overlay_padding,
+                ),
+                vec2(ui.available_width() - 2.0 * overlay_padding, overlay_height),
+            );
+
+            // Draw a semi-transparent background
+            ui.painter().rect_filled(
+                overlay_rect,
+                4.0, // rounded corners
+                Color32::from_black_alpha(200),
+            );
+
+            // Draw the search query text
+            ui.painter().text(
+                pos2(
+                    overlay_rect.left() + 10.0,
+                    overlay_rect.center().y,
+                ),
+                Align2::LEFT_CENTER,
+                format!("Search: {}", ui_state.incremental_search_query),
+                TextStyle::Body.resolve(ui.style()),
+                Color32::WHITE,
+            );
+        }
     });
 }
 
