@@ -540,14 +540,13 @@ impl Logic {
         st.playback_mode = mode;
 
         // Reset gapless playback state since the next track may be different in the new mode
+        // Note: We don't clear already-queued tracks from the sink because rodio's skip_one()
+        // would skip the current track, not the queued next track. It's acceptable for one
+        // "wrong" track to play before the new mode takes full effect.
         st.queue.next_track_appended = None;
 
         let current_track_id = st.current_track_and_position.as_ref().map(|t| t.track_id.clone());
         drop(st);
-
-        // Clear any queued next tracks since they may not be valid in the new mode
-        self.playback_thread
-            .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
 
         if let Some(track_id) = current_track_id {
             self.ensure_cache_window(&track_id);
