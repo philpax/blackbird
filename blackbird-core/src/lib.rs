@@ -536,9 +536,20 @@ impl Logic {
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
         tracing::debug!("Playback mode set to {mode:?}");
-        self.write_state().playback_mode = mode;
+        let mut st = self.write_state();
+        st.playback_mode = mode;
 
-        if let Some(track_id) = self.get_playing_track_id() {
+        // Reset gapless playback state since the next track may be different in the new mode
+        st.queue.next_track_appended = None;
+
+        let current_track_id = st.current_track_and_position.as_ref().map(|t| t.track_id.clone());
+        drop(st);
+
+        // Clear any queued next tracks since they may not be valid in the new mode
+        self.playback_thread
+            .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
+
+        if let Some(track_id) = current_track_id {
             self.ensure_cache_window(&track_id);
         }
     }

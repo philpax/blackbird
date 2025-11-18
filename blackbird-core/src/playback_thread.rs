@@ -25,6 +25,7 @@ impl PlaybackThreadSendHandle {
 pub enum LogicToPlaybackMessage {
     PlayTrack(TrackId, Vec<u8>),
     AppendNextTrack(TrackId, Vec<u8>),
+    ClearQueuedNextTracks,
     TogglePlayback,
     Play,
     Pause,
@@ -187,6 +188,24 @@ impl PlaybackThread {
                             track_id.0,
                             queued_tracks.len()
                         );
+                    }
+                    LTPM::ClearQueuedNextTracks => {
+                        // Clear all queued tracks except the currently playing one
+                        let tracks_to_remove = queued_tracks.len().saturating_sub(1);
+                        if tracks_to_remove > 0 {
+                            // Skip tracks in the sink (keep only the first/current one)
+                            for _ in 0..tracks_to_remove {
+                                if sink.len() > 1 {
+                                    sink.skip_one();
+                                }
+                            }
+                            // Remove from our tracking (keep only the first track)
+                            queued_tracks.truncate(1);
+                            tracing::debug!(
+                                "Cleared queued next tracks (queue length now: {})",
+                                queued_tracks.len()
+                            );
+                        }
                     }
                     LTPM::TogglePlayback => {
                         if sink.is_paused() {
