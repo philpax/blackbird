@@ -37,6 +37,7 @@ pub struct Logic {
     logic_request_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
 
     cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
+    lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
 
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
@@ -65,6 +66,12 @@ impl LogicRequestHandle {
 pub struct CoverArt {
     pub cover_art_id: String,
     pub cover_art: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LyricsData {
+    pub track_id: TrackId,
+    pub lyrics: Option<bs::StructuredLyrics>,
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +166,7 @@ pub struct LogicArgs {
     pub transcode: bool,
     pub volume: f32,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
+    pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
 }
 
 impl Logic {
@@ -170,6 +178,7 @@ impl Logic {
             transcode,
             volume,
             cover_art_loaded_tx,
+            lyrics_loaded_tx,
         }: LogicArgs,
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
@@ -200,6 +209,7 @@ impl Logic {
             logic_request_rx,
 
             cover_art_loaded_tx,
+            lyrics_loaded_tx,
 
             state,
             client,
@@ -316,9 +326,7 @@ impl Logic {
             };
 
             // Don't append if we're in the middle of changing tracks
-            if !pending_track_change
-                && let Some(next_id) = self.compute_next_track_id()
-            {
+            if !pending_track_change && let Some(next_id) = self.compute_next_track_id() {
                 let (already_appended, audio_data) = {
                     let st = self.read_state();
                     (
@@ -327,16 +335,13 @@ impl Logic {
                     )
                 };
 
-                if !already_appended
-                    && let Some(data) = audio_data
-                {
-                    tracing::debug!(
-                        "Appending next track for gapless playback: {}",
-                        next_id.0
-                    );
-                    self.playback_thread.send(
-                        LogicToPlaybackMessage::AppendNextTrack(next_id.clone(), data),
-                    );
+                if !already_appended && let Some(data) = audio_data {
+                    tracing::debug!("Appending next track for gapless playback: {}", next_id.0);
+                    self.playback_thread
+                        .send(LogicToPlaybackMessage::AppendNextTrack(
+                            next_id.clone(),
+                            data,
+                        ));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
             }
@@ -503,6 +508,47 @@ impl Logic {
             });
         });
     }
+
+    pub fn request_lyrics(&self, track_id: &TrackId) {
+        let client = self.client.clone();
+        let track_id = track_id.clone();
+        let lyrics_loaded_tx = self.lyrics_loaded_tx.clone();
+
+        self.tokio_thread.spawn(async move {
+            match client.get_lyrics_by_song_id(&track_id.0).await {
+                Ok(mut lyrics_list) => {
+                    // Get the first synced lyrics if available, otherwise first lyrics
+                    let lyrics = {
+                        let synced_idx =
+                            lyrics_list.structured_lyrics.iter().position(|l| l.synced);
+
+                        if let Some(idx) = synced_idx {
+                            Some(lyrics_list.structured_lyrics.swap_remove(idx))
+                        } else {
+                            lyrics_list.structured_lyrics.into_iter().next()
+                        }
+                    };
+
+                    lyrics_loaded_tx
+                        .send(LyricsData {
+                            track_id: track_id.clone(),
+                            lyrics,
+                        })
+                        .unwrap();
+                }
+                Err(e) => {
+                    tracing::debug!("Failed to fetch lyrics for track {}: {}", track_id.0, e);
+                    // Send None to indicate no lyrics available
+                    lyrics_loaded_tx
+                        .send(LyricsData {
+                            track_id: track_id.clone(),
+                            lyrics: None,
+                        })
+                        .unwrap();
+                }
+            }
+        });
+    }
 }
 impl Logic {
     pub fn get_playing_track_id(&self) -> Option<TrackId> {
@@ -559,7 +605,9 @@ impl Logic {
             // Reset gapless playback state since the next track may be different in the new mode
             st.queue.next_track_appended = None;
 
-            st.current_track_and_position.as_ref().map(|t| t.track_id.clone())
+            st.current_track_and_position
+                .as_ref()
+                .map(|t| t.track_id.clone())
         };
 
         // Clear any queued next track by marking it for skip, so the new mode takes effect immediately
