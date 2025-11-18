@@ -607,34 +607,39 @@ fn library(
         // Capture keyboard input for incremental search
         if can_handle_incremental_search {
             ui.input(|i| {
-            // Handle text input (printable characters)
-            for event in &i.events {
-                if let egui::Event::Text(text) = event {
-                    // Only capture single characters (ignore paste operations)
-                    if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
-                        ui_state.incremental_search_query.push_str(text);
-                        ui_state.incremental_search_last_input = Some(Instant::now());
+                // Handle text input (printable characters)
+                for event in &i.events {
+                    if let egui::Event::Text(text) = event {
+                        // Only capture single characters (ignore paste operations)
+                        if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
+                            ui_state.incremental_search_query.push_str(text);
+                            ui_state.incremental_search_last_input = Some(Instant::now());
+                        }
                     }
                 }
-            }
 
-            // Handle backspace
-            if i.key_pressed(Key::Backspace) && !ui_state.incremental_search_query.is_empty() {
-                ui_state.incremental_search_query.pop();
-                ui_state.incremental_search_last_input = Some(Instant::now());
-            }
+                // Handle backspace
+                if i.key_pressed(Key::Backspace) && !ui_state.incremental_search_query.is_empty() {
+                    ui_state.incremental_search_query.pop();
+                    ui_state.incremental_search_last_input = Some(Instant::now());
+                }
 
-            // Handle escape to clear search
-            if i.key_pressed(Key::Escape) && !ui_state.incremental_search_query.is_empty() {
-                ui_state.incremental_search_query.clear();
-                ui_state.incremental_search_last_input = None;
-            }
+                // Handle escape to clear search
+                if i.key_pressed(Key::Escape) && !ui_state.incremental_search_query.is_empty() {
+                    ui_state.incremental_search_query.clear();
+                    ui_state.incremental_search_last_input = None;
+                }
             });
         }
 
         // If we have a search query, find the first matching track
         if !ui_state.incremental_search_query.is_empty() {
-            let search_results = logic.get_state().write().unwrap().library.search(&ui_state.incremental_search_query);
+            let search_results = logic
+                .get_state()
+                .write()
+                .unwrap()
+                .library
+                .search(&ui_state.incremental_search_query);
             if let Some(first_match) = search_results.first() {
                 incremental_search_scroll_target = Some(first_match.clone());
             }
@@ -769,10 +774,7 @@ fn library(
 
             // Draw the search query text
             ui.painter().text(
-                pos2(
-                    overlay_rect.left() + 10.0,
-                    overlay_rect.center().y,
-                ),
+                pos2(overlay_rect.left() + 10.0, overlay_rect.center().y),
                 Align2::LEFT_CENTER,
                 format!("Search: {}", ui_state.incremental_search_query),
                 TextStyle::Body.resolve(ui.style()),
