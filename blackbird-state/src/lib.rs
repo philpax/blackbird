@@ -20,6 +20,26 @@ pub use track::{Track, TrackId};
 mod artist;
 pub use artist::ArtistId;
 
+/// Creates a collator configured for sorting artist and album names.
+///
+/// The collator is configured with:
+/// - Primary strength (ignores case and diacritics)
+/// - Numeric ordering enabled
+/// - Case level off
+///
+/// This means "E" and "È" will compare as equal, and "Track 2" will sort before "Track 10".
+pub fn create_collator() -> icu_collator::CollatorBorrowed<'static> {
+    let mut collator_preferences = icu_collator::CollatorPreferences::default();
+    collator_preferences.numeric_ordering =
+        Some(icu_collator::preferences::CollationNumericOrdering::True);
+
+    let mut collator_options = icu_collator::options::CollatorOptions::default();
+    collator_options.strength = Some(icu_collator::options::Strength::Primary);
+    collator_options.case_level = Some(icu_collator::options::CaseLevel::Off);
+
+    icu_collator::Collator::try_new(collator_preferences, collator_options).unwrap()
+}
+
 /// The output of [`fetch_all`].
 pub struct FetchAllOutput {
     /// The albums that were fetched.
@@ -146,16 +166,7 @@ pub async fn fetch_all(
             })
             .collect();
 
-        let mut collator_preferences = icu_collator::CollatorPreferences::default();
-        collator_preferences.numeric_ordering =
-            Some(icu_collator::preferences::CollationNumericOrdering::True);
-
-        let mut collator_options = icu_collator::options::CollatorOptions::default();
-        collator_options.strength = Some(icu_collator::options::Strength::Primary);
-        collator_options.case_level = Some(icu_collator::options::CaseLevel::Off);
-
-        let collator =
-            icu_collator::Collator::try_new(collator_preferences, collator_options).unwrap();
+        let collator = create_collator();
 
         track_ids.sort_by(|a, b| {
             let a = track_data.get(a).unwrap();
