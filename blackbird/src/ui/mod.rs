@@ -394,11 +394,11 @@ fn playing_track_info(
                     (
                         PlaybackMode::Shuffle,
                         egui_phosphor::regular::SHUFFLE,
-                        false,
+                        true,
                     ),
                     (
                         PlaybackMode::LikedShuffle,
-                        egui_phosphor::regular::HEART,
+                        egui_phosphor::regular::STAR,
                         false,
                     ),
                     (
@@ -408,7 +408,7 @@ fn playing_track_info(
                     ),
                     (
                         PlaybackMode::LikedGroupShuffle,
-                        egui_phosphor::regular::HEART_STRAIGHT,
+                        egui_phosphor::regular::DISC,
                         false,
                     ),
                 ]

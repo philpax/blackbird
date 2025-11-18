@@ -596,6 +596,41 @@ fn compute_group_shuffle_neighbours(
                         }
                     }
                 }
+
+                // If we still need more tracks, wrap around to the beginning
+                if remaining > 0 {
+                    let wrap_groups = match filtered_group_indices {
+                        Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
+                            indices,
+                            current_group_idx,
+                            seed,
+                            remaining,
+                            Reverse,                  // reverse mapping for wrap-around
+                            |k, cur_key| k < cur_key, // filter: keys below current
+                        ),
+                        None if groups.len() > 1 => get_groups_shuffle_order(
+                            groups.len(),
+                            current_group_idx,
+                            seed,
+                            remaining,
+                            Reverse,                  // reverse mapping for wrap-around
+                            |k, cur_key| k < cur_key, // filter: keys below current
+                        ),
+                        _ => vec![],
+                    };
+
+                    for wrap_group_idx in wrap_groups.into_iter().rev() {
+                        if wrap_group_idx < groups.len()
+                            && !groups[wrap_group_idx].tracks.is_empty()
+                        {
+                            result.push(groups[wrap_group_idx].tracks[0].clone());
+                            remaining -= 1;
+                            if remaining == 0 {
+                                break;
+                            }
+                        }
+                    }
+                }
             }
         }
         Neighbour::Prev => {
@@ -636,6 +671,42 @@ fn compute_group_shuffle_neighbours(
                         remaining -= 1;
                         if remaining == 0 {
                             break;
+                        }
+                    }
+                }
+
+                // If we still need more tracks, wrap around to the end
+                if remaining > 0 {
+                    let wrap_groups = match filtered_group_indices {
+                        Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
+                            indices,
+                            current_group_idx,
+                            seed,
+                            remaining,
+                            |k| k,                    // identity mapping for wrap-around
+                            |k, cur_key| k > cur_key, // filter: keys above current
+                        ),
+                        None if groups.len() > 1 => get_groups_shuffle_order(
+                            groups.len(),
+                            current_group_idx,
+                            seed,
+                            remaining,
+                            |k| k,                    // identity mapping for wrap-around
+                            |k, cur_key| k > cur_key, // filter: keys above current
+                        ),
+                        _ => vec![],
+                    };
+
+                    for wrap_group_idx in wrap_groups.into_iter().rev() {
+                        if wrap_group_idx < groups.len()
+                            && !groups[wrap_group_idx].tracks.is_empty()
+                        {
+                            let last_track_idx = groups[wrap_group_idx].tracks.len() - 1;
+                            result.push(groups[wrap_group_idx].tracks[last_track_idx].clone());
+                            remaining -= 1;
+                            if remaining == 0 {
+                                break;
+                            }
                         }
                     }
                 }

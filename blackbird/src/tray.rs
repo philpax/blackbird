@@ -48,7 +48,9 @@ impl TrayMenu {
             bc::PlaybackMode::RepeatOne,
             bc::PlaybackMode::GroupRepeat,
             bc::PlaybackMode::Shuffle,
+            bc::PlaybackMode::LikedShuffle,
             bc::PlaybackMode::GroupShuffle,
+            bc::PlaybackMode::LikedGroupShuffle,
         ];
 
         let playback_mode_items: Vec<(bc::PlaybackMode, CheckMenuItem)> = playback_modes
