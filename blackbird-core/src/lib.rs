@@ -562,8 +562,8 @@ impl Logic {
             st.current_track_and_position.as_ref().map(|t| t.track_id.clone())
         };
 
-        // Clear any queued next track using Skippable, so the new mode takes effect immediately
-        // This will cause the queued track to skip to its end, triggering a natural transition
+        // Clear any queued next track by marking it for skip, so the new mode takes effect immediately
+        // The marked track will be skipped when it transitions to current, triggering playback based on new mode
         self.playback_thread
             .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
 
