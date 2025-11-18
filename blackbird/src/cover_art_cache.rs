@@ -12,7 +12,7 @@ const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
 const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_CACHE_SIZE: usize = 100;
 const LOW_RES_CACHE_SIZE: u32 = 16;
-const CACHE_DIR_NAME: &str = "album_art_cache";
+const CACHE_DIR_NAME: &str = "album-art-cache";
 
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
@@ -50,9 +50,7 @@ impl CoverArtCache {
 
         // Create the cache directory if it doesn't exist
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            tracing::warn!("Failed to create cache directory: {}", e);
-        } else {
-            tracing::info!("Album art cache directory: {:?}", cache_dir);
+            panic!("Failed to create cache directory: {e}");
         }
 
         Self {
@@ -67,7 +65,8 @@ impl CoverArtCache {
         for incoming_cover_art in self.cover_art_loaded_rx.try_iter() {
             if let Some(cache_entry) = self.cache.get_mut(&incoming_cover_art.cover_art_id) {
                 // Save the high-res version to memory cache
-                cache_entry.state = CacheEntryState::Loaded(incoming_cover_art.cover_art.clone().into());
+                cache_entry.state =
+                    CacheEntryState::Loaded(incoming_cover_art.cover_art.clone().into());
                 tracing::debug!("Loaded cover art for {}", incoming_cover_art.cover_art_id);
 
                 // Save a low-res version to disk cache for future use
@@ -209,7 +208,10 @@ fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]
     let path = get_cache_path(cache_dir, cover_art_id);
     match std::fs::read(&path) {
         Ok(data) => {
-            tracing::debug!("Loaded low-res cover art for {} from disk cache", cover_art_id);
+            tracing::debug!(
+                "Loaded low-res cover art for {} from disk cache",
+                cover_art_id
+            );
             Some(data.into())
         }
         Err(_) => None,
@@ -240,7 +242,11 @@ fn save_to_disk_cache(cache_dir: &Path, cover_art_id: &str, image_data: &[u8]) {
     // Save to disk
     let path = get_cache_path(cache_dir, cover_art_id);
     if let Err(e) = std::fs::write(&path, buffer.into_inner()) {
-        tracing::warn!("Failed to save low-res cover art for {} to disk: {}", cover_art_id, e);
+        tracing::warn!(
+            "Failed to save low-res cover art for {} to disk: {}",
+            cover_art_id,
+            e
+        );
     } else {
         tracing::debug!("Saved low-res cover art for {} to disk cache", cover_art_id);
     }
