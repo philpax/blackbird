@@ -605,6 +605,19 @@ fn library(
         // Only capture keyboard input if search modal and lyrics window are not open
         let can_handle_incremental_search = !ui_state.search_open && !ui_state.lyrics_open;
 
+        // Get current search results (used for both scrolling and Enter key)
+        let current_search_match = if !ui_state.incremental_search_query.is_empty() {
+            let search_results = logic
+                .get_state()
+                .write()
+                .unwrap()
+                .library
+                .search(&ui_state.incremental_search_query);
+            search_results.first().cloned()
+        } else {
+            None
+        };
+
         // Capture keyboard input for incremental search
         if can_handle_incremental_search {
             ui.input(|i| {
@@ -630,20 +643,22 @@ fn library(
                     ui_state.incremental_search_query.clear();
                     ui_state.incremental_search_last_input = None;
                 }
+
+                // Handle enter to play the matched track
+                if i.key_pressed(Key::Enter)
+                    && !ui_state.incremental_search_query.is_empty()
+                    && let Some(track_id) = &current_search_match
+                {
+                    logic.request_play_track(track_id);
+                    ui_state.incremental_search_query.clear();
+                    ui_state.incremental_search_last_input = None;
+                }
             });
         }
 
-        // If we have a search query, find the first matching track
-        if !ui_state.incremental_search_query.is_empty() {
-            let search_results = logic
-                .get_state()
-                .write()
-                .unwrap()
-                .library
-                .search(&ui_state.incremental_search_query);
-            if let Some(first_match) = search_results.first() {
-                incremental_search_scroll_target = Some(first_match.clone());
-            }
+        // Set scroll target if we have a search match
+        if let Some(track_id) = current_search_match {
+            incremental_search_scroll_target = Some(track_id);
         }
 
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
