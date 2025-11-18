@@ -229,12 +229,15 @@ fn save_to_disk_cache(cache_dir: &Path, cover_art_id: &str, image_data: &[u8]) {
     let resized = img.resize_exact(
         LOW_RES_CACHE_SIZE,
         LOW_RES_CACHE_SIZE,
-        image::imageops::FilterType::Lanczos3,
+        image::imageops::FilterType::Triangle,
     );
+
+    // Apply explicit blur to destroy high-level detail
+    let blurred = image::imageops::fast_blur(&resized.into_rgb8(), 1.0);
 
     // Encode as PNG
     let mut buffer = std::io::Cursor::new(Vec::new());
-    if let Err(e) = resized.write_to(&mut buffer, image::ImageFormat::Png) {
+    if let Err(e) = blurred.write_to(&mut buffer, image::ImageFormat::Png) {
         tracing::warn!("Failed to encode resized image for {}: {}", cover_art_id, e);
         return;
     }
