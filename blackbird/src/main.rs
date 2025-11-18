@@ -32,6 +32,7 @@ fn main() {
 
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
+    let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
         base_url: config.server.base_url.clone(),
@@ -41,6 +42,7 @@ fn main() {
         volume: config.general.volume,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
+        library_populated_tx,
     });
 
     // Restore last playback mode
@@ -81,6 +83,7 @@ fn main() {
                 logic,
                 cover_art_loaded_rx,
                 lyrics_loaded_rx,
+                library_populated_rx,
                 icon,
             )))
         }),
@@ -98,6 +101,7 @@ pub struct App {
     logic: bc::Logic,
     cover_art_cache: cover_art_cache::CoverArtCache,
     lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
+    library_populated_rx: std::sync::mpsc::Receiver<()>,
     current_window_position: Option<(i32, i32)>,
     current_window_size: Option<(u32, u32)>,
     ui_state: ui::UiState,
@@ -114,6 +118,7 @@ impl App {
         logic: bc::Logic,
         cover_art_loaded_rx: std::sync::mpsc::Receiver<bc::CoverArt>,
         lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
+        library_populated_rx: std::sync::mpsc::Receiver<()>,
         #[cfg_attr(not(feature = "tray-icon"), allow(unused_variables))] icon: image::RgbaImage,
     ) -> Self {
         let _config_reload_thread = std::thread::spawn({
@@ -173,6 +178,7 @@ impl App {
             logic,
             cover_art_cache,
             lyrics_loaded_rx,
+            library_populated_rx,
             current_window_position: None,
             current_window_size: None,
             ui_state,

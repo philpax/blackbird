@@ -38,6 +38,7 @@ pub struct Logic {
 
     cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
+    library_populated_tx: std::sync::mpsc::Sender<()>,
 
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
@@ -167,6 +168,7 @@ pub struct LogicArgs {
     pub volume: f32,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
+    pub library_populated_tx: std::sync::mpsc::Sender<()>,
 }
 
 impl Logic {
@@ -179,6 +181,7 @@ impl Logic {
             volume,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
+            library_populated_tx,
         }: LogicArgs,
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
@@ -210,6 +213,7 @@ impl Logic {
 
             cover_art_loaded_tx,
             lyrics_loaded_tx,
+            library_populated_tx,
 
             state,
             client,
@@ -770,9 +774,11 @@ impl Logic {
     fn initial_fetch(&self) {
         let client = self.client.clone();
         let state = self.state.clone();
+        let library_populated_tx = self.library_populated_tx.clone();
         self.tokio_thread.spawn(async move {
             let future = {
                 let state = state.clone();
+                let library_populated_tx = library_populated_tx.clone();
                 async move {
                     client.ping().await?;
 
@@ -787,6 +793,9 @@ impl Logic {
                         result.groups,
                         result.albums,
                     );
+
+                    // Signal that library population is complete
+                    let _ = library_populated_tx.send(());
 
                     bs::ClientResult::Ok(())
                 }

@@ -39,6 +39,9 @@ pub struct UiState {
     incremental_search_query: String,
     incremental_search_last_input: Option<Instant>,
     incremental_search_result_index: usize,
+    // Alphabet scroll indicator
+    alphabet_scroll_positions: Vec<(char, f32)>, // (letter, position fraction 0.0-1.0)
+    alphabet_scroll_needs_update: bool,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -149,6 +152,11 @@ impl App {
                 self.ui_state.lyrics_data = lyrics_data.lyrics;
                 self.ui_state.lyrics_loading = false;
             }
+        }
+
+        // Process library population signal
+        while let Ok(()) = self.library_populated_rx.try_recv() {
+            self.ui_state.alphabet_scroll_needs_update = true;
         }
 
         if self.ui_state.search_open {
@@ -588,6 +596,12 @@ fn library(
             return;
         }
 
+        // Compute alphabet scroll positions if library was populated
+        if ui_state.alphabet_scroll_needs_update {
+            compute_alphabet_scroll_positions(logic, ui_state);
+            ui_state.alphabet_scroll_needs_update = false;
+        }
+
         // Handle incremental search (type-to-search)
         // Timeout for clearing the search buffer (from config)
         let search_timeout = Duration::from_millis(config.general.incremental_search_timeout_ms);
@@ -716,97 +730,101 @@ fn library(
 
         let area_offset_y = ui.cursor().top();
 
-        ScrollArea::vertical()
-            .auto_shrink(false)
-            .show_viewport(ui, |ui, viewport| {
-                // Determine which track to scroll to (prioritize incremental search)
-                let scroll_target = incremental_search_scroll_target
-                    .as_ref()
-                    .or(track_to_scroll_to);
+        let scroll_output =
+            ScrollArea::vertical()
+                .auto_shrink(false)
+                .show_viewport(ui, |ui, viewport| {
+                    // Determine which track to scroll to (prioritize incremental search)
+                    let scroll_target = incremental_search_scroll_target
+                        .as_ref()
+                        .or(track_to_scroll_to);
 
-                if let Some(scroll_to_height) = scroll_target.and_then(|id| {
-                    group::target_scroll_height_for_track(
-                        &logic.get_state().read().unwrap(),
-                        spaced_row_height,
-                        id,
-                    )
-                }) {
-                    let target_height = area_offset_y + scroll_to_height - viewport.min.y;
-                    ui.scroll_to_rect(
-                        Rect {
-                            min: Pos2::new(viewport.min.x, target_height),
-                            max: Pos2::new(viewport.max.x, target_height + spaced_row_height),
-                        },
-                        Some(Align::Center),
-                    );
-                }
-
-                // Set the total height for the virtual content (with spacing)
-                ui.set_height(spaced_row_height * total_rows as f32);
-
-                // Calculate which rows are visible with some buffer
-                let first_visible_row =
-                    ((viewport.min.y / spaced_row_height).floor().max(0.0)) as usize;
-                let last_visible_row = (viewport.max.y / spaced_row_height).ceil() as usize + 5; // Add buffer
-                let last_visible_row = last_visible_row.min(total_rows);
-
-                if first_visible_row >= last_visible_row {
-                    return;
-                }
-
-                let visible_row_range = first_visible_row..last_visible_row;
-
-                // Calculate which groups are in view
-                let visible_groups =
-                    logic.get_visible_groups(visible_row_range.clone(), group::line_count);
-
-                let playing_track_id = logic.get_playing_track_id();
-                let mut current_row = visible_groups.start_row;
-
-                for group in visible_groups.groups {
-                    let group_lines = group::line_count(&group);
-
-                    // Calculate the Y position for this group in viewport coordinates
-                    let group_y = current_row as f32 * spaced_row_height;
-
-                    // Always render complete albums (no partial visibility check)
-                    let positioned_rect = Rect::from_min_size(
-                        pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
-                        vec2(
-                            ui.available_width(),
-                            (group_lines - 2 * group::GROUP_MARGIN_BOTTOM_ROW_COUNT) as f32
-                                * spaced_row_height,
-                        ),
-                    );
-
-                    // Display the complete group
-                    let group_response = ui
-                        .scope_builder(UiBuilder::new().max_rect(positioned_rect), |ui| {
-                            // Show the entire group (no row range filtering)
-                            group::ui(
-                                &group,
-                                ui,
-                                &config.style,
-                                logic,
-                                playing_track_id.as_ref(),
-                                current_search_match.as_ref(),
-                                cover_art_cache,
-                            )
-                        })
-                        .inner;
-
-                    // Handle track selection
-                    if let Some(track_id) = group_response.clicked_track {
-                        logic.request_play_track(track_id);
+                    if let Some(scroll_to_height) = scroll_target.and_then(|id| {
+                        group::target_scroll_height_for_track(
+                            &logic.get_state().read().unwrap(),
+                            spaced_row_height,
+                            id,
+                        )
+                    }) {
+                        let target_height = area_offset_y + scroll_to_height - viewport.min.y;
+                        ui.scroll_to_rect(
+                            Rect {
+                                min: Pos2::new(viewport.min.x, target_height),
+                                max: Pos2::new(viewport.max.x, target_height + spaced_row_height),
+                            },
+                            Some(Align::Center),
+                        );
                     }
 
-                    if group_response.clicked_heart {
-                        logic.set_album_starred(&group.album_id, !group.starred);
+                    // Set the total height for the virtual content (with spacing)
+                    ui.set_height(spaced_row_height * total_rows as f32);
+
+                    // Calculate which rows are visible with some buffer
+                    let first_visible_row =
+                        ((viewport.min.y / spaced_row_height).floor().max(0.0)) as usize;
+                    let last_visible_row = (viewport.max.y / spaced_row_height).ceil() as usize + 5; // Add buffer
+                    let last_visible_row = last_visible_row.min(total_rows);
+
+                    if first_visible_row >= last_visible_row {
+                        return;
                     }
 
-                    current_row += group_lines;
-                }
-            });
+                    let visible_row_range = first_visible_row..last_visible_row;
+
+                    // Calculate which groups are in view
+                    let visible_groups =
+                        logic.get_visible_groups(visible_row_range.clone(), group::line_count);
+
+                    let playing_track_id = logic.get_playing_track_id();
+                    let mut current_row = visible_groups.start_row;
+
+                    for group in visible_groups.groups {
+                        let group_lines = group::line_count(&group);
+
+                        // Calculate the Y position for this group in viewport coordinates
+                        let group_y = current_row as f32 * spaced_row_height;
+
+                        // Always render complete albums (no partial visibility check)
+                        let positioned_rect = Rect::from_min_size(
+                            pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
+                            vec2(
+                                ui.available_width(),
+                                (group_lines - 2 * group::GROUP_MARGIN_BOTTOM_ROW_COUNT) as f32
+                                    * spaced_row_height,
+                            ),
+                        );
+
+                        // Display the complete group
+                        let group_response = ui
+                            .scope_builder(UiBuilder::new().max_rect(positioned_rect), |ui| {
+                                // Show the entire group (no row range filtering)
+                                group::ui(
+                                    &group,
+                                    ui,
+                                    &config.style,
+                                    logic,
+                                    playing_track_id.as_ref(),
+                                    current_search_match.as_ref(),
+                                    cover_art_cache,
+                                )
+                            })
+                            .inner;
+
+                        // Handle track selection
+                        if let Some(track_id) = group_response.clicked_track {
+                            logic.request_play_track(track_id);
+                        }
+
+                        if group_response.clicked_heart {
+                            logic.set_album_starred(&group.album_id, !group.starred);
+                        }
+
+                        current_row += group_lines;
+                    }
+                });
+
+        // Render alphabet scroll indicator
+        render_alphabet_scroll_indicator(ui, &config.style, ui_state, &scroll_output.inner_rect);
 
         // Display incremental search query overlay at the bottom
         if !ui_state.incremental_search_query.is_empty() {
@@ -848,6 +866,103 @@ fn library(
             );
         }
     });
+}
+
+/// Computes alphabet scroll positions as fractions of total content
+fn compute_alphabet_scroll_positions(logic: &mut bc::Logic, ui_state: &mut UiState) {
+    let state = logic.get_state();
+    let state = state.read().unwrap();
+
+    ui_state.alphabet_scroll_positions.clear();
+
+    if state.library.groups.is_empty() {
+        return;
+    }
+
+    // Collect artist first letters and their row positions
+    let mut current_row = 0;
+    let mut positions: Vec<(char, usize)> = Vec::new();
+
+    for group in &state.library.groups {
+        // Get the first letter of the artist name (uppercase)
+        if let Some(first_char) = group.artist.chars().next() {
+            let initial = first_char.to_uppercase().next().unwrap_or(first_char);
+
+            // Only add if this is a new letter or different from the last one
+            if positions.is_empty() || positions.last().unwrap().0 != initial {
+                positions.push((initial, current_row));
+            }
+        }
+
+        current_row += group::line_count(group);
+    }
+
+    let total_rows = current_row;
+
+    // Convert to fractions
+    ui_state.alphabet_scroll_positions = positions
+        .into_iter()
+        .map(|(letter, row)| (letter, row as f32 / total_rows as f32))
+        .collect();
+}
+
+/// Renders alphabet letters to the right side where the scrollbar would be
+fn render_alphabet_scroll_indicator(
+    ui: &mut Ui,
+    style: &style::Style,
+    ui_state: &UiState,
+    viewport_rect: &Rect,
+) {
+    if ui_state.alphabet_scroll_positions.is_empty() {
+        return;
+    }
+
+    let font_id = TextStyle::Body.resolve(ui.style());
+    let letter_color = style.text();
+    let letter_height = font_id.size * 1.2;
+
+    let viewport_height = viewport_rect.height();
+
+    // Map fractions to pixel positions
+    struct LetterPosition {
+        letter: char,
+        y: f32,
+    }
+
+    let letter_positions: Vec<LetterPosition> = ui_state
+        .alphabet_scroll_positions
+        .iter()
+        .map(|(letter, fraction)| LetterPosition {
+            letter: *letter,
+            y: viewport_rect.top() + (fraction * viewport_height),
+        })
+        .collect();
+
+    // Filter overlapping letters
+    let mut filtered_positions: Vec<LetterPosition> = Vec::new();
+    for pos in letter_positions {
+        if let Some(last) = filtered_positions.last()
+            && pos.y - last.y < letter_height
+        {
+            continue;
+        }
+        filtered_positions.push(pos);
+    }
+
+    // Render to the right side of the viewport
+    let scroll_style = &ui.style().spacing.scroll;
+    let letter_x =
+        viewport_rect.right() + scroll_style.bar_inner_margin + scroll_style.bar_width + 4.0;
+
+    for pos in filtered_positions {
+        ui.painter().text(
+            pos2(letter_x, pos.y),
+            Align2::LEFT_CENTER,
+            pos.letter,
+            font_id.clone(),
+            letter_color,
+        );
+    }
 }
 
 /// Helper function to create a control button with optional color override
