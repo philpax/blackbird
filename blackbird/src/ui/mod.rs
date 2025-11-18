@@ -233,7 +233,8 @@ fn playing_track_info(
                                 logic,
                                 tdd.cover_art_id.as_deref(),
                                 true,
-                            )),
+                            ))
+                            .show_loading_spinner(false),
                         );
 
                         ui.add_space(6.0);
