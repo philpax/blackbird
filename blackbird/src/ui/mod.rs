@@ -394,22 +394,22 @@ fn playing_track_info(
                     (
                         PlaybackMode::Shuffle,
                         egui_phosphor::regular::SHUFFLE,
-                        true,
+                        false,
                     ),
                     (
                         PlaybackMode::LikedShuffle,
                         egui_phosphor::regular::STAR,
-                        false,
+                        true,
                     ),
                     (
                         PlaybackMode::GroupShuffle,
                         egui_phosphor::regular::VINYL_RECORD,
-                        true,
+                        false,
                     ),
                     (
                         PlaybackMode::LikedGroupShuffle,
                         egui_phosphor::regular::DISC,
-                        false,
+                        true,
                     ),
                 ]
                 .iter()

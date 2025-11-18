@@ -605,21 +605,21 @@ fn compute_group_shuffle_neighbours(
                             current_group_idx,
                             seed,
                             remaining,
-                            Reverse,                  // reverse mapping for wrap-around
-                            |k, cur_key| k < cur_key, // filter: keys below current
+                            |k| k,        // identity mapping for ascending (smallest keys)
+                            |_, _| true,  // accept all groups (no relative filtering)
                         ),
                         None if groups.len() > 1 => get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             seed,
                             remaining,
-                            Reverse,                  // reverse mapping for wrap-around
-                            |k, cur_key| k < cur_key, // filter: keys below current
+                            |k| k,        // identity mapping for ascending (smallest keys)
+                            |_, _| true,  // accept all groups (no relative filtering)
                         ),
                         _ => vec![],
                     };
 
-                    for wrap_group_idx in wrap_groups.into_iter().rev() {
+                    for wrap_group_idx in wrap_groups {
                         if wrap_group_idx < groups.len()
                             && !groups[wrap_group_idx].tracks.is_empty()
                         {
@@ -683,21 +683,21 @@ fn compute_group_shuffle_neighbours(
                             current_group_idx,
                             seed,
                             remaining,
-                            |k| k,                    // identity mapping for wrap-around
-                            |k, cur_key| k > cur_key, // filter: keys above current
+                            Reverse,      // reverse mapping for descending (largest keys)
+                            |_, _| true,  // accept all groups (no relative filtering)
                         ),
                         None if groups.len() > 1 => get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             seed,
                             remaining,
-                            |k| k,                    // identity mapping for wrap-around
-                            |k, cur_key| k > cur_key, // filter: keys above current
+                            Reverse,      // reverse mapping for descending (largest keys)
+                            |_, _| true,  // accept all groups (no relative filtering)
                         ),
                         _ => vec![],
                     };
 
-                    for wrap_group_idx in wrap_groups.into_iter().rev() {
+                    for wrap_group_idx in wrap_groups {
                         if wrap_group_idx < groups.len()
                             && !groups[wrap_group_idx].tracks.is_empty()
                         {
