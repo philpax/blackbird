@@ -33,6 +33,7 @@ pub struct UiState {
     lyrics_track_id: Option<TrackId>,
     lyrics_data: Option<bc::bs::StructuredLyrics>,
     lyrics_loading: bool,
+    lyrics_auto_scroll: bool,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -100,6 +101,7 @@ impl App {
                     self.ui_state.lyrics_track_id = Some(track_and_position.track_id.clone());
                     self.ui_state.lyrics_loading = true;
                     self.ui_state.lyrics_data = None; // Clear old lyrics while loading
+                    self.ui_state.lyrics_auto_scroll = true; // Re-enable auto-scroll for new track
                     logic.request_lyrics(&track_and_position.track_id);
                 }
             }
@@ -130,6 +132,7 @@ impl App {
                 {
                     self.ui_state.lyrics_track_id = Some(track_id.clone());
                     self.ui_state.lyrics_loading = true;
+                    self.ui_state.lyrics_auto_scroll = true; // Enable auto-scroll by default
                     logic.request_lyrics(&track_id);
                 }
             }
@@ -161,6 +164,7 @@ impl App {
                 &mut self.ui_state.lyrics_open,
                 &mut self.ui_state.lyrics_data,
                 &mut self.ui_state.lyrics_loading,
+                &mut self.ui_state.lyrics_auto_scroll,
             );
         }
 
@@ -888,6 +892,7 @@ fn lyrics_window(
     lyrics_open: &mut bool,
     lyrics_data: &mut Option<bc::bs::StructuredLyrics>,
     lyrics_loading: &mut bool,
+    lyrics_auto_scroll: &mut bool,
 ) {
     Window::new("Lyrics")
         .open(lyrics_open)
@@ -897,6 +902,20 @@ fn lyrics_window(
         .collapsible(false)
         .show(ctx, |ui| {
             const INFO_PADDING: f32 = 10.0;
+
+            // Auto-scroll toggle button at the top
+            ui.horizontal(|ui| {
+                let button_text = if *lyrics_auto_scroll {
+                    "Auto-scroll: ON"
+                } else {
+                    "Auto-scroll: OFF"
+                };
+                if ui.button(button_text).clicked() {
+                    *lyrics_auto_scroll = !*lyrics_auto_scroll;
+                }
+            });
+            ui.separator();
+
             if *lyrics_loading {
                 ui.vertical_centered(|ui| {
                     ui.add_space(INFO_PADDING);
@@ -1017,8 +1036,8 @@ fn lyrics_window(
                                 ui.label(rich_text)
                             };
 
-                            // Scroll to keep the current line visible
-                            if is_current {
+                            // Scroll to keep the current line visible (only if auto-scroll is enabled)
+                            if is_current && *lyrics_auto_scroll {
                                 label_response.scroll_to_me(Some(Align::Center));
                             }
 
