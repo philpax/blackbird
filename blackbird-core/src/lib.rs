@@ -645,15 +645,13 @@ impl Logic {
         let st = self.read_state();
 
         // Get the next track ID
-        let next_track_id = match self.compute_next_track_id() {
-            Some(id) => id,
-            None => return vec![],
+        let Some(next_track_id) = self.compute_next_track_id() else {
+            return vec![];
         };
 
         // Find the group index for the next track
-        let next_group_idx = match st.library.track_to_group_index.get(&next_track_id) {
-            Some(&idx) => idx,
-            None => return vec![],
+        let Some(&next_group_idx) = st.library.track_to_group_index.get(&next_track_id) else {
+            return vec![];
         };
 
         let groups = &st.library.groups;

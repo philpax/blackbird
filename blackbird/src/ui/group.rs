@@ -127,13 +127,13 @@ pub fn ui<'a>(
             CachePriority::Visible,
         ))
         .show_loading_spinner(false)
-            .paint_at(
-                ui,
-                egui::Rect {
-                    min: image_pos,
-                    max: image_pos + vec2(image_size, image_size),
-                },
-            );
+        .paint_at(
+            ui,
+            egui::Rect {
+                min: image_pos,
+                max: image_pos + vec2(image_size, image_size),
+            },
+        );
 
         let track_x = image_pos.x + image_size + 16.0;
 

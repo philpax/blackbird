@@ -137,7 +137,9 @@ impl CoverArtCache {
                 (cache_entry.priority, cache_entry.first_requested)
             });
 
-            for (cover_art_id, cache_entry) in cache_entries_by_priority_and_age.iter().take(overage) {
+            for (cover_art_id, cache_entry) in
+                cache_entries_by_priority_and_age.iter().take(overage)
+            {
                 tracing::debug!(
                     "Forgetting cover art for {cover_art_id} from cache due to size limit (priority: {:?})",
                     cache_entry.priority
