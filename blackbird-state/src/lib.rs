@@ -28,7 +28,7 @@ pub use artist::ArtistId;
 /// - Case level off
 ///
 /// This means "E" and "È" will compare as equal, and "Track 2" will sort before "Track 10".
-pub fn create_collator() -> icu_collator::Collator {
+pub fn create_collator() -> icu_collator::CollatorBorrowed<'static> {
     let mut collator_preferences = icu_collator::CollatorPreferences::default();
     collator_preferences.numeric_ordering =
         Some(icu_collator::preferences::CollationNumericOrdering::True);

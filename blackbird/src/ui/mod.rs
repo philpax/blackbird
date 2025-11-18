@@ -878,7 +878,7 @@ fn compute_alphabet_scroll_positions(logic: &mut bc::Logic, ui_state: &mut UiSta
         return;
     }
 
-    let collator = bc::create_collator();
+    let collator = bc::blackbird_state::create_collator();
 
     // Group information: stores all character variants and their counts for each collator-equal group
     // along with the position where this group starts
@@ -924,13 +924,13 @@ fn compute_alphabet_scroll_positions(logic: &mut bc::Logic, ui_state: &mut UiSta
     let total_rows = current_row;
 
     // For each group, select the variant with the highest count and convert position to fraction
-    let mut positions_with_fractions: Vec<(char, f32, usize)> = letter_groups
+    let positions_with_fractions: Vec<(char, f32, usize)> = letter_groups
         .into_iter()
         .map(|group| {
             let (&best_char, &count) = group
                 .variants
                 .iter()
-                .max_by_key(|(_char, &count)| count)
+                .max_by_key(|&(_char, count)| count)
                 .unwrap();
             let fraction = group.position as f32 / total_rows as f32;
             (best_char, fraction, count)
