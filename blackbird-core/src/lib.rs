@@ -638,6 +638,60 @@ impl Logic {
             .send(LogicToPlaybackMessage::SetVolume(volume));
     }
 
+    /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
+    /// Returns up to 5 cover art IDs: the album containing the next track, plus 2 albums before and 2 after.
+    /// Returns an empty vector if there is no next track or if the library is not populated.
+    pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<String> {
+        let st = self.read_state();
+
+        // Get the next track ID
+        let next_track_id = match self.compute_next_track_id() {
+            Some(id) => id,
+            None => return vec![],
+        };
+
+        // Find the group index for the next track
+        let next_group_idx = match st.library.track_to_group_index.get(&next_track_id) {
+            Some(&idx) => idx,
+            None => return vec![],
+        };
+
+        let groups = &st.library.groups;
+        if groups.is_empty() {
+            return vec![];
+        }
+
+        let mut cover_art_ids = Vec::new();
+
+        // Get 2 groups before the next track's group
+        for i in 0..2 {
+            let offset = 2 - i; // 2, 1
+            if next_group_idx >= offset {
+                let idx = next_group_idx - offset;
+                if let Some(cover_art_id) = &groups[idx].cover_art_id {
+                    cover_art_ids.push(cover_art_id.clone());
+                }
+            }
+        }
+
+        // Get the next track's group (center)
+        if let Some(cover_art_id) = &groups[next_group_idx].cover_art_id {
+            cover_art_ids.push(cover_art_id.clone());
+        }
+
+        // Get 2 groups after the next track's group
+        for i in 1..=2 {
+            let idx = next_group_idx + i;
+            if idx < groups.len()
+                && let Some(cover_art_id) = &groups[idx].cover_art_id
+            {
+                cover_art_ids.push(cover_art_id.clone());
+            }
+        }
+
+        cover_art_ids
+    }
+
     pub fn set_scroll_target(&self, track_id: &TrackId) {
         self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
     }
