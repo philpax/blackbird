@@ -116,11 +116,6 @@ impl PlaybackThread {
             while let Ok(msg) = playback_rx.try_recv() {
                 match msg {
                     LTPM::PlayTrack(track_id, data) => {
-                        // Clear all tracks from the sink for a fresh start
-                        while !sink.empty() {
-                            sink.skip_one();
-                        }
-
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
                             .with_data(std::io::Cursor::new(data))
@@ -146,11 +141,14 @@ impl PlaybackThread {
                             }
                         };
 
+                        // Append new track first, then clear old tracks
+                        // This ensures the sink is never completely empty
                         sink.append(decoder);
 
-                        // Seek to the beginning to ensure fresh start
-                        if let Err(e) = sink.try_seek(Duration::ZERO) {
-                            tracing::warn!("Failed to seek to start of track: {e}");
+                        // Skip all the old tracks (everything except the one we just appended)
+                        let tracks_to_skip = queued_tracks.len();
+                        for _ in 0..tracks_to_skip {
+                            sink.skip_one();
                         }
 
                         sink.play();
