@@ -397,8 +397,18 @@ fn playing_track_info(
                         false,
                     ),
                     (
+                        PlaybackMode::LikedShuffle,
+                        egui_phosphor::regular::STAR,
+                        true,
+                    ),
+                    (
                         PlaybackMode::GroupShuffle,
                         egui_phosphor::regular::VINYL_RECORD,
+                        false,
+                    ),
+                    (
+                        PlaybackMode::LikedGroupShuffle,
+                        egui_phosphor::regular::DISC,
                         false,
                     ),
                 ]
