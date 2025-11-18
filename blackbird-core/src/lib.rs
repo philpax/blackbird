@@ -310,18 +310,22 @@ impl Logic {
         // Gapless playback: Try to append next track if available
         // Only do this if there's no pending track change (i.e., current_target matches current track)
         if let Some(current_id) = self.get_playing_track_id() {
-            let st = self.read_state();
-            let pending_track_change = st.queue.current_target.as_ref() != Some(&current_id);
-            drop(st);
+            let pending_track_change = {
+                let st = self.read_state();
+                st.queue.current_target.as_ref() != Some(&current_id)
+            };
 
             // Don't append if we're in the middle of changing tracks
             if !pending_track_change
                 && let Some(next_id) = self.compute_next_track_id()
             {
-                let st = self.read_state();
-                let already_appended = st.queue.next_track_appended.as_ref() == Some(&next_id);
-                let audio_data = st.queue.audio_cache.get(&next_id).cloned();
-                drop(st);
+                let (already_appended, audio_data) = {
+                    let st = self.read_state();
+                    (
+                        st.queue.next_track_appended.as_ref() == Some(&next_id),
+                        st.queue.audio_cache.get(&next_id).cloned(),
+                    )
+                };
 
                 if !already_appended
                     && let Some(data) = audio_data
@@ -548,14 +552,15 @@ impl Logic {
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
         tracing::debug!("Playback mode set to {mode:?}");
-        let mut st = self.write_state();
-        st.playback_mode = mode;
+        let current_track_id = {
+            let mut st = self.write_state();
+            st.playback_mode = mode;
 
-        // Reset gapless playback state since the next track may be different in the new mode
-        st.queue.next_track_appended = None;
+            // Reset gapless playback state since the next track may be different in the new mode
+            st.queue.next_track_appended = None;
 
-        let current_track_id = st.current_track_and_position.as_ref().map(|t| t.track_id.clone());
-        drop(st);
+            st.current_track_and_position.as_ref().map(|t| t.track_id.clone())
+        };
 
         // Clear any queued next track using Skippable, so the new mode takes effect immediately
         // This will cause the queued track to skip to its end, triggering a natural transition
