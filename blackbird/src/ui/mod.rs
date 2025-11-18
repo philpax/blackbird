@@ -409,7 +409,7 @@ fn playing_track_info(
                     (
                         PlaybackMode::LikedGroupShuffle,
                         egui_phosphor::regular::DISC,
-                        true,
+                        false,
                     ),
                 ]
                 .iter()
