@@ -978,17 +978,62 @@ fn lyrics_window(
                             )
                         };
 
-                        let rich_text = RichText::new(&line.value)
-                            .color(text_color)
-                            .size(if is_current { 18.0 } else { 16.0 });
+                        ui.horizontal(|ui| {
+                            // Show timestamp if available (for synced lyrics)
+                            if let Some(start_ms) = line.start {
+                                let timestamp_secs = (start_ms / 1000) as u32;
+                                let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
 
-                        if is_current {
-                            let response = ui.label(rich_text.strong());
+                                let timestamp_color = if is_current {
+                                    style.text()
+                                } else {
+                                    // Dim timestamps for non-current lines
+                                    let [r, g, b, a] = style.text().to_array();
+                                    Color32::from_rgba_unmultiplied(
+                                        (r as f32 * 0.4) as u8,
+                                        (g as f32 * 0.4) as u8,
+                                        (b as f32 * 0.4) as u8,
+                                        a,
+                                    )
+                                };
+
+                                // Clickable timestamp for seeking
+                                let timestamp_label = ui.add(
+                                    Label::new(
+                                        RichText::new(&timestamp_str)
+                                            .color(timestamp_color)
+                                            .size(if is_current { 16.0 } else { 14.0 })
+                                            .monospace()
+                                    )
+                                    .sense(Sense::click())
+                                );
+
+                                if timestamp_label.clicked() {
+                                    logic.seek_current(Duration::from_millis(start_ms as u64));
+                                }
+
+                                if timestamp_label.hovered() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                }
+
+                                ui.add_space(8.0);
+                            }
+
+                            let rich_text = RichText::new(&line.value)
+                                .color(text_color)
+                                .size(if is_current { 18.0 } else { 16.0 });
+
+                            let label_response = if is_current {
+                                ui.label(rich_text.strong())
+                            } else {
+                                ui.label(rich_text)
+                            };
+
                             // Scroll to keep the current line visible
-                            response.scroll_to_me(Some(Align::Center));
-                        } else {
-                            ui.label(rich_text);
-                        }
+                            if is_current {
+                                label_response.scroll_to_me(Some(Align::Center));
+                            }
+                        });
 
                         ui.add_space(4.0);
                     }
