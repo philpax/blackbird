@@ -22,15 +22,16 @@ pub struct CoverArtCache {
 }
 
 /// Priority levels for cache entries, from highest to lowest.
-/// Higher priority entries are evicted last.
+/// Higher priority entries are protected from size-based eviction.
+/// All entries timeout after 5 seconds of not being requested, regardless of priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CachePriority {
-    /// Transient art loaded while scrolling - evicted first
+    /// Transient art loaded while scrolling - evicted first when cache is full
     #[allow(dead_code)]
     Transient = 0,
-    /// Art for albums surrounding/including the next track in queue - evicted second
+    /// Art for albums surrounding/including the next track in queue - evicted second when cache is full
     NextTrack = 1,
-    /// Currently visible art - never evicted
+    /// Currently visible art - protected from size-based eviction, but will timeout if not actively displayed
     Visible = 2,
 }
 
@@ -99,11 +100,9 @@ impl CoverArtCache {
 
         let mut removal_candidates = HashSet::new();
 
-        // Remove entries that have timed out (but never remove Visible priority)
+        // Remove entries that have timed out (not requested recently)
         for (cover_art_id, cache_entry) in self.cache.iter() {
-            if cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT
-                && cache_entry.priority != CachePriority::Visible
-            {
+            if cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT {
                 tracing::debug!(
                     "Forgetting cover art for {cover_art_id} from cache due to timeout (priority: {:?})",
                     cache_entry.priority
@@ -113,7 +112,8 @@ impl CoverArtCache {
         }
 
         // Remove any entries that exceed our cache size limit
-        // Evict in priority order: Transient first, then NextTrack, never Visible
+        // Evict in priority order: Transient first, then NextTrack
+        // Visible items are protected from size-based eviction (but can timeout if not requested)
         let overage = self
             .cache
             .len()
@@ -181,10 +181,8 @@ impl CoverArtCache {
             });
 
         cache_entry.last_requested = std::time::Instant::now();
-        // Always update to the highest priority requested
-        if priority > cache_entry.priority {
-            cache_entry.priority = priority;
-        }
+        // Always update priority to match current request
+        cache_entry.priority = priority;
 
         // Check disk cache if we haven't loaded anything yet
         if let CacheEntryState::Unloaded = cache_entry.state
