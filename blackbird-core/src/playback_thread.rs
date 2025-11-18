@@ -7,6 +7,9 @@ use crate::app_state::TrackAndPosition;
 #[cfg(feature = "audio")]
 use std::collections::VecDeque;
 
+#[cfg(feature = "audio")]
+use rodio::source::Skippable;
+
 pub struct PlaybackThread {
     logic_to_playback_tx: PlaybackThreadSendHandle,
     _playback_thread_handle: std::thread::JoinHandle<()>,
@@ -102,6 +105,8 @@ impl PlaybackThread {
 
         let mut state = PlaybackState::Stopped;
         let mut queued_tracks: VecDeque<TrackId> = VecDeque::new();
+        // Store the Skippable handle for the queued next track so we can skip it if needed
+        let mut next_track_skippable: Option<Skippable<rodio::Decoder<std::io::Cursor<Vec<u8>>>>> = None;
         fn update_and_send_state(
             logic_tx: &tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
             state: &mut PlaybackState,
@@ -156,6 +161,7 @@ impl PlaybackThread {
                         // Reset queue tracking - only this track is now queued
                         queued_tracks.clear();
                         queued_tracks.push_back(track_id.clone());
+                        next_track_skippable = None;
 
                         last_track_id = Some(track_id.clone());
                         let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
@@ -184,8 +190,16 @@ impl PlaybackThread {
                             }
                         };
 
+                        // Wrap in Skippable so we can skip it later if playback mode changes
+                        use rodio::Source;
+                        let skippable = decoder.skippable();
+
+                        // Store a handle to skip this track if needed (e.g., playback mode change)
+                        // Note: Skippable uses Arc internally, so this clone is cheap
+                        next_track_skippable = Some(skippable.clone());
+
                         // Append to sink for gapless playback
-                        sink.append(decoder);
+                        sink.append(skippable);
                         queued_tracks.push_back(track_id.clone());
                         tracing::debug!(
                             "Appended next track {} (queue length: {})",
@@ -194,16 +208,15 @@ impl PlaybackThread {
                         );
                     }
                     LTPM::ClearQueuedNextTracks => {
-                        // Clear all queued tracks except the currently playing one
-                        let tracks_to_remove = queued_tracks.len().saturating_sub(1);
-                        if tracks_to_remove > 0 {
-                            // Skip tracks in the sink (keep only the first/current one)
-                            for _ in 0..tracks_to_remove {
-                                if sink.len() > 1 {
-                                    sink.skip_one();
-                                }
-                            }
-                            // Remove from our tracking (keep only the first track)
+                        // Skip the queued next track (if any) using the stored Skippable handle
+                        if let Some(skippable) = next_track_skippable.take() {
+                            skippable.skip();
+                            tracing::debug!("Skipped queued next track via Skippable");
+                        }
+
+                        // Note: We only support one queued next track currently
+                        // If there are more tracks queued, truncate our tracking
+                        if queued_tracks.len() > 1 {
                             queued_tracks.truncate(1);
                             tracing::debug!(
                                 "Cleared queued next tracks (queue length now: {})",
@@ -271,6 +284,9 @@ impl PlaybackThread {
                     queued_tracks.pop_front();
                 }
 
+                // Clear the skippable handle since the next track is now playing
+                next_track_skippable = None;
+
                 // If we still have tracks queued, send TrackStarted for the new current track
                 if let Some(new_current_id) = queued_tracks.front() {
                     last_track_id = Some(new_current_id.clone());
@@ -289,6 +305,7 @@ impl PlaybackThread {
             // Check if we should auto-advance to next track
             if sink.empty() && state == PlaybackState::Playing {
                 queued_tracks.clear();
+                next_track_skippable = None;
                 update_and_send_state(&logic_tx, &mut state, PlaybackState::Stopped);
                 let _ = logic_tx.send(PTLM::TrackEnded);
             }
