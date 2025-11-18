@@ -12,9 +12,10 @@ use blackbird_core::{
     PlaybackMode, TrackDisplayDetails, blackbird_state::TrackId, util::seconds_to_hms_string,
 };
 use egui::{
-    Align, Align2, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame,
-    Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense, Slider,
-    Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window, pos2,
+    Align, Align2, Button, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily,
+    Frame, Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
+    Slider, Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window,
+    pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -904,16 +905,17 @@ fn lyrics_window(
             const INFO_PADDING: f32 = 10.0;
 
             // Auto-scroll toggle button at the top
-            ui.horizontal(|ui| {
-                let button_text = if *lyrics_auto_scroll {
-                    "Auto-scroll: ON"
-                } else {
-                    "Auto-scroll: OFF"
-                };
-                if ui.button(button_text).clicked() {
-                    *lyrics_auto_scroll = !*lyrics_auto_scroll;
-                }
-            });
+            let button_text = if *lyrics_auto_scroll {
+                "Auto-scroll: on"
+            } else {
+                "Auto-scroll: off"
+            };
+            if ui
+                .add_sized([ui.available_width(), 32.0], Button::new(button_text))
+                .clicked()
+            {
+                *lyrics_auto_scroll = !*lyrics_auto_scroll;
+            }
             ui.separator();
 
             if *lyrics_loading {

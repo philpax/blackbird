@@ -60,10 +60,7 @@ impl Client {
     ///
     /// Returns an error if the request fails or the response is not valid.
     #[cfg(feature = "opensubsonic")]
-    pub async fn get_lyrics_by_song_id(
-        &self,
-        id: impl Into<String>,
-    ) -> ClientResult<LyricsList> {
+    pub async fn get_lyrics_by_song_id(&self, id: impl Into<String>) -> ClientResult<LyricsList> {
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct LyricsApiResponse {

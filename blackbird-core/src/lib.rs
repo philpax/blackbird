@@ -326,9 +326,7 @@ impl Logic {
             };
 
             // Don't append if we're in the middle of changing tracks
-            if !pending_track_change
-                && let Some(next_id) = self.compute_next_track_id()
-            {
+            if !pending_track_change && let Some(next_id) = self.compute_next_track_id() {
                 let (already_appended, audio_data) = {
                     let st = self.read_state();
                     (
@@ -337,16 +335,13 @@ impl Logic {
                     )
                 };
 
-                if !already_appended
-                    && let Some(data) = audio_data
-                {
-                    tracing::debug!(
-                        "Appending next track for gapless playback: {}",
-                        next_id.0
-                    );
-                    self.playback_thread.send(
-                        LogicToPlaybackMessage::AppendNextTrack(next_id.clone(), data),
-                    );
+                if !already_appended && let Some(data) = audio_data {
+                    tracing::debug!("Appending next track for gapless playback: {}", next_id.0);
+                    self.playback_thread
+                        .send(LogicToPlaybackMessage::AppendNextTrack(
+                            next_id.clone(),
+                            data,
+                        ));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
             }
@@ -524,10 +519,8 @@ impl Logic {
                 Ok(mut lyrics_list) => {
                     // Get the first synced lyrics if available, otherwise first lyrics
                     let lyrics = {
-                        let synced_idx = lyrics_list
-                            .structured_lyrics
-                            .iter()
-                            .position(|l| l.synced);
+                        let synced_idx =
+                            lyrics_list.structured_lyrics.iter().position(|l| l.synced);
 
                         if let Some(idx) = synced_idx {
                             Some(lyrics_list.structured_lyrics.swap_remove(idx))
@@ -612,7 +605,9 @@ impl Logic {
             // Reset gapless playback state since the next track may be different in the new mode
             st.queue.next_track_appended = None;
 
-            st.current_track_and_position.as_ref().map(|t| t.track_id.clone())
+            st.current_track_and_position
+                .as_ref()
+                .map(|t| t.track_id.clone())
         };
 
         // Clear any queued next track by marking it for skip, so the new mode takes effect immediately

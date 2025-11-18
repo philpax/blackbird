@@ -557,8 +557,8 @@ fn compute_group_shuffle_neighbours(
     let mut remaining = count;
 
     // Check if current group is in the filtered set (if filtering is enabled)
-    let current_group_in_filter = filtered_group_indices
-        .is_none_or(|indices| indices.contains(&current_group_idx));
+    let current_group_in_filter =
+        filtered_group_indices.is_none_or(|indices| indices.contains(&current_group_idx));
 
     match dir {
         Neighbour::Next => {
@@ -591,9 +591,7 @@ fn compute_group_shuffle_neighbours(
                 };
 
                 for next_group_idx in next_groups {
-                    if next_group_idx < groups.len()
-                        && !groups[next_group_idx].tracks.is_empty()
-                    {
+                    if next_group_idx < groups.len() && !groups[next_group_idx].tracks.is_empty() {
                         result.push(groups[next_group_idx].tracks[0].clone());
                         remaining -= 1;
                         if remaining == 0 {
@@ -610,16 +608,16 @@ fn compute_group_shuffle_neighbours(
                             current_group_idx,
                             seed,
                             remaining,
-                            |k| k,        // identity mapping for ascending (smallest keys)
-                            |_, _| true,  // accept all groups (no relative filtering)
+                            |k| k,       // identity mapping for ascending (smallest keys)
+                            |_, _| true, // accept all groups (no relative filtering)
                         ),
                         None if groups.len() > 1 => get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             seed,
                             remaining,
-                            |k| k,        // identity mapping for ascending (smallest keys)
-                            |_, _| true,  // accept all groups (no relative filtering)
+                            |k| k,       // identity mapping for ascending (smallest keys)
+                            |_, _| true, // accept all groups (no relative filtering)
                         ),
                         _ => vec![],
                     };
@@ -668,9 +666,7 @@ fn compute_group_shuffle_neighbours(
                 };
 
                 for prev_group_idx in prev_groups {
-                    if prev_group_idx < groups.len()
-                        && !groups[prev_group_idx].tracks.is_empty()
-                    {
+                    if prev_group_idx < groups.len() && !groups[prev_group_idx].tracks.is_empty() {
                         let last_track_idx = groups[prev_group_idx].tracks.len() - 1;
                         result.push(groups[prev_group_idx].tracks[last_track_idx].clone());
                         remaining -= 1;
@@ -688,16 +684,16 @@ fn compute_group_shuffle_neighbours(
                             current_group_idx,
                             seed,
                             remaining,
-                            Reverse,      // reverse mapping for descending (largest keys)
-                            |_, _| true,  // accept all groups (no relative filtering)
+                            Reverse,     // reverse mapping for descending (largest keys)
+                            |_, _| true, // accept all groups (no relative filtering)
                         ),
                         None if groups.len() > 1 => get_groups_shuffle_order(
                             groups.len(),
                             current_group_idx,
                             seed,
                             remaining,
-                            Reverse,      // reverse mapping for descending (largest keys)
-                            |_, _| true,  // accept all groups (no relative filtering)
+                            Reverse,     // reverse mapping for descending (largest keys)
+                            |_, _| true, // accept all groups (no relative filtering)
                         ),
                         _ => vec![],
                     };

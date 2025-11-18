@@ -31,8 +31,7 @@ fn main() {
     config.save();
 
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
-    let (lyrics_loaded_tx, lyrics_loaded_rx) =
-        std::sync::mpsc::channel::<bc::LyricsData>();
+    let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
         base_url: config.server.base_url.clone(),
