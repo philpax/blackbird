@@ -570,6 +570,7 @@ fn scrub_bar(ui: &mut Ui, logic: &mut bc::Logic, config: &Config) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn library(
     ui: &mut Ui,
     logic: &mut bc::Logic,
@@ -591,11 +592,11 @@ fn library(
         const SEARCH_TIMEOUT: Duration = Duration::from_millis(500);
 
         // Clear search query if timeout has elapsed
-        if let Some(last_input) = ui_state.incremental_search_last_input {
-            if last_input.elapsed() > SEARCH_TIMEOUT {
-                ui_state.incremental_search_query.clear();
-                ui_state.incremental_search_last_input = None;
-            }
+        if let Some(last_input) = ui_state.incremental_search_last_input
+            && last_input.elapsed() > SEARCH_TIMEOUT
+        {
+            ui_state.incremental_search_query.clear();
+            ui_state.incremental_search_last_input = None;
         }
 
         // Track ID to scroll to from incremental search
