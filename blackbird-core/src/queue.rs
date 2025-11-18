@@ -27,6 +27,7 @@ pub struct QueueState {
     pub current_target_request_id: Option<u64>,
     pub pending_skip_after_error: bool,
     pub group_shuffle_seed: u64,
+    pub next_track_appended: Option<TrackId>,
 }
 impl QueueState {
     pub fn new() -> Self {
@@ -89,6 +90,10 @@ impl Logic {
 
             let req_id = st.queue.request_counter;
             st.queue.current_target_request_id = Some(req_id);
+
+            // Reset gapless playback state since we're manually changing tracks
+            st.queue.next_track_appended = None;
+
             tracing::debug!("Scheduling track {} (req_id={})", track_id.0, req_id);
             req_id
         };

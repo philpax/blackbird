@@ -226,6 +226,13 @@ impl Logic {
                     st.current_track_and_position = Some(track_and_position.clone());
                     st.started_loading_track = None;
 
+                    // Sync current_target with the actual current track
+                    // This is important for detecting pending track changes in gapless logic
+                    st.queue.current_target = Some(track_and_position.track_id.clone());
+
+                    // Reset next track append tracking for gapless playback
+                    st.queue.next_track_appended = None;
+
                     // Reset scrobble state for new track
                     st.scrobble_state = ScrobbleState {
                         track_id: Some(track_and_position.track_id.clone()),
@@ -296,6 +303,41 @@ impl Logic {
                 LogicRequestMessage::Previous => {
                     tracing::debug!("User requested Previous");
                     self.previous()
+                }
+            }
+        }
+
+        // Gapless playback: Try to append next track if available
+        // Only do this if there's no pending track change (i.e., current_target matches current track)
+        if let Some(current_id) = self.get_playing_track_id() {
+            let pending_track_change = {
+                let st = self.read_state();
+                st.queue.current_target.as_ref() != Some(&current_id)
+            };
+
+            // Don't append if we're in the middle of changing tracks
+            if !pending_track_change
+                && let Some(next_id) = self.compute_next_track_id()
+            {
+                let (already_appended, audio_data) = {
+                    let st = self.read_state();
+                    (
+                        st.queue.next_track_appended.as_ref() == Some(&next_id),
+                        st.queue.audio_cache.get(&next_id).cloned(),
+                    )
+                };
+
+                if !already_appended
+                    && let Some(data) = audio_data
+                {
+                    tracing::debug!(
+                        "Appending next track for gapless playback: {}",
+                        next_id.0
+                    );
+                    self.playback_thread.send(
+                        LogicToPlaybackMessage::AppendNextTrack(next_id.clone(), data),
+                    );
+                    self.write_state().queue.next_track_appended = Some(next_id);
                 }
             }
         }
@@ -510,9 +552,22 @@ impl Logic {
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
         tracing::debug!("Playback mode set to {mode:?}");
-        self.write_state().playback_mode = mode;
+        let current_track_id = {
+            let mut st = self.write_state();
+            st.playback_mode = mode;
 
-        if let Some(track_id) = self.get_playing_track_id() {
+            // Reset gapless playback state since the next track may be different in the new mode
+            st.queue.next_track_appended = None;
+
+            st.current_track_and_position.as_ref().map(|t| t.track_id.clone())
+        };
+
+        // Clear any queued next track by marking it for skip, so the new mode takes effect immediately
+        // The marked track will be skipped when it transitions to current, triggering playback based on new mode
+        self.playback_thread
+            .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
+
+        if let Some(track_id) = current_track_id {
             self.ensure_cache_window(&track_id);
         }
     }
