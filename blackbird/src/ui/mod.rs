@@ -588,12 +588,12 @@ fn library(
         }
 
         // Handle incremental search (type-to-search)
-        // Timeout for clearing the search buffer (500ms)
-        const SEARCH_TIMEOUT: Duration = Duration::from_millis(500);
+        // Timeout for clearing the search buffer (from config)
+        let search_timeout = Duration::from_millis(config.general.incremental_search_timeout_ms);
 
         // Clear search query if timeout has elapsed
         if let Some(last_input) = ui_state.incremental_search_last_input
-            && last_input.elapsed() > SEARCH_TIMEOUT
+            && last_input.elapsed() > search_timeout
         {
             ui_state.incremental_search_query.clear();
             ui_state.incremental_search_last_input = None;

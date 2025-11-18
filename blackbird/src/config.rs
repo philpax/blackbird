@@ -54,6 +54,7 @@ pub struct General {
     pub window_width: u32,
     pub window_height: u32,
     pub volume: f32,
+    pub incremental_search_timeout_ms: u64,
 }
 impl Default for General {
     fn default() -> Self {
@@ -64,6 +65,7 @@ impl Default for General {
             window_width: 640,
             window_height: 1280,
             volume: 1.0,
+            incremental_search_timeout_ms: 5000,
         }
     }
 }
