@@ -93,7 +93,15 @@ impl App {
             .take();
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
-                track_to_scroll_to = Some(track_and_position.track_id);
+                track_to_scroll_to = Some(track_and_position.track_id.clone());
+
+                // If lyrics window is open, request lyrics for the new track
+                if self.ui_state.lyrics_open {
+                    self.ui_state.lyrics_track_id = Some(track_and_position.track_id.clone());
+                    self.ui_state.lyrics_loading = true;
+                    self.ui_state.lyrics_data = None; // Clear old lyrics while loading
+                    logic.request_lyrics(&track_and_position.track_id);
+                }
             }
         }
 
