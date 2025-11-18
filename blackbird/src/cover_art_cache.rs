@@ -120,7 +120,9 @@ impl CoverArtCache {
         self.cache
             .retain(|cover_art_id, _| !removal_candidates.contains(cover_art_id));
         for cover_art_id in removal_candidates {
-            ctx.forget_image(&cover_art_id_to_url(&cover_art_id));
+            // Forget both low-res and high-res versions
+            ctx.forget_image(&cover_art_id_to_url(&cover_art_id, true));
+            ctx.forget_image(&cover_art_id_to_url(&cover_art_id, false));
         }
     }
 
@@ -177,17 +179,24 @@ impl CoverArtCache {
         match &cache_entry.state {
             CacheEntryState::Unloaded | CacheEntryState::Loading => loading_image,
             CacheEntryState::LoadedLowRes(cover_art)
-            | CacheEntryState::LoadingWithLowRes(cover_art)
-            | CacheEntryState::Loaded(cover_art) => egui::ImageSource::Bytes {
-                uri: Cow::Owned(cover_art_id_to_url(cover_art_id)),
+            | CacheEntryState::LoadingWithLowRes(cover_art) => egui::ImageSource::Bytes {
+                uri: Cow::Owned(cover_art_id_to_url(cover_art_id, true)),
+                bytes: cover_art.clone().into(),
+            },
+            CacheEntryState::Loaded(cover_art) => egui::ImageSource::Bytes {
+                uri: Cow::Owned(cover_art_id_to_url(cover_art_id, false)),
                 bytes: cover_art.clone().into(),
             },
         }
     }
 }
 
-fn cover_art_id_to_url(cover_art_id: &str) -> String {
-    format!("bytes://{cover_art_id}")
+fn cover_art_id_to_url(cover_art_id: &str, is_low_res: bool) -> String {
+    if is_low_res {
+        format!("bytes://low-res/{cover_art_id}")
+    } else {
+        format!("bytes://{cover_art_id}")
+    }
 }
 
 fn get_cache_path(cache_dir: &Path, cover_art_id: &str) -> PathBuf {
