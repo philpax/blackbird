@@ -30,6 +30,7 @@ pub fn ui<'a>(
     style: &style::Style,
     logic: &mut Logic,
     playing_track: Option<&TrackId>,
+    incremental_search_target: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
 ) -> GroupResponse<'a> {
     let mut clicked_track = None;
@@ -164,6 +165,7 @@ pub fn ui<'a>(
                         track::TrackParams {
                             max_track_length_width,
                             playing: playing_track == Some(&track.id),
+                            incremental_search_target: incremental_search_target == Some(&track.id),
                             track_y,
                             track_row_height,
                         },

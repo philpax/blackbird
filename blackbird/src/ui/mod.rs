@@ -38,6 +38,7 @@ pub struct UiState {
     // Incremental search (type-to-search)
     incremental_search_query: String,
     incremental_search_last_input: Option<Instant>,
+    incremental_search_result_index: usize,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -605,22 +606,36 @@ fn library(
         // Only capture keyboard input if search modal and lyrics window are not open
         let can_handle_incremental_search = !ui_state.search_open && !ui_state.lyrics_open;
 
-        // Get current search results (used for both scrolling and Enter key)
-        let current_search_match = if !ui_state.incremental_search_query.is_empty() {
-            let search_results = logic
+        // Get all search results
+        let search_results = if !ui_state.incremental_search_query.is_empty() {
+            logic
                 .get_state()
                 .write()
                 .unwrap()
                 .library
-                .search(&ui_state.incremental_search_query);
-            search_results.first().cloned()
+                .search(&ui_state.incremental_search_query)
         } else {
-            None
+            Vec::new()
         };
+
+        // Ensure the result index is within bounds
+        if ui_state.incremental_search_result_index >= search_results.len()
+            && !search_results.is_empty()
+        {
+            ui_state.incremental_search_result_index = search_results.len() - 1;
+        }
+
+        // Get the currently selected track from search results
+        let current_search_match = search_results
+            .get(ui_state.incremental_search_result_index)
+            .cloned();
 
         // Capture keyboard input for incremental search
         if can_handle_incremental_search {
             ui.input(|i| {
+                // Track if query changed (to reset index)
+                let mut query_changed = false;
+
                 // Handle text input (printable characters)
                 for event in &i.events {
                     if let egui::Event::Text(text) = event {
@@ -628,6 +643,7 @@ fn library(
                         if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
                             ui_state.incremental_search_query.push_str(text);
                             ui_state.incremental_search_last_input = Some(Instant::now());
+                            query_changed = true;
                         }
                     }
                 }
@@ -636,12 +652,34 @@ fn library(
                 if i.key_pressed(Key::Backspace) && !ui_state.incremental_search_query.is_empty() {
                     ui_state.incremental_search_query.pop();
                     ui_state.incremental_search_last_input = Some(Instant::now());
+                    query_changed = true;
+                }
+
+                // Reset index when query changes
+                if query_changed {
+                    ui_state.incremental_search_result_index = 0;
+                }
+
+                // Handle Up/Down arrows to navigate results
+                if !search_results.is_empty() {
+                    if i.key_pressed(Key::ArrowDown) {
+                        ui_state.incremental_search_result_index =
+                            (ui_state.incremental_search_result_index + 1)
+                                .min(search_results.len() - 1);
+                        ui_state.incremental_search_last_input = Some(Instant::now());
+                    }
+                    if i.key_pressed(Key::ArrowUp) {
+                        ui_state.incremental_search_result_index =
+                            ui_state.incremental_search_result_index.saturating_sub(1);
+                        ui_state.incremental_search_last_input = Some(Instant::now());
+                    }
                 }
 
                 // Handle escape to clear search
                 if i.key_pressed(Key::Escape) && !ui_state.incremental_search_query.is_empty() {
                     ui_state.incremental_search_query.clear();
                     ui_state.incremental_search_last_input = None;
+                    ui_state.incremental_search_result_index = 0;
                 }
 
                 // Handle enter to play the matched track
@@ -652,13 +690,14 @@ fn library(
                     logic.request_play_track(track_id);
                     ui_state.incremental_search_query.clear();
                     ui_state.incremental_search_last_input = None;
+                    ui_state.incremental_search_result_index = 0;
                 }
             });
         }
 
         // Set scroll target if we have a search match
-        if let Some(track_id) = current_search_match {
-            incremental_search_scroll_target = Some(track_id);
+        if let Some(track_id) = &current_search_match {
+            incremental_search_scroll_target = Some(track_id.clone());
         }
 
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
@@ -750,6 +789,7 @@ fn library(
                                 &config.style,
                                 logic,
                                 playing_track_id.as_ref(),
+                                current_search_match.as_ref(),
                                 cover_art_cache,
                             )
                         })
@@ -788,11 +828,21 @@ fn library(
                 Color32::from_black_alpha(200),
             );
 
-            // Draw the search query text
+            // Draw the search query text with result count
+            let result_info = if search_results.is_empty() {
+                format!("Search: {} (no results)", ui_state.incremental_search_query)
+            } else {
+                format!(
+                    "Search: {} ({}/{})",
+                    ui_state.incremental_search_query,
+                    ui_state.incremental_search_result_index + 1,
+                    search_results.len()
+                )
+            };
             ui.painter().text(
                 pos2(overlay_rect.left() + 10.0, overlay_rect.center().y),
                 Align2::LEFT_CENTER,
-                format!("Search: {}", ui_state.incremental_search_query),
+                result_info,
                 TextStyle::Body.resolve(ui.style()),
                 Color32::WHITE,
             );

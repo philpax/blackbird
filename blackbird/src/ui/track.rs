@@ -20,6 +20,7 @@ pub struct TrackResponse {
 pub struct TrackParams {
     pub max_track_length_width: f32,
     pub playing: bool,
+    pub incremental_search_target: bool,
     pub track_y: f32,
     pub track_row_height: f32,
 }
@@ -67,6 +68,15 @@ pub fn ui(
 
     // Check for interactions with this track area
     let track_response = ui.allocate_rect(track_rect, Sense::click());
+
+    // Highlight if this is the incremental search target
+    if params.incremental_search_target {
+        ui.painter().rect_filled(
+            track_rect,
+            0.0,
+            egui::Color32::from_rgba_premultiplied(255, 255, 255, 25),
+        );
+    }
 
     // Get track information
     let track_number = track.track.unwrap_or(0);
