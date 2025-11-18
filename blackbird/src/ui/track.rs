@@ -20,6 +20,7 @@ pub struct TrackResponse {
 pub struct TrackParams {
     pub max_track_length_width: f32,
     pub playing: bool,
+    pub incremental_search_target: bool,
     pub track_y: f32,
     pub track_row_height: f32,
 }
@@ -135,8 +136,21 @@ pub fn ui(
     // If the heart is hovered, draw a line underneath the track to make it
     // easier to line them up.
     if heart_response.hovered() {
-        let line_start = track_rect.left_top() + vec2(0.0, track_rect.height());
-        let line_end = line_start + vec2(row_width, 0.0);
+        // Start from album art's right edge (16px left of track start)
+        let line_start = track_rect.left_top() + vec2(-16.0, track_rect.height());
+        let line_end = line_start + vec2(row_width + 16.0, 0.0);
+
+        ui.painter().line(
+            vec![line_start, line_end],
+            PathStroke::new(1.0, style.track_name_hovered()),
+        );
+    }
+
+    // If this is the incremental search target, draw a line underneath
+    if params.incremental_search_target {
+        // Start from album art's right edge (16px left of track start)
+        let line_start = track_rect.left_top() + vec2(-16.0, track_rect.height());
+        let line_end = line_start + vec2(row_width + 16.0, 0.0);
 
         ui.painter().line(
             vec![line_start, line_end],

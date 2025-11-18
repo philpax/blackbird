@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod group;
 pub use group::GROUP_ALBUM_ART_SIZE;
@@ -35,6 +35,10 @@ pub struct UiState {
     lyrics_data: Option<bc::bs::StructuredLyrics>,
     lyrics_loading: bool,
     lyrics_auto_scroll: bool,
+    // Incremental search (type-to-search)
+    incremental_search_query: String,
+    incremental_search_last_input: Option<Instant>,
+    incremental_search_result_index: usize,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -214,6 +218,7 @@ impl App {
                     scroll_margin.into(),
                     track_to_scroll_to.as_ref(),
                     &mut self.cover_art_cache,
+                    &mut self.ui_state,
                 );
             });
 
@@ -566,6 +571,7 @@ fn scrub_bar(ui: &mut Ui, logic: &mut bc::Logic, config: &Config) {
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn library(
     ui: &mut Ui,
     logic: &mut bc::Logic,
@@ -574,11 +580,124 @@ fn library(
     scroll_margin: f32,
     track_to_scroll_to: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
+    ui_state: &mut UiState,
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
             ui.add_sized(ui.available_size(), Spinner::new());
             return;
+        }
+
+        // Handle incremental search (type-to-search)
+        // Timeout for clearing the search buffer (from config)
+        let search_timeout = Duration::from_millis(config.general.incremental_search_timeout_ms);
+
+        // Clear search query if timeout has elapsed
+        if let Some(last_input) = ui_state.incremental_search_last_input
+            && last_input.elapsed() > search_timeout
+        {
+            ui_state.incremental_search_query.clear();
+            ui_state.incremental_search_last_input = None;
+        }
+
+        // Track ID to scroll to from incremental search
+        let mut incremental_search_scroll_target: Option<TrackId> = None;
+
+        // Only capture keyboard input if search modal and lyrics window are not open
+        let can_handle_incremental_search = !ui_state.search_open && !ui_state.lyrics_open;
+
+        // Get all search results
+        let search_results = if !ui_state.incremental_search_query.is_empty() {
+            logic
+                .get_state()
+                .write()
+                .unwrap()
+                .library
+                .search(&ui_state.incremental_search_query)
+        } else {
+            Vec::new()
+        };
+
+        // Ensure the result index is within bounds
+        if ui_state.incremental_search_result_index >= search_results.len()
+            && !search_results.is_empty()
+        {
+            ui_state.incremental_search_result_index = search_results.len() - 1;
+        }
+
+        // Get the currently selected track from search results
+        let current_search_match = search_results
+            .get(ui_state.incremental_search_result_index)
+            .cloned();
+
+        // Capture keyboard input for incremental search
+        if can_handle_incremental_search {
+            ui.input(|i| {
+                // Track if query changed (to reset index)
+                let mut query_changed = false;
+
+                // Handle text input (printable characters)
+                for event in &i.events {
+                    if let egui::Event::Text(text) = event {
+                        // Only capture single characters (ignore paste operations)
+                        if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
+                            ui_state.incremental_search_query.push_str(text);
+                            ui_state.incremental_search_last_input = Some(Instant::now());
+                            query_changed = true;
+                        }
+                    }
+                }
+
+                // Handle backspace
+                if i.key_pressed(Key::Backspace) && !ui_state.incremental_search_query.is_empty() {
+                    ui_state.incremental_search_query.pop();
+                    ui_state.incremental_search_last_input = Some(Instant::now());
+                    query_changed = true;
+                }
+
+                // Reset index when query changes
+                if query_changed {
+                    ui_state.incremental_search_result_index = 0;
+                }
+
+                // Handle Up/Down arrows to navigate results
+                if !search_results.is_empty() {
+                    if i.key_pressed(Key::ArrowDown) {
+                        ui_state.incremental_search_result_index =
+                            (ui_state.incremental_search_result_index + 1)
+                                .min(search_results.len() - 1);
+                        ui_state.incremental_search_last_input = Some(Instant::now());
+                    }
+                    if i.key_pressed(Key::ArrowUp) {
+                        ui_state.incremental_search_result_index =
+                            ui_state.incremental_search_result_index.saturating_sub(1);
+                        ui_state.incremental_search_last_input = Some(Instant::now());
+                    }
+                }
+
+                // Handle escape to clear search
+                if i.key_pressed(Key::Escape) && !ui_state.incremental_search_query.is_empty() {
+                    ui_state.incremental_search_query.clear();
+                    ui_state.incremental_search_last_input = None;
+                    ui_state.incremental_search_result_index = 0;
+                }
+
+                // Handle enter to play the matched track
+                if i.key_pressed(Key::Enter)
+                    && !ui_state.incremental_search_query.is_empty()
+                    && let Some(track_id) = &current_search_match
+                {
+                    logic.request_play_track(track_id);
+                    ui_state.incremental_search_query.clear();
+                    ui_state.incremental_search_last_input = None;
+                    ui_state.incremental_search_result_index = 0;
+                }
+            });
+        }
+
+        // Set scroll target if we have a search match
+        if let Some(track_id) = &current_search_match {
+            incremental_search_scroll_target = Some(track_id.clone());
         }
 
         // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
@@ -600,7 +719,12 @@ fn library(
         ScrollArea::vertical()
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
-                if let Some(scroll_to_height) = track_to_scroll_to.and_then(|id| {
+                // Determine which track to scroll to (prioritize incremental search)
+                let scroll_target = incremental_search_scroll_target
+                    .as_ref()
+                    .or(track_to_scroll_to);
+
+                if let Some(scroll_to_height) = scroll_target.and_then(|id| {
                     group::target_scroll_height_for_track(
                         &logic.get_state().read().unwrap(),
                         spaced_row_height,
@@ -665,6 +789,7 @@ fn library(
                                 &config.style,
                                 logic,
                                 playing_track_id.as_ref(),
+                                current_search_match.as_ref(),
                                 cover_art_cache,
                             )
                         })
@@ -682,6 +807,46 @@ fn library(
                     current_row += group_lines;
                 }
             });
+
+        // Display incremental search query overlay at the bottom
+        if !ui_state.incremental_search_query.is_empty() {
+            // Position the overlay at the bottom of the UI
+            let overlay_height = 30.0;
+            let overlay_padding = 8.0;
+            let overlay_rect = Rect::from_min_size(
+                pos2(
+                    ui.min_rect().left() + overlay_padding,
+                    ui.min_rect().bottom() - overlay_height - overlay_padding,
+                ),
+                vec2(ui.available_width() - 2.0 * overlay_padding, overlay_height),
+            );
+
+            // Draw a semi-transparent background
+            ui.painter().rect_filled(
+                overlay_rect,
+                4.0, // rounded corners
+                Color32::from_black_alpha(200),
+            );
+
+            // Draw the search query text with result count
+            let result_info = if search_results.is_empty() {
+                format!("Search: {} (no results)", ui_state.incremental_search_query)
+            } else {
+                format!(
+                    "Search: {} ({}/{})",
+                    ui_state.incremental_search_query,
+                    ui_state.incremental_search_result_index + 1,
+                    search_results.len()
+                )
+            };
+            ui.painter().text(
+                pos2(overlay_rect.left() + 10.0, overlay_rect.center().y),
+                Align2::LEFT_CENTER,
+                result_info,
+                TextStyle::Body.resolve(ui.style()),
+                Color32::WHITE,
+            );
+        }
     });
 }
 
