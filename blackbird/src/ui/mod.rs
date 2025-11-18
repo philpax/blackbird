@@ -978,9 +978,11 @@ fn lyrics_window(
                             )
                         };
 
-                        ui.horizontal(|ui| {
-                            // Show timestamp if available (for synced lyrics)
-                            if let Some(start_ms) = line.start {
+                        let row_response = ui.horizontal(|ui| {
+                            // Show timestamp if available (for synced lyrics) and line is not empty
+                            if let Some(start_ms) = line.start
+                                && !line.value.trim().is_empty()
+                            {
                                 let timestamp_secs = (start_ms / 1000) as u32;
                                 let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
 
@@ -997,31 +999,19 @@ fn lyrics_window(
                                     )
                                 };
 
-                                // Clickable timestamp for seeking
-                                let timestamp_label = ui.add(
+                                ui.add(
                                     Label::new(
                                         RichText::new(&timestamp_str)
                                             .color(timestamp_color)
-                                            .size(if is_current { 16.0 } else { 14.0 })
                                             .monospace()
                                     )
-                                    .sense(Sense::click())
                                 );
-
-                                if timestamp_label.clicked() {
-                                    logic.seek_current(Duration::from_millis(start_ms as u64));
-                                }
-
-                                if timestamp_label.hovered() {
-                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                                }
 
                                 ui.add_space(8.0);
                             }
 
                             let rich_text = RichText::new(&line.value)
-                                .color(text_color)
-                                .size(if is_current { 18.0 } else { 16.0 });
+                                .color(text_color);
 
                             let label_response = if is_current {
                                 ui.label(rich_text.strong())
@@ -1033,7 +1023,27 @@ fn lyrics_window(
                             if is_current {
                                 label_response.scroll_to_me(Some(Align::Center));
                             }
+
+                            line.start
                         });
+
+                        // Make the entire row clickable if it has a timestamp
+                        if let Some(start_ms) = row_response.inner {
+                            let row_rect = row_response.response.rect;
+                            let row_interaction = ui.interact(
+                                row_rect,
+                                ui.id().with(idx),
+                                Sense::click()
+                            );
+
+                            if row_interaction.clicked() {
+                                logic.seek_current(Duration::from_millis(start_ms as u64));
+                            }
+
+                            if row_interaction.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                        }
 
                         ui.add_space(4.0);
                     }
