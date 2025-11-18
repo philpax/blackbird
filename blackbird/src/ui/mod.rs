@@ -896,11 +896,12 @@ fn lyrics_window(
         .pivot(Align2::CENTER_CENTER)
         .collapsible(false)
         .show(ctx, |ui| {
+            const INFO_PADDING: f32 = 10.0;
             if *lyrics_loading {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
+                    ui.add_space(INFO_PADDING);
                     ui.add(Spinner::new());
-                    ui.add_space(10.0);
+                    ui.add_space(INFO_PADDING);
                     ui.label("Loading lyrics...");
                 });
                 return;
@@ -908,16 +909,18 @@ fn lyrics_window(
 
             let Some(lyrics) = lyrics_data else {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
+                    ui.add_space(INFO_PADDING);
                     ui.label("No lyrics available for this track.");
+                    ui.add_space(INFO_PADDING);
                 });
                 return;
             };
 
             if lyrics.line.is_empty() {
                 ui.vertical_centered(|ui| {
-                    ui.add_space(20.0);
+                    ui.add_space(INFO_PADDING);
                     ui.label("No lyrics available for this track.");
+                    ui.add_space(INFO_PADDING);
                 });
                 return;
             }
@@ -938,9 +941,7 @@ fn lyrics_window(
                     .iter()
                     .enumerate()
                     .rev()
-                    .find(|(_, line)| {
-                        line.start.unwrap_or(0) <= adjusted_position_ms
-                    })
+                    .find(|(_, line)| line.start.unwrap_or(0) <= adjusted_position_ms)
                     .map(|(idx, _)| idx)
                     .unwrap_or(0)
             } else {
@@ -999,19 +1000,16 @@ fn lyrics_window(
                                     )
                                 };
 
-                                ui.add(
-                                    Label::new(
-                                        RichText::new(&timestamp_str)
-                                            .color(timestamp_color)
-                                            .monospace()
-                                    )
-                                );
+                                ui.add(Label::new(
+                                    RichText::new(&timestamp_str)
+                                        .color(timestamp_color)
+                                        .monospace(),
+                                ));
 
-                                ui.add_space(8.0);
+                                ui.add_space(4.0);
                             }
 
-                            let rich_text = RichText::new(&line.value)
-                                .color(text_color);
+                            let rich_text = RichText::new(&line.value).color(text_color);
 
                             let label_response = if is_current {
                                 ui.label(rich_text.strong())
@@ -1030,11 +1028,8 @@ fn lyrics_window(
                         // Make the entire row clickable if it has a timestamp
                         if let Some(start_ms) = row_response.inner {
                             let row_rect = row_response.response.rect;
-                            let row_interaction = ui.interact(
-                                row_rect,
-                                ui.id().with(idx),
-                                Sense::click()
-                            );
+                            let row_interaction =
+                                ui.interact(row_rect, ui.id().with(idx), Sense::click());
 
                             if row_interaction.clicked() {
                                 logic.seek_current(Duration::from_millis(start_ms as u64));
@@ -1044,8 +1039,6 @@ fn lyrics_window(
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                             }
                         }
-
-                        ui.add_space(4.0);
                     }
                 });
         });
