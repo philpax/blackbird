@@ -39,6 +39,9 @@ pub struct UiState {
     incremental_search_query: String,
     incremental_search_last_input: Option<Instant>,
     incremental_search_result_index: usize,
+    // Alphabet scroll indicator
+    alphabet_scroll_positions: Vec<(char, f32)>, // (letter, position fraction 0.0-1.0)
+    alphabet_scroll_needs_update: bool,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -149,6 +152,11 @@ impl App {
                 self.ui_state.lyrics_data = lyrics_data.lyrics;
                 self.ui_state.lyrics_loading = false;
             }
+        }
+
+        // Process library population signal
+        while let Ok(()) = self.library_populated_rx.try_recv() {
+            self.ui_state.alphabet_scroll_needs_update = true;
         }
 
         if self.ui_state.search_open {
@@ -588,6 +596,12 @@ fn library(
             return;
         }
 
+        // Compute alphabet scroll positions if library was populated
+        if ui_state.alphabet_scroll_needs_update {
+            compute_alphabet_scroll_positions(logic, ui_state);
+            ui_state.alphabet_scroll_needs_update = false;
+        }
+
         // Handle incremental search (type-to-search)
         // Timeout for clearing the search buffer (from config)
         let search_timeout = Duration::from_millis(config.general.incremental_search_timeout_ms);
@@ -808,6 +822,9 @@ fn library(
                 }
             });
 
+        // Render alphabet scroll indicator
+        render_alphabet_scroll_indicator(ui, &config.style, ui_state, &ui.min_rect());
+
         // Display incremental search query overlay at the bottom
         if !ui_state.incremental_search_query.is_empty() {
             // Position the overlay at the bottom of the UI
@@ -848,6 +865,103 @@ fn library(
             );
         }
     });
+}
+
+/// Computes alphabet scroll positions as fractions of total content
+fn compute_alphabet_scroll_positions(logic: &mut bc::Logic, ui_state: &mut UiState) {
+    let state = logic.get_state();
+    let state = state.read().unwrap();
+
+    ui_state.alphabet_scroll_positions.clear();
+
+    if state.library.groups.is_empty() {
+        return;
+    }
+
+    // Collect artist first letters and their row positions
+    let mut current_row = 0;
+    let mut positions: Vec<(char, usize)> = Vec::new();
+
+    for group in &state.library.groups {
+        // Get the first letter of the artist name (uppercase)
+        if let Some(first_char) = group.artist.chars().next() {
+            let initial = first_char.to_uppercase().next().unwrap_or(first_char);
+
+            // Only add if this is a new letter or different from the last one
+            if positions.is_empty() || positions.last().unwrap().0 != initial {
+                positions.push((initial, current_row));
+            }
+        }
+
+        current_row += group::line_count(group);
+    }
+
+    let total_rows = current_row;
+
+    // Convert to fractions
+    ui_state.alphabet_scroll_positions = positions
+        .into_iter()
+        .map(|(letter, row)| (letter, row as f32 / total_rows as f32))
+        .collect();
+}
+
+/// Renders alphabet letters to the right side where the scrollbar would be
+fn render_alphabet_scroll_indicator(
+    ui: &mut Ui,
+    style: &style::Style,
+    ui_state: &UiState,
+    viewport_rect: &Rect,
+) {
+    if ui_state.alphabet_scroll_positions.is_empty() {
+        return;
+    }
+
+    let font_id = TextStyle::Body.resolve(ui.style());
+    let letter_color = style.text();
+    let letter_height = font_id.size * 1.15;
+
+    let viewport_height = viewport_rect.height();
+
+    // Map fractions to pixel positions
+    struct LetterPosition {
+        letter: char,
+        y: f32,
+    }
+
+    let letter_positions: Vec<LetterPosition> = ui_state
+        .alphabet_scroll_positions
+        .iter()
+        .map(|(letter, fraction)| LetterPosition {
+            letter: *letter,
+            y: viewport_rect.top() + (fraction * viewport_height),
+        })
+        .collect();
+
+    // Filter overlapping letters
+    let mut filtered_positions: Vec<LetterPosition> = Vec::new();
+    for pos in letter_positions {
+        if let Some(last) = filtered_positions.last()
+            && pos.y - last.y < letter_height
+        {
+            continue;
+        }
+        filtered_positions.push(pos);
+    }
+
+    // Render to the right side of the viewport
+    let scroll_style = &ui.style().spacing.scroll;
+    let letter_x =
+        viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width / 2.0;
+
+    for pos in filtered_positions {
+        ui.painter().text(
+            pos2(letter_x, pos.y),
+            Align2::LEFT_CENTER,
+            pos.letter,
+            font_id.clone(),
+            letter_color,
+        );
+    }
 }
 
 /// Helper function to create a control button with optional color override
