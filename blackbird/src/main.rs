@@ -10,10 +10,7 @@ mod ui;
 use blackbird_core as bc;
 
 use config::Config;
-use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
-    hotkey::{Code, HotKey, Modifiers},
-};
+use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -176,10 +173,16 @@ impl App {
 
         let global_hotkey_manager =
             GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
-        let search_hotkey = HotKey::new(
-            Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
-            Code::KeyF,
-        );
+
+        // Parse global search hotkey from config
+        let (code, modifiers) = {
+            let cfg = config.read().unwrap();
+            cfg.keybindings
+                .parse_global_hotkey(&cfg.keybindings.global_search)
+                .expect("Failed to parse global search hotkey from config")
+        };
+
+        let search_hotkey = HotKey::new(Some(modifiers), code);
         global_hotkey_manager
             .register(search_hotkey)
             .expect("Failed to register global search hotkey");
