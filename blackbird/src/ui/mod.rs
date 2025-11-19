@@ -14,8 +14,8 @@ use blackbird_core::{
 use egui::{
     Align, Align2, Button, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily,
     Frame, Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
-    Slider, Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, Visuals, Window,
-    pos2,
+    Slider, Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, ViewportBuilder,
+    ViewportId, Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -30,9 +30,14 @@ use crate::{
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
 
+// Create search viewport ID dynamically
+fn search_viewport_id() -> ViewportId {
+    ViewportId::from_hash_of("search_window")
+}
+
 #[derive(Default)]
 pub struct UiState {
-    search_open: bool,
+    pub(crate) search_open: bool,
     search_query: String,
     lyrics_open: bool,
     lyrics_track_id: Option<TrackId>,
@@ -1042,16 +1047,24 @@ fn search(
     search_open: &mut bool,
     search_query: &mut String,
 ) {
+    if !*search_open {
+        // Close the viewport if it exists
+        ctx.send_viewport_cmd_to(search_viewport_id(), egui::ViewportCommand::Close);
+        return;
+    }
+
     let mut requested_track_id = None;
     let mut clear = false;
 
-    Window::new("Search")
-        .open(search_open)
-        .default_pos(ctx.screen_rect().center())
-        .default_size(ctx.screen_rect().size() * Vec2::new(0.75, 0.3))
-        .pivot(Align2::CENTER_CENTER)
-        .collapsible(false)
-        .show(ctx, |ui| {
+    ctx.show_viewport_immediate(
+        search_viewport_id(),
+        ViewportBuilder::default()
+            .with_title("Blackbird - Search")
+            .with_inner_size([800.0, 300.0])
+            .with_active(true)
+            .with_always_on_top(),
+        |ctx, _class| {
+            CentralPanel::default().show(ctx, |ui| {
             let response = ui.add_sized(
                 Vec2::new(ui.available_width(), ui.text_style_height(&TextStyle::Body)),
                 TextEdit::singleline(search_query).hint_text("Your search here..."),
@@ -1199,17 +1212,23 @@ fn search(
                     requested_track_id = response.inner;
                 }
             });
+
+            // Check if viewport was closed
+            if ctx.input(|i| i.viewport().close_requested()) {
+                clear = true;
+            }
+
+            if let Some(track_id) = &requested_track_id {
+                logic.request_play_track(track_id);
+                clear = true;
+            }
+
+            if clear {
+                *search_open = false;
+                search_query.clear();
+            }
         });
-
-    if let Some(track_id) = requested_track_id {
-        logic.request_play_track(&track_id);
-        clear = true;
-    }
-
-    if clear {
-        *search_open = false;
-        search_query.clear();
-    }
+    });
 }
 
 fn lyrics_window(

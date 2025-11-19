@@ -10,6 +10,10 @@ mod ui;
 use blackbird_core as bc;
 
 use config::Config;
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager,
+};
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -104,12 +108,14 @@ pub struct App {
     library_populated_rx: std::sync::mpsc::Receiver<()>,
     current_window_position: Option<(i32, i32)>,
     current_window_size: Option<(u32, u32)>,
-    ui_state: ui::UiState,
+    pub(crate) ui_state: ui::UiState,
     shutdown_initiated: bool,
     #[cfg(feature = "tray-icon")]
     tray_icon: tray_icon::TrayIcon,
     #[cfg(feature = "tray-icon")]
     tray_menu: tray::TrayMenu,
+    _global_hotkey_manager: GlobalHotKeyManager,
+    search_hotkey: HotKey,
 }
 impl App {
     pub fn new(
@@ -168,6 +174,16 @@ impl App {
             tray::TrayMenu::new(icon, current_playback_mode)
         };
 
+        // Set up global hotkey for search (Ctrl+Shift+F or Cmd+Shift+F on macOS)
+        let global_hotkey_manager = GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
+        let search_hotkey = HotKey::new(
+            Some(Modifiers::CONTROL | Modifiers::SHIFT),
+            Code::KeyF,
+        );
+        global_hotkey_manager
+            .register(search_hotkey)
+            .expect("Failed to register global search hotkey");
+
         App {
             config,
             _config_reload_thread,
@@ -187,6 +203,8 @@ impl App {
             tray_icon,
             #[cfg(feature = "tray-icon")]
             tray_menu,
+            _global_hotkey_manager: global_hotkey_manager,
+            search_hotkey,
         }
     }
 }
@@ -211,6 +229,14 @@ impl eframe::App for App {
 
             // Handle menu events
             self.tray_menu.handle_events(&self.logic, ctx);
+        }
+
+        // Handle global hotkey events
+        if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            if event.id == self.search_hotkey.id() {
+                self.ui_state.search_open = !self.ui_state.search_open;
+                ctx.request_repaint();
+            }
         }
 
         // Check for shutdown signal from Tokio thread

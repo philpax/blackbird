@@ -584,6 +584,7 @@ dependencies = [
  "egui",
  "egui-phosphor",
  "egui_extras",
+ "global-hotkey",
  "image",
  "raw-window-handle",
  "serde",
@@ -1961,6 +1962,22 @@ checksum = "063ce2eb6a8d0ea93d2bf8ba1957e78dbab6be1c2220dd3daca57d5a9d869898"
 dependencies = [
  "libc",
  "system-deps",
+]
+
+[[package]]
+name = "global-hotkey"
+version = "0.6.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41fbb3a4e56c901ee66c190fdb3fa08344e6d09593cc6c61f8eb9add7144b271"
+dependencies = [
+ "crossbeam-channel",
+ "keyboard-types",
+ "objc2 0.6.2",
+ "objc2-app-kit 0.3.1",
+ "once_cell",
+ "thiserror 2.0.16",
+ "windows-sys 0.59.0",
+ "x11-dl",
 ]
 
 [[package]]
