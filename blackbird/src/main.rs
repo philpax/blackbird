@@ -11,8 +11,8 @@ use blackbird_core as bc;
 
 use config::Config;
 use global_hotkey::{
-    GlobalHotKeyEvent, GlobalHotKeyManager,
     hotkey::{Code, HotKey, Modifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
 };
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -232,6 +232,7 @@ impl eframe::App for App {
         // Handle global hotkey events
         if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv()
             && event.id == self.search_hotkey.id()
+            && event.state == HotKeyState::Released
         {
             self.ui_state.search_open = !self.ui_state.search_open;
             ctx.request_repaint();
