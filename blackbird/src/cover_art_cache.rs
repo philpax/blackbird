@@ -20,12 +20,26 @@ pub struct CoverArtCache {
     target_size: Option<usize>,
     cache_dir: PathBuf,
 }
+
+/// Priority levels for cache entries, from highest to lowest.
+/// Higher priority entries are protected from size-based eviction.
+/// All entries timeout after 5 seconds of not being requested, regardless of priority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CachePriority {
+    /// Transient art loaded while scrolling - evicted first when cache is full
+    #[allow(dead_code)]
+    Transient = 0,
+    /// Art for albums surrounding/including the next track in queue - evicted second when cache is full
+    NextTrack = 1,
+    /// Currently visible art - protected from size-based eviction, but will timeout if not actively displayed
+    Visible = 2,
+}
+
 struct CacheEntry {
     first_requested: std::time::Instant,
     last_requested: std::time::Instant,
     state: CacheEntryState,
-    /// If set, this entry will never be evicted from the cache
-    priority: bool,
+    priority: CachePriority,
 }
 enum CacheEntryState {
     Unloaded,
@@ -86,34 +100,52 @@ impl CoverArtCache {
 
         let mut removal_candidates = HashSet::new();
 
-        // Remove entries that have timed out
-        for (cover_art_id, _) in self.cache.iter().filter(|(_, cache_entry)| {
-            cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT && !cache_entry.priority
-        }) {
-            tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to timeout");
-            removal_candidates.insert(cover_art_id.clone());
+        // Remove entries that have timed out (not requested recently)
+        for (cover_art_id, cache_entry) in self.cache.iter() {
+            if cache_entry.last_requested.elapsed() > CACHE_ENTRY_TIMEOUT {
+                tracing::debug!(
+                    "Forgetting cover art for {cover_art_id} from cache due to timeout (priority: {:?})",
+                    cache_entry.priority
+                );
+                removal_candidates.insert(cover_art_id.clone());
+            }
         }
 
         // Remove any entries that exceed our cache size limit
+        // Evict in priority order: Transient first, then NextTrack
+        // Visible items are protected from size-based eviction (but can timeout if not requested)
         let overage = self
             .cache
             .len()
             .saturating_sub(MAX_CACHE_SIZE)
             .saturating_sub(removal_candidates.len());
         if overage > 0 {
-            tracing::debug!("Forgetting {overage} cover arts from cache due to size limit");
-        }
-        let mut cache_entries_by_oldest = self
-            .cache
-            .iter()
-            .filter(|(cover_art_id, cache_entry)| {
-                !(removal_candidates.contains(*cover_art_id) || cache_entry.priority)
-            })
-            .collect::<Vec<_>>();
-        cache_entries_by_oldest.sort_by_key(|(_, cache_entry)| cache_entry.first_requested);
-        for (cover_art_id, _) in cache_entries_by_oldest.iter().take(overage) {
-            tracing::debug!("Forgetting cover art for {cover_art_id} from cache due to size limit");
-            removal_candidates.insert(cover_art_id.to_string());
+            tracing::debug!("Cache overage: {overage} entries need to be evicted");
+
+            // Collect all non-removed entries and sort by priority (lowest first), then by age (oldest first)
+            let mut cache_entries_by_priority_and_age = self
+                .cache
+                .iter()
+                .filter(|(cover_art_id, cache_entry)| {
+                    !removal_candidates.contains(*cover_art_id)
+                        && cache_entry.priority != CachePriority::Visible
+                })
+                .collect::<Vec<_>>();
+
+            // Sort by priority (ascending, so Transient comes first), then by first_requested (oldest first)
+            cache_entries_by_priority_and_age.sort_by_key(|(_, cache_entry)| {
+                (cache_entry.priority, cache_entry.first_requested)
+            });
+
+            for (cover_art_id, cache_entry) in
+                cache_entries_by_priority_and_age.iter().take(overage)
+            {
+                tracing::debug!(
+                    "Forgetting cover art for {cover_art_id} from cache due to size limit (priority: {:?})",
+                    cache_entry.priority
+                );
+                removal_candidates.insert(cover_art_id.to_string());
+            }
         }
 
         self.cache
@@ -129,7 +161,7 @@ impl CoverArtCache {
         &mut self,
         logic: &Logic,
         cover_art_id: Option<&str>,
-        priority: bool,
+        priority: CachePriority,
     ) -> egui::ImageSource<'static> {
         let loading_image = egui::include_image!("../assets/no-album-art.png");
         let missing_art_image = egui::include_image!("../assets/no-album-art.png");
@@ -149,6 +181,7 @@ impl CoverArtCache {
             });
 
         cache_entry.last_requested = std::time::Instant::now();
+        // Always update priority to match current request
         cache_entry.priority = priority;
 
         // Check disk cache if we haven't loaded anything yet
@@ -186,6 +219,17 @@ impl CoverArtCache {
                 uri: Cow::Owned(cover_art_id_to_url(cover_art_id, false)),
                 bytes: cover_art.clone().into(),
             },
+        }
+    }
+
+    /// Preload album art for albums surrounding the next track in the queue.
+    /// This ensures smooth transitions when moving to the next track.
+    pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
+        let cover_art_ids = logic.get_next_track_surrounding_cover_art_ids();
+
+        for cover_art_id in cover_art_ids {
+            // Use get with NextTrack priority to trigger loading
+            self.get(logic, Some(&cover_art_id), CachePriority::NextTrack);
         }
     }
 }

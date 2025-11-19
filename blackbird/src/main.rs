@@ -225,6 +225,9 @@ impl eframe::App for App {
         self.controls.update();
         self.logic.update();
         self.cover_art_cache.update(ctx);
+        // Preload album art for tracks surrounding the next track in queue
+        self.cover_art_cache
+            .preload_next_track_surrounding_art(&self.logic);
 
         // Update tray menu
         #[cfg(feature = "tray-icon")]

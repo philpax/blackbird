@@ -21,7 +21,11 @@ use egui::{
 };
 pub use style::Style;
 
-use crate::{App, bc, config::Config, cover_art_cache::CoverArtCache};
+use crate::{
+    App, bc,
+    config::Config,
+    cover_art_cache::{CachePriority, CoverArtCache},
+};
 
 // UI Constants
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -292,7 +296,7 @@ fn playing_track_info(
                             egui::Image::new(cover_art_cache.get(
                                 logic,
                                 tdd.cover_art_id.as_deref(),
-                                true,
+                                CachePriority::Visible,
                             ))
                             .show_loading_spinner(false),
                         );

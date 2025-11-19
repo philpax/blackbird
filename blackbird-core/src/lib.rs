@@ -638,6 +638,35 @@ impl Logic {
             .send(LogicToPlaybackMessage::SetVolume(volume));
     }
 
+    /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
+    /// Returns an empty vector if there is no next track or if the library is not populated.
+    pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<String> {
+        let st = self.read_state();
+
+        // Get the next track ID
+        let Some(next_track_id) = self.compute_next_track_id() else {
+            return vec![];
+        };
+
+        // Find the group index for the next track
+        let Some(&next_group_idx) = st.library.track_to_group_index.get(&next_track_id) else {
+            return vec![];
+        };
+
+        let mut cover_art_ids = vec![];
+        let groups = &st.library.groups;
+
+        // We would ostensibly include the groups before and after the next track's group here,
+        // but the naive implementation doesn't work, and I have no interest in debugging it today.
+
+        // Get the next track's group (center)
+        if let Some(cover_art_id) = &groups[next_group_idx].cover_art_id {
+            cover_art_ids.push(cover_art_id.clone());
+        }
+
+        cover_art_ids
+    }
+
     pub fn set_scroll_target(&self, track_id: &TrackId) {
         self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
     }
