@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Library, TrackDisplayDetails, queue::QueueState};
 
-#[derive(Default)]
 pub struct AppState {
     pub library: Library,
 
@@ -20,6 +19,22 @@ pub struct AppState {
     pub scrobble_state: ScrobbleState,
 
     pub error: Option<AppStateError>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            library: Library::default(),
+            current_track_and_position: None,
+            started_loading_track: None,
+            last_requested_track_for_ui_scroll: None,
+            playback_mode: PlaybackMode::default(),
+            queue: QueueState::new(),
+            volume: 0.0,
+            scrobble_state: ScrobbleState::default(),
+            error: None,
+        }
+    }
 }
 
 /// Tracks scrobbling state for the currently playing track.
