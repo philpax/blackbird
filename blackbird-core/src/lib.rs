@@ -269,23 +269,33 @@ impl Logic {
 
                     // Reload the track from API to update play count
                     if let Some(track_id) = self.get_playing_track_id() {
-                        let client = Arc::clone(&self.client);
-                        let track_id_clone = track_id.clone();
-                        let state = Arc::clone(&self.state);
+                        self.tokio_thread.spawn({
+                            let client = self.client.clone();
+                            let state = self.state.clone();
+                            let track_id = track_id.clone();
 
-                        self.tokio_thread.spawn(async move {
-                            match client.get_song(&track_id_clone.0).await {
-                                Ok(child) => {
-                                    let updated_track: Track = child.into();
-                                    if let Ok(mut state) = state.write() {
-                                        if let Some(track) = state.library.track_map.get_mut(&track_id_clone) {
-                                            track.play_count = updated_track.play_count;
-                                            tracing::debug!("Updated play count for track {} to {:?}", track_id_clone.0, updated_track.play_count);
+                            async move {
+                                match client.get_song(&track_id.0).await {
+                                    Ok(child) => {
+                                        let updated_track: Track = child.into();
+                                        if let Ok(mut state) = state.write() {
+                                            state
+                                                .library
+                                                .track_map
+                                                .insert(track_id.clone(), updated_track);
+                                            tracing::debug!(
+                                                "Updated track {} from API",
+                                                track_id.0
+                                            );
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to reload track {} to update play count: {}", track_id_clone.0, e);
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Failed to reload track {} to update play count: {}",
+                                            track_id.0,
+                                            e
+                                        );
+                                    }
                                 }
                             }
                         });

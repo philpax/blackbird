@@ -42,7 +42,23 @@ pub fn ui(
     // Calculate text baseline position (add some padding from top)
     let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
 
-    // Draw heart
+    // Reserve fixed width for play count (to the right of heart)
+    const PLAY_COUNT_WIDTH: f32 = 40.0;
+
+    // Draw play count in fixed-width column (rightmost)
+    if let Some(play_count) = track.play_count {
+        let play_count_str = play_count.to_string();
+        ui.painter().text(
+            pos2(right_x, text_y),
+            Align2::RIGHT_TOP,
+            &play_count_str,
+            default_font.clone(),
+            style.track_number(),
+        );
+    }
+    right_x -= PLAY_COUNT_WIDTH;
+
+    // Draw heart to the left of play count
     let (heart_response, heart_size) = ui_util::draw_heart(
         ui,
         default_font.clone(),
@@ -56,26 +72,6 @@ pub fn ui(
     right_x -= heart_size;
     if heart_response.clicked() {
         logic.set_track_starred(&track.id, !track.starred);
-    }
-
-    // Draw play count next to heart (with fixed-width spacing)
-    if let Some(play_count) = track.play_count {
-        // Add small gap after heart
-        right_x -= 6.0;
-        // Format play count with fixed width
-        let play_count_str = format!("{:>4}", play_count);
-        let play_count_galley = WidgetText::from(&play_count_str)
-            .into_galley(ui, None, f32::INFINITY, TextStyle::Body);
-        let play_count_width = play_count_galley.size().x;
-
-        ui.painter().text(
-            pos2(right_x, text_y),
-            Align2::RIGHT_TOP,
-            &play_count_str,
-            default_font.clone(),
-            style.track_number(),
-        );
-        right_x -= play_count_width;
     }
 
     let row_width = ui.available_width();
