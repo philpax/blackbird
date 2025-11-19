@@ -93,8 +93,9 @@ impl Default for LastPlayback {
 #[serde(default)]
 pub struct Keybindings {
     /// Global hotkey to toggle search window (works even when app is not focused)
-    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super (Win/Cmd)
-    /// and key is a letter (A-Z) or function key (F1-F12)
+    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super, Win, or Cmd
+    /// "Cmd" is platform-aware: maps to Command on macOS, Ctrl on Linux/Windows
+    /// Key can be a letter (A-Z) or function key (F1-F12)
     pub global_search: String,
 
     /// Local keybindings (work only when app window is focused)
@@ -111,7 +112,7 @@ pub struct Keybindings {
 impl Default for Keybindings {
     fn default() -> Self {
         Self {
-            global_search: "Ctrl+Alt+Shift+F".to_string(),
+            global_search: "Cmd+Alt+Shift+F".to_string(),
             local_search: "Cmd+F".to_string(),
             local_lyrics: "Cmd+L".to_string(),
             mouse_previous_track: "Extra1".to_string(),
@@ -144,7 +145,18 @@ impl Keybindings {
                 "Ctrl" => modifiers |= Modifiers::CONTROL,
                 "Alt" => modifiers |= Modifiers::ALT,
                 "Shift" => modifiers |= Modifiers::SHIFT,
-                "Super" | "Win" | "Cmd" => modifiers |= Modifiers::SUPER,
+                "Super" | "Win" => modifiers |= Modifiers::SUPER,
+                // "Cmd" is platform-aware: Super on macOS, Control on Linux/Windows
+                "Cmd" => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        modifiers |= Modifiers::SUPER;
+                    }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        modifiers |= Modifiers::CONTROL;
+                    }
+                }
                 _ => return None,
             }
         }
