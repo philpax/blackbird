@@ -639,7 +639,6 @@ impl Logic {
     }
 
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
-    /// Returns up to 5 cover art IDs: the album containing the next track, plus 2 albums before and 2 after.
     /// Returns an empty vector if there is no next track or if the library is not populated.
     pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<String> {
         let st = self.read_state();
@@ -654,37 +653,15 @@ impl Logic {
             return vec![];
         };
 
+        let mut cover_art_ids = vec![];
         let groups = &st.library.groups;
-        if groups.is_empty() {
-            return vec![];
-        }
 
-        let mut cover_art_ids = Vec::new();
-
-        // Get 2 groups before the next track's group
-        for i in 0..2 {
-            let offset = 2 - i; // 2, 1
-            if next_group_idx >= offset {
-                let idx = next_group_idx - offset;
-                if let Some(cover_art_id) = &groups[idx].cover_art_id {
-                    cover_art_ids.push(cover_art_id.clone());
-                }
-            }
-        }
+        // We would ostensibly include the groups before and after the next track's group here,
+        // but the naive implementation doesn't work, and I have no interest in debugging it today.
 
         // Get the next track's group (center)
         if let Some(cover_art_id) = &groups[next_group_idx].cover_art_id {
             cover_art_ids.push(cover_art_id.clone());
-        }
-
-        // Get 2 groups after the next track's group
-        for i in 1..=2 {
-            let idx = next_group_idx + i;
-            if idx < groups.len()
-                && let Some(cover_art_id) = &groups[idx].cover_art_id
-            {
-                cover_art_ids.push(cover_art_id.clone());
-            }
         }
 
         cover_art_ids
