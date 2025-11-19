@@ -11,8 +11,8 @@ use blackbird_core as bc;
 
 use config::Config;
 use global_hotkey::{
-    hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager,
+    hotkey::{Code, HotKey, Modifiers},
 };
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -175,11 +175,9 @@ impl App {
         };
 
         // Set up global hotkey for search (Ctrl+Shift+F or Cmd+Shift+F on macOS)
-        let global_hotkey_manager = GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
-        let search_hotkey = HotKey::new(
-            Some(Modifiers::CONTROL | Modifiers::SHIFT),
-            Code::KeyF,
-        );
+        let global_hotkey_manager =
+            GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
+        let search_hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyF);
         global_hotkey_manager
             .register(search_hotkey)
             .expect("Failed to register global search hotkey");
@@ -232,11 +230,11 @@ impl eframe::App for App {
         }
 
         // Handle global hotkey events
-        if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if event.id == self.search_hotkey.id() {
-                self.ui_state.search_open = !self.ui_state.search_open;
-                ctx.request_repaint();
-            }
+        if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv()
+            && event.id == self.search_hotkey.id()
+        {
+            self.ui_state.search_open = !self.ui_state.search_open;
+            ctx.request_repaint();
         }
 
         // Check for shutdown signal from Tokio thread
