@@ -13,9 +13,9 @@ use blackbird_core::{
 };
 use egui::{
     Align, Align2, Button, CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily,
-    Frame, Key, Label, Layout, Margin, PointerButton, Pos2, Rect, RichText, ScrollArea, Sense,
-    Slider, Spinner, TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, ViewportBuilder,
-    ViewportId, Visuals, Window, pos2,
+    Frame, Key, Label, Layout, Margin, Pos2, Rect, RichText, ScrollArea, Sense, Slider, Spinner,
+    TextEdit, TextFormat, TextStyle, Ui, UiBuilder, Vec2, Vec2b, ViewportBuilder, ViewportId,
+    Visuals, Window, pos2,
     style::{HandleShape, ScrollAnimation, ScrollStyle},
     vec2,
 };
@@ -138,19 +138,38 @@ impl App {
         }
 
         ctx.input(|i| {
-            if i.modifiers.command && i.key_released(egui::Key::F) {
-                self.ui_state.search_open = !self.ui_state.search_open;
+            // Handle local search keybinding
+            if let Some(search_key) = config
+                .keybindings
+                .parse_local_key(&config.keybindings.local_search)
+            {
+                let requires_cmd = config
+                    .keybindings
+                    .requires_command(&config.keybindings.local_search);
+                if (!requires_cmd || i.modifiers.command) && i.key_released(search_key) {
+                    self.ui_state.search_open = !self.ui_state.search_open;
+                }
             }
-            if i.modifiers.command && i.key_released(egui::Key::L) {
-                self.ui_state.lyrics_open = !self.ui_state.lyrics_open;
-                // Request lyrics for the currently playing track when opening the window
-                if self.ui_state.lyrics_open
-                    && let Some(track_id) = logic.get_playing_track_id()
-                {
-                    self.ui_state.lyrics_track_id = Some(track_id.clone());
-                    self.ui_state.lyrics_loading = true;
-                    self.ui_state.lyrics_auto_scroll = true; // Enable auto-scroll by default
-                    logic.request_lyrics(&track_id);
+
+            // Handle local lyrics keybinding
+            if let Some(lyrics_key) = config
+                .keybindings
+                .parse_local_key(&config.keybindings.local_lyrics)
+            {
+                let requires_cmd = config
+                    .keybindings
+                    .requires_command(&config.keybindings.local_lyrics);
+                if (!requires_cmd || i.modifiers.command) && i.key_released(lyrics_key) {
+                    self.ui_state.lyrics_open = !self.ui_state.lyrics_open;
+                    // Request lyrics for the currently playing track when opening the window
+                    if self.ui_state.lyrics_open
+                        && let Some(track_id) = logic.get_playing_track_id()
+                    {
+                        self.ui_state.lyrics_track_id = Some(track_id.clone());
+                        self.ui_state.lyrics_loading = true;
+                        self.ui_state.lyrics_auto_scroll = true; // Enable auto-scroll by default
+                        logic.request_lyrics(&track_id);
+                    }
                 }
             }
         });
@@ -206,11 +225,21 @@ impl App {
             )
             .show(ctx, |ui| {
                 ui.input(|i| {
-                    if i.pointer.button_released(PointerButton::Extra1) {
+                    // Handle mouse button for previous track
+                    if let Some(button) = config
+                        .keybindings
+                        .parse_mouse_button(&config.keybindings.mouse_previous_track)
+                        && i.pointer.button_released(button)
+                    {
                         logic.previous();
                     }
 
-                    if i.pointer.button_released(PointerButton::Extra2) {
+                    // Handle mouse button for next track
+                    if let Some(button) = config
+                        .keybindings
+                        .parse_mouse_button(&config.keybindings.mouse_next_track)
+                        && i.pointer.button_released(button)
+                    {
                         logic.next();
                     }
                 });

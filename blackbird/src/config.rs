@@ -14,6 +14,8 @@ pub struct Config {
     pub style: ui::Style,
     #[serde(default)]
     pub last_playback: LastPlayback,
+    #[serde(default)]
+    pub keybindings: Keybindings,
 }
 impl Config {
     pub const FILENAME: &str = "config.toml";
@@ -83,6 +85,163 @@ impl Default for LastPlayback {
             track_id: None,
             track_position_secs: 0.0,
             playback_mode: PlaybackMode::default(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Keybindings {
+    /// Global hotkey to toggle search window (works even when app is not focused)
+    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super (Win/Cmd)
+    /// and key is a letter (A-Z) or function key (F1-F12)
+    pub global_search: String,
+
+    /// Local keybindings (work only when app window is focused)
+    /// Format: "Cmd+F" where Cmd is Ctrl on Linux/Windows and Command on macOS
+    pub local_search: String,
+    pub local_lyrics: String,
+
+    /// Mouse button bindings for track navigation
+    /// Valid values: "Extra1" (button 4), "Extra2" (button 5), or "None" to disable
+    pub mouse_previous_track: String,
+    pub mouse_next_track: String,
+}
+
+impl Default for Keybindings {
+    fn default() -> Self {
+        Self {
+            global_search: "Ctrl+Alt+Shift+F".to_string(),
+            local_search: "Cmd+F".to_string(),
+            local_lyrics: "Cmd+L".to_string(),
+            mouse_previous_track: "Extra1".to_string(),
+            mouse_next_track: "Extra2".to_string(),
+        }
+    }
+}
+
+impl Keybindings {
+    /// Parse a global hotkey string into (Code, Modifiers) for global-hotkey crate
+    pub fn parse_global_hotkey(
+        &self,
+        binding: &str,
+    ) -> Option<(
+        global_hotkey::hotkey::Code,
+        global_hotkey::hotkey::Modifiers,
+    )> {
+        use global_hotkey::hotkey::{Code, Modifiers};
+
+        let parts: Vec<&str> = binding.split('+').collect();
+        if parts.is_empty() {
+            return None;
+        }
+
+        let mut modifiers = Modifiers::empty();
+        let key_str = parts.last()?;
+
+        for part in parts.iter().take(parts.len() - 1) {
+            match part.trim() {
+                "Ctrl" => modifiers |= Modifiers::CONTROL,
+                "Alt" => modifiers |= Modifiers::ALT,
+                "Shift" => modifiers |= Modifiers::SHIFT,
+                "Super" | "Win" | "Cmd" => modifiers |= Modifiers::SUPER,
+                _ => return None,
+            }
+        }
+
+        let code = match key_str.trim() {
+            "A" => Code::KeyA,
+            "B" => Code::KeyB,
+            "C" => Code::KeyC,
+            "D" => Code::KeyD,
+            "E" => Code::KeyE,
+            "F" => Code::KeyF,
+            "G" => Code::KeyG,
+            "H" => Code::KeyH,
+            "I" => Code::KeyI,
+            "J" => Code::KeyJ,
+            "K" => Code::KeyK,
+            "L" => Code::KeyL,
+            "M" => Code::KeyM,
+            "N" => Code::KeyN,
+            "O" => Code::KeyO,
+            "P" => Code::KeyP,
+            "Q" => Code::KeyQ,
+            "R" => Code::KeyR,
+            "S" => Code::KeyS,
+            "T" => Code::KeyT,
+            "U" => Code::KeyU,
+            "V" => Code::KeyV,
+            "W" => Code::KeyW,
+            "X" => Code::KeyX,
+            "Y" => Code::KeyY,
+            "Z" => Code::KeyZ,
+            "F1" => Code::F1,
+            "F2" => Code::F2,
+            "F3" => Code::F3,
+            "F4" => Code::F4,
+            "F5" => Code::F5,
+            "F6" => Code::F6,
+            "F7" => Code::F7,
+            "F8" => Code::F8,
+            "F9" => Code::F9,
+            "F10" => Code::F10,
+            "F11" => Code::F11,
+            "F12" => Code::F12,
+            _ => return None,
+        };
+
+        Some((code, modifiers))
+    }
+
+    /// Parse a local keybinding string into egui::Key
+    pub fn parse_local_key(&self, binding: &str) -> Option<egui::Key> {
+        let parts: Vec<&str> = binding.split('+').collect();
+        let key_str = parts.last()?.trim();
+
+        match key_str {
+            "A" => Some(egui::Key::A),
+            "B" => Some(egui::Key::B),
+            "C" => Some(egui::Key::C),
+            "D" => Some(egui::Key::D),
+            "E" => Some(egui::Key::E),
+            "F" => Some(egui::Key::F),
+            "G" => Some(egui::Key::G),
+            "H" => Some(egui::Key::H),
+            "I" => Some(egui::Key::I),
+            "J" => Some(egui::Key::J),
+            "K" => Some(egui::Key::K),
+            "L" => Some(egui::Key::L),
+            "M" => Some(egui::Key::M),
+            "N" => Some(egui::Key::N),
+            "O" => Some(egui::Key::O),
+            "P" => Some(egui::Key::P),
+            "Q" => Some(egui::Key::Q),
+            "R" => Some(egui::Key::R),
+            "S" => Some(egui::Key::S),
+            "T" => Some(egui::Key::T),
+            "U" => Some(egui::Key::U),
+            "V" => Some(egui::Key::V),
+            "W" => Some(egui::Key::W),
+            "X" => Some(egui::Key::X),
+            "Y" => Some(egui::Key::Y),
+            "Z" => Some(egui::Key::Z),
+            _ => None,
+        }
+    }
+
+    /// Check if a local keybinding requires the command modifier (Cmd on Mac, Ctrl elsewhere)
+    pub fn requires_command(&self, binding: &str) -> bool {
+        binding.contains("Cmd")
+    }
+
+    /// Parse a mouse button string into egui::PointerButton
+    pub fn parse_mouse_button(&self, binding: &str) -> Option<egui::PointerButton> {
+        match binding.trim() {
+            "Extra1" => Some(egui::PointerButton::Extra1),
+            "Extra2" => Some(egui::PointerButton::Extra2),
+            "None" => None,
+            _ => None,
         }
     }
 }
