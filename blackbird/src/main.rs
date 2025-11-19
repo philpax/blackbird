@@ -11,8 +11,8 @@ use blackbird_core as bc;
 
 use config::Config;
 use global_hotkey::{
-    hotkey::{Code, HotKey, Modifiers},
     GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState,
+    hotkey::{Code, HotKey, Modifiers},
 };
 use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -174,10 +174,12 @@ impl App {
             tray::TrayMenu::new(icon, current_playback_mode)
         };
 
-        // Set up global hotkey for search (Ctrl+Shift+F or Cmd+Shift+F on macOS)
         let global_hotkey_manager =
             GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
-        let search_hotkey = HotKey::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyF);
+        let search_hotkey = HotKey::new(
+            Some(Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT),
+            Code::KeyF,
+        );
         global_hotkey_manager
             .register(search_hotkey)
             .expect("Failed to register global search hotkey");
