@@ -239,7 +239,7 @@ impl eframe::App for App {
             && event.id == self.search_hotkey.id()
             && event.state == HotKeyState::Released
         {
-            self.ui_state.search_open = !self.ui_state.search_open;
+            self.ui_state.search.open = !self.ui_state.search.open;
             ctx.request_repaint();
         }
 

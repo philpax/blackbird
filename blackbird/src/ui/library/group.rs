@@ -7,8 +7,10 @@ use crate::{
         util,
     },
     cover_art_cache::{CachePriority, CoverArtCache},
-    ui::{style, track, util as ui_util},
+    ui::{style, util as ui_util},
 };
+
+use super::track;
 
 pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
 pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
