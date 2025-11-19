@@ -58,6 +58,26 @@ pub fn ui(
         logic.set_track_starred(&track.id, !track.starred);
     }
 
+    // Draw play count next to heart (with fixed-width spacing)
+    if let Some(play_count) = track.play_count {
+        // Add small gap after heart
+        right_x -= 6.0;
+        // Format play count with fixed width
+        let play_count_str = format!("{:>4}", play_count);
+        let play_count_galley = WidgetText::from(&play_count_str)
+            .into_galley(ui, None, f32::INFINITY, TextStyle::Body);
+        let play_count_width = play_count_galley.size().x;
+
+        ui.painter().text(
+            pos2(right_x, text_y),
+            Align2::RIGHT_TOP,
+            &play_count_str,
+            default_font.clone(),
+            style.track_number(),
+        );
+        right_x -= play_count_width;
+    }
+
     let row_width = ui.available_width();
 
     // Create a rect for this track with proper spacing

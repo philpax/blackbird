@@ -1,7 +1,7 @@
 pub mod util;
 
 pub use blackbird_state;
-use blackbird_state::{AlbumId, TrackId};
+use blackbird_state::{AlbumId, Track, TrackId};
 pub use blackbird_subsonic as bs;
 
 use std::{
@@ -266,6 +266,31 @@ impl Logic {
                 }
                 PlaybackToLogicMessage::TrackEnded => {
                     tracing::debug!("TrackEnded: scheduling advance to next track");
+
+                    // Reload the track from API to update play count
+                    if let Some(track_id) = self.get_playing_track_id() {
+                        let client = Arc::clone(&self.client);
+                        let track_id_clone = track_id.clone();
+                        let state = Arc::clone(&self.state);
+
+                        self.tokio_thread.spawn(async move {
+                            match client.get_song(&track_id_clone.0).await {
+                                Ok(child) => {
+                                    let updated_track: Track = child.into();
+                                    if let Ok(mut state) = state.write() {
+                                        if let Some(track) = state.library.track_map.get_mut(&track_id_clone) {
+                                            track.play_count = updated_track.play_count;
+                                            tracing::debug!("Updated play count for track {} to {:?}", track_id_clone.0, updated_track.play_count);
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Failed to reload track {} to update play count: {}", track_id_clone.0, e);
+                                }
+                            }
+                        });
+                    }
+
                     self.handle_track_end_advance();
                 }
                 PlaybackToLogicMessage::FailedToPlayTrack(track_id, error) => {
