@@ -17,7 +17,6 @@ use crate::{
 };
 
 // Queue-specific state stored under AppState
-#[derive(Default)]
 pub struct QueueState {
     pub shuffle_seed: u64,
     pub audio_cache: HashMap<TrackId, Vec<u8>>,
@@ -29,6 +28,13 @@ pub struct QueueState {
     pub group_shuffle_seed: u64,
     pub next_track_appended: Option<TrackId>,
 }
+
+impl Default for QueueState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QueueState {
     pub fn new() -> Self {
         let now = SystemTime::now()
@@ -38,7 +44,13 @@ impl QueueState {
         QueueState {
             shuffle_seed: seed,
             group_shuffle_seed: next_seed(seed),
-            ..Default::default()
+            audio_cache: HashMap::new(),
+            pending_audio_requests: HashMap::new(),
+            request_counter: 0,
+            current_target: None,
+            current_target_request_id: None,
+            pending_skip_after_error: false,
+            next_track_appended: None,
         }
     }
 }
