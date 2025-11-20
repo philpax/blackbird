@@ -266,41 +266,6 @@ impl Logic {
                 }
                 PlaybackToLogicMessage::TrackEnded => {
                     tracing::debug!("TrackEnded: scheduling advance to next track");
-
-                    // Reload the track from API to update play count
-                    if let Some(track_id) = self.get_playing_track_id() {
-                        self.tokio_thread.spawn({
-                            let client = self.client.clone();
-                            let state = self.state.clone();
-                            let track_id = track_id.clone();
-
-                            async move {
-                                match client.get_song(&track_id.0).await {
-                                    Ok(child) => {
-                                        let updated_track: Track = child.into();
-                                        if let Ok(mut state) = state.write() {
-                                            state
-                                                .library
-                                                .track_map
-                                                .insert(track_id.clone(), updated_track);
-                                            tracing::debug!(
-                                                "Updated track {} from API",
-                                                track_id.0
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to reload track {} to update play count: {}",
-                                            track_id.0,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                        });
-                    }
-
                     self.handle_track_end_advance();
                 }
                 PlaybackToLogicMessage::FailedToPlayTrack(track_id, error) => {
@@ -818,17 +783,44 @@ impl Logic {
             );
 
             // Make async API call
-            let client = self.client.clone();
-            let track_id = track_and_position.track_id.clone();
+            self.tokio_thread.spawn({
+                let client = self.client.clone();
+                let state = self.state.clone();
+                let track_id = track_and_position.track_id.clone();
 
-            self.tokio_thread.spawn(async move {
-                if let Err(e) = client
-                    .scrobble(&track_id.0, Some(timestamp), Some(true))
-                    .await
-                {
-                    tracing::error!("Failed to scrobble track {}: {}", track_id.0, e);
-                    // Note: We don't update the UI error state for scrobble failures
-                    // as they're not critical to the user experience
+                async move {
+                    if let Err(e) = client
+                        .scrobble(&track_id.0, Some(timestamp), Some(true))
+                        .await
+                    {
+                        tracing::error!("Failed to scrobble track {}: {}", track_id.0, e);
+                        // Note: We don't update the UI error state for scrobble failures
+                        // as they're not critical to the user experience
+                    }
+
+                    // Reload track from API to update play count
+                    match client.get_song(&track_id.0).await {
+                        Ok(child) => {
+                            let updated_track: Track = child.into();
+                            if let Ok(mut state) = state.write() {
+                                state
+                                    .library
+                                    .track_map
+                                    .insert(track_id.clone(), updated_track);
+                                tracing::debug!(
+                                    "Updated track {} from API after scrobble",
+                                    track_id.0
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to reload track {} to update play count: {}",
+                                track_id.0,
+                                e
+                            );
+                        }
+                    }
                 }
             });
         }
