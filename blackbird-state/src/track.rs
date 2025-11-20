@@ -34,6 +34,8 @@ pub struct Track {
     pub album_id: Option<AlbumId>,
     /// Whether the track is starred
     pub starred: bool,
+    /// The number of times this track has been played
+    pub play_count: Option<u64>,
 }
 impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
@@ -48,6 +50,7 @@ impl From<bs::Child> for Track {
             disc_number: child.disc_number,
             album_id: child.album_id.map(AlbumId),
             starred: child.starred.is_some(),
+            play_count: child.play_count,
         }
     }
 }
