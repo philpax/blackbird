@@ -84,12 +84,18 @@ impl CoverArtCache {
                 tracing::debug!("Loaded cover art for {}", incoming_cover_art.cover_art_id);
 
                 // Save a low-res version to disk cache for future use
-                let cache_dir = self.cache_dir.clone();
-                let cover_art_id = incoming_cover_art.cover_art_id.clone();
-                let cover_art = incoming_cover_art.cover_art.clone();
-                std::thread::spawn(move || {
-                    save_to_disk_cache(&cache_dir, &cover_art_id, &cover_art);
-                });
+                // Only if it doesn't already exist
+                let safe_filename = incoming_cover_art
+                    .cover_art_id
+                    .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+                let cache_path = self.cache_dir.join(format!("{}.png", safe_filename));
+                if !cache_path.exists() {
+                    let cover_art = incoming_cover_art.cover_art.clone();
+                    let cache_path = cache_path.clone();
+                    std::thread::spawn(move || {
+                        save_to_disk_cache(&cache_path, &cover_art);
+                    });
+                }
             } else {
                 tracing::debug!(
                     "Cache entry for {} not found when receiving cover art",
@@ -242,14 +248,10 @@ fn cover_art_id_to_url(cover_art_id: &str, is_low_res: bool) -> String {
     }
 }
 
-fn get_cache_path(cache_dir: &Path, cover_art_id: &str) -> PathBuf {
+fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]>> {
     // Sanitize the cover_art_id to make it a valid filename
     let safe_filename = cover_art_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-    cache_dir.join(format!("{}.png", safe_filename))
-}
-
-fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]>> {
-    let path = get_cache_path(cache_dir, cover_art_id);
+    let path = cache_dir.join(format!("{}.png", safe_filename));
     match std::fs::read(&path) {
         Ok(data) => {
             tracing::debug!(
@@ -262,10 +264,10 @@ fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]
     }
 }
 
-fn save_to_disk_cache(cache_dir: &Path, cover_art_id: &str, image_data: &[u8]) {
+fn save_to_disk_cache(cache_path: &Path, image_data: &[u8]) {
     // Decode the image
     let Ok(img) = image::load_from_memory(image_data) else {
-        tracing::warn!("Failed to decode image for {}", cover_art_id);
+        tracing::warn!("Failed to decode image for {}", cache_path.display());
         return;
     };
 
@@ -282,19 +284,25 @@ fn save_to_disk_cache(cache_dir: &Path, cover_art_id: &str, image_data: &[u8]) {
     // Encode as PNG
     let mut buffer = std::io::Cursor::new(Vec::new());
     if let Err(e) = blurred.write_to(&mut buffer, image::ImageFormat::Png) {
-        tracing::warn!("Failed to encode resized image for {}: {}", cover_art_id, e);
+        tracing::warn!(
+            "Failed to encode resized image for {}: {}",
+            cache_path.display(),
+            e
+        );
         return;
     }
 
     // Save to disk
-    let path = get_cache_path(cache_dir, cover_art_id);
-    if let Err(e) = std::fs::write(&path, buffer.into_inner()) {
+    if let Err(e) = std::fs::write(cache_path, buffer.into_inner()) {
         tracing::warn!(
             "Failed to save low-res cover art for {} to disk: {}",
-            cover_art_id,
+            cache_path.display(),
             e
         );
     } else {
-        tracing::debug!("Saved low-res cover art for {} to disk cache", cover_art_id);
+        tracing::debug!(
+            "Saved low-res cover art for {} to disk cache",
+            cache_path.display()
+        );
     }
 }
