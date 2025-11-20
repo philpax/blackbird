@@ -43,20 +43,20 @@ pub fn ui(
     let text_y = params.track_y + (actual_row_height - params.track_row_height) / 2.0;
 
     // Reserve fixed width for play count (to the right of heart)
-    const PLAY_COUNT_WIDTH: f32 = 40.0;
+    const PLAY_COUNT_WIDTH: f32 = 20.0;
 
     // Draw play count in fixed-width column (rightmost)
+    right_x -= PLAY_COUNT_WIDTH;
     if let Some(play_count) = track.play_count {
         let play_count_str = play_count.to_string();
         ui.painter().text(
             pos2(right_x, text_y),
-            Align2::RIGHT_TOP,
+            Align2::LEFT_TOP,
             &play_count_str,
             default_font.clone(),
             style.track_number(),
         );
     }
-    right_x -= PLAY_COUNT_WIDTH;
 
     // Draw heart to the left of play count
     let (heart_response, heart_size) = ui_util::draw_heart(
