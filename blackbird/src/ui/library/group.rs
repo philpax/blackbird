@@ -200,6 +200,12 @@ pub fn line_count(group: &Group) -> usize {
         + GROUP_MARGIN_BOTTOM_ROW_COUNT
 }
 
+pub fn line_count_for_group_and_track(group: &Group, track_id: &TrackId) -> usize {
+    GROUP_ARTIST_LINE_COUNT
+        + GROUP_ALBUM_LINE_COUNT
+        + group.tracks.iter().take_while(|id| *id != track_id).count()
+}
+
 pub fn target_scroll_height_for_track(
     state: &AppState,
     spaced_row_height: f32,
@@ -211,9 +217,7 @@ pub fn target_scroll_height_for_track(
     let mut scroll_to_rows = 0;
     for group in &state.library.groups {
         if group.album_id == *album_id {
-            scroll_to_rows += GROUP_ARTIST_LINE_COUNT;
-            scroll_to_rows += GROUP_ALBUM_LINE_COUNT;
-            scroll_to_rows += group.tracks.iter().take_while(|id| *id != track_id).count();
+            scroll_to_rows += line_count_for_group_and_track(group, track_id);
             break;
         }
 

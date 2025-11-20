@@ -1,7 +1,7 @@
-use egui::{Align2, Rect, TextStyle, Ui, pos2};
+use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
 use crate::{
-    bc,
+    bc::{self, blackbird_state::TrackId},
     ui::{AlphabetScrollState, style},
 };
 
@@ -116,11 +116,20 @@ pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState)
 pub fn render(
     ui: &mut Ui,
     style: &style::Style,
-    state: &AlphabetScrollState,
+    state: &mut AlphabetScrollState,
     viewport_rect: &Rect,
+    app_state: &bc::AppState,
+    playing_track_id: Option<&TrackId>,
 ) {
     if state.positions.is_empty() {
         return;
+    }
+
+    // Update cached playing track position if track changed
+    if state.cached_playing_track_id.as_ref() != playing_track_id {
+        state.cached_playing_track_id = playing_track_id.cloned();
+        state.cached_playing_track_position = playing_track_id
+            .and_then(|track_id| compute_track_position_fraction(app_state, track_id));
     }
 
     let font_id = TextStyle::Body.resolve(ui.style());
@@ -144,4 +153,48 @@ pub fn render(
             letter_color,
         );
     }
+
+    // Draw indicator line for currently playing track
+    if let Some(position_fraction) = state.cached_playing_track_position {
+        let y = viewport_rect.top() + (position_fraction * viewport_height);
+        let line_start_x = viewport_rect.right() - scroll_style.bar_width - 1.0;
+        let line_end_x = viewport_rect.right() + 1.0;
+
+        ui.painter().line_segment(
+            [pos2(line_start_x, y), pos2(line_end_x, y)],
+            Stroke::new(2.0, style.track_name_playing()),
+        );
+    }
+}
+
+/// Computes the position fraction (0.0-1.0) of a track in the library
+fn compute_track_position_fraction(app_state: &bc::AppState, track_id: &TrackId) -> Option<f32> {
+    let track = app_state.library.track_map.get(track_id)?;
+    let album_id = track.album_id.as_ref()?;
+
+    let mut current_row = 0;
+    let mut track_row = None;
+
+    for group in &app_state.library.groups {
+        if group.album_id == *album_id {
+            track_row = Some(current_row + group::line_count_for_group_and_track(group, track_id));
+            break;
+        }
+
+        current_row += group::line_count(group);
+    }
+
+    let track_row = track_row?;
+    let total_rows: usize = app_state
+        .library
+        .groups
+        .iter()
+        .map(|g| group::line_count(g))
+        .sum();
+
+    if total_rows == 0 {
+        return None;
+    }
+
+    Some(track_row as f32 / total_rows as f32)
 }
