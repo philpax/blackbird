@@ -287,12 +287,10 @@ impl eframe::App for App {
             config.general.window_height = height;
         }
         config.general.volume = self.logic.get_volume();
-        config.last_playback.track_id = self.logic.get_playing_track_id();
-        config.last_playback.track_position_secs = self
-            .logic
-            .get_playing_position()
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        if let Some(track_and_position) = self.logic.get_playing_track_and_position() {
+            config.last_playback.track_id = Some(track_and_position.track_id);
+            config.last_playback.track_position_secs = track_and_position.position.as_secs_f64();
+        }
         config.last_playback.playback_mode = self.logic.get_playback_mode();
         config.save();
     }

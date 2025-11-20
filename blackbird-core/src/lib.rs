@@ -555,6 +555,10 @@ impl Logic {
     }
 }
 impl Logic {
+    pub fn get_playing_track_and_position(&self) -> Option<TrackAndPosition> {
+        self.read_state().current_track_and_position.clone()
+    }
+
     pub fn get_playing_track_id(&self) -> Option<TrackId> {
         self.read_state()
             .current_track_and_position
