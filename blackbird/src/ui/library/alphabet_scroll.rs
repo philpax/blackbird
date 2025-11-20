@@ -189,8 +189,8 @@ pub fn render(
     // Draw indicator line for currently playing track
     if let Some(position_fraction) = playing_track_position {
         let y = viewport_rect.top() + (position_fraction * viewport_height);
-        let line_start_x = viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width;
-        let line_end_x = viewport_rect.right() - scroll_style.bar_inner_margin;
+        let line_start_x = viewport_rect.right() - scroll_style.bar_width;
+        let line_end_x = viewport_rect.right();
 
         ui.painter().line_segment(
             [pos2(line_start_x, y), pos2(line_end_x, y)],

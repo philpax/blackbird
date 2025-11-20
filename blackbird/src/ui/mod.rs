@@ -44,6 +44,8 @@ pub struct IncrementalSearchState {
 pub struct AlphabetScrollState {
     pub(crate) positions: Vec<(char, f32)>, // (letter, position fraction 0.0-1.0)
     pub(crate) needs_update: bool,
+    pub(crate) cached_playing_track_id: Option<bc::blackbird_state::TrackId>,
+    pub(crate) cached_playing_track_position: Option<f32>,
 }
 
 #[derive(Default)]
@@ -186,6 +188,9 @@ impl App {
         // Process library population signal
         while let Ok(()) = self.library_populated_rx.try_recv() {
             self.ui_state.alphabet_scroll.needs_update = true;
+            // Invalidate cached position since library changed
+            self.ui_state.alphabet_scroll.cached_playing_track_id = None;
+            self.ui_state.alphabet_scroll.cached_playing_track_position = None;
         }
 
         if self.ui_state.search.open {

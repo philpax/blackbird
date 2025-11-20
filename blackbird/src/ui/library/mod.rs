@@ -158,11 +158,14 @@ pub fn ui(
                 }
             });
 
-        // Compute playing track position for indicator
+        // Compute playing track position for indicator (only when track changes)
         let playing_track_id = logic.get_playing_track_id();
-        let playing_track_position = playing_track_id
-            .as_ref()
-            .and_then(|track_id| alphabet_scroll::compute_track_position_fraction(logic, track_id));
+        if ui_state.alphabet_scroll.cached_playing_track_id != playing_track_id {
+            ui_state.alphabet_scroll.cached_playing_track_id = playing_track_id.clone();
+            ui_state.alphabet_scroll.cached_playing_track_position = playing_track_id
+                .as_ref()
+                .and_then(|track_id| alphabet_scroll::compute_track_position_fraction(logic, track_id));
+        }
 
         // Render alphabet scroll indicator
         alphabet_scroll::render(
@@ -170,7 +173,7 @@ pub fn ui(
             &config.style,
             &ui_state.alphabet_scroll,
             &ui.min_rect(),
-            playing_track_position,
+            ui_state.alphabet_scroll.cached_playing_track_position,
         );
 
         // Display incremental search query overlay at the bottom
