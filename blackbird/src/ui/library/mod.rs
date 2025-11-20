@@ -165,7 +165,7 @@ pub fn ui(
             &config.style,
             &mut ui_state.alphabet_scroll,
             &ui.min_rect(),
-            logic,
+            &logic.get_state().read().unwrap(),
             playing_track_id.as_ref(),
         );
 
