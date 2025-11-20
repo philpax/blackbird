@@ -141,13 +141,13 @@ pub fn render(
     // Clustering is already done in the precomputation step
     let scroll_style = &ui.style().spacing.scroll;
     let letter_x =
-        viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width / 2.0;
+        viewport_rect.right() - scroll_style.bar_outer_margin - scroll_style.bar_width / 2.0;
 
     for (letter, fraction) in &state.positions {
         let y = viewport_rect.top() + (fraction * viewport_height);
         ui.painter().text(
             pos2(letter_x, y),
-            Align2::LEFT_CENTER,
+            Align2::CENTER_CENTER,
             *letter,
             font_id.clone(),
             letter_color,
