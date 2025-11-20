@@ -158,22 +158,15 @@ pub fn ui(
                 }
             });
 
-        // Compute playing track position for indicator (only when track changes)
-        let playing_track_id = logic.get_playing_track_id();
-        if ui_state.alphabet_scroll.cached_playing_track_id != playing_track_id {
-            ui_state.alphabet_scroll.cached_playing_track_id = playing_track_id.clone();
-            ui_state.alphabet_scroll.cached_playing_track_position = playing_track_id
-                .as_ref()
-                .and_then(|track_id| alphabet_scroll::compute_track_position_fraction(logic, track_id));
-        }
-
         // Render alphabet scroll indicator
+        let playing_track_id = logic.get_playing_track_id();
         alphabet_scroll::render(
             ui,
             &config.style,
-            &ui_state.alphabet_scroll,
+            &mut ui_state.alphabet_scroll,
             &ui.min_rect(),
-            ui_state.alphabet_scroll.cached_playing_track_position,
+            logic,
+            playing_track_id.as_ref(),
         );
 
         // Display incremental search query overlay at the bottom

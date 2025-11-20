@@ -112,8 +112,63 @@ pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState)
     state.positions = clustered_positions;
 }
 
+/// Renders alphabet letters to the right side where the scrollbar would be
+pub fn render(
+    ui: &mut Ui,
+    style: &style::Style,
+    state: &mut AlphabetScrollState,
+    viewport_rect: &Rect,
+    logic: &bc::Logic,
+    playing_track_id: Option<&TrackId>,
+) {
+    if state.positions.is_empty() {
+        return;
+    }
+
+    // Update cached playing track position if track changed
+    if state.cached_playing_track_id.as_ref() != playing_track_id {
+        state.cached_playing_track_id = playing_track_id.cloned();
+        state.cached_playing_track_position = playing_track_id
+            .and_then(|track_id| compute_track_position_fraction(logic, track_id));
+    }
+
+    let font_id = TextStyle::Body.resolve(ui.style());
+    let letter_color = style.text();
+
+    let viewport_height = viewport_rect.height();
+
+    // Map fractions to pixel positions
+    // Clustering is already done in the precomputation step
+    let scroll_style = &ui.style().spacing.scroll;
+    let letter_x =
+        viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width / 2.0;
+
+    for (letter, fraction) in &state.positions {
+        let y = viewport_rect.top() + (fraction * viewport_height);
+        ui.painter().text(
+            pos2(letter_x, y),
+            Align2::LEFT_CENTER,
+            *letter,
+            font_id.clone(),
+            letter_color,
+        );
+    }
+
+    // Draw indicator line for currently playing track
+    if let Some(position_fraction) = state.cached_playing_track_position {
+        let y = viewport_rect.top() + (position_fraction * viewport_height);
+        let line_start_x = viewport_rect.right() - scroll_style.bar_width;
+        let line_end_x = viewport_rect.right();
+
+        ui.painter().line_segment(
+            [pos2(line_start_x, y), pos2(line_end_x, y)],
+            Stroke::new(2.0, style.track_name_playing()),
+        );
+    }
+}
+
 /// Computes the position fraction (0.0-1.0) of a track in the library
-pub fn compute_track_position_fraction(logic: &bc::Logic, track_id: &TrackId) -> Option<f32> {
+fn compute_track_position_fraction(logic: &bc::Logic, track_id: &TrackId) -> Option<f32> {
     let app_state = logic.get_state();
     let app_state = app_state.read().unwrap();
 
@@ -150,51 +205,4 @@ pub fn compute_track_position_fraction(logic: &bc::Logic, track_id: &TrackId) ->
     }
 
     Some(track_row as f32 / total_rows as f32)
-}
-
-/// Renders alphabet letters to the right side where the scrollbar would be
-pub fn render(
-    ui: &mut Ui,
-    style: &style::Style,
-    state: &AlphabetScrollState,
-    viewport_rect: &Rect,
-    playing_track_position: Option<f32>,
-) {
-    if state.positions.is_empty() {
-        return;
-    }
-
-    let font_id = TextStyle::Body.resolve(ui.style());
-    let letter_color = style.text();
-
-    let viewport_height = viewport_rect.height();
-
-    // Map fractions to pixel positions
-    // Clustering is already done in the precomputation step
-    let scroll_style = &ui.style().spacing.scroll;
-    let letter_x =
-        viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width / 2.0;
-
-    for (letter, fraction) in &state.positions {
-        let y = viewport_rect.top() + (fraction * viewport_height);
-        ui.painter().text(
-            pos2(letter_x, y),
-            Align2::LEFT_CENTER,
-            *letter,
-            font_id.clone(),
-            letter_color,
-        );
-    }
-
-    // Draw indicator line for currently playing track
-    if let Some(position_fraction) = playing_track_position {
-        let y = viewport_rect.top() + (position_fraction * viewport_height);
-        let line_start_x = viewport_rect.right() - scroll_style.bar_width;
-        let line_end_x = viewport_rect.right();
-
-        ui.painter().line_segment(
-            [pos2(line_start_x, y), pos2(line_end_x, y)],
-            Stroke::new(2.0, style.track_name_playing()),
-        );
-    }
 }
