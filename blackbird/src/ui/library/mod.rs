@@ -158,8 +158,20 @@ pub fn ui(
                 }
             });
 
+        // Compute playing track position for indicator
+        let playing_track_id = logic.get_playing_track_id();
+        let playing_track_position = playing_track_id
+            .as_ref()
+            .and_then(|track_id| alphabet_scroll::compute_track_position_fraction(logic, track_id));
+
         // Render alphabet scroll indicator
-        alphabet_scroll::render(ui, &config.style, &ui_state.alphabet_scroll, &ui.min_rect());
+        alphabet_scroll::render(
+            ui,
+            &config.style,
+            &ui_state.alphabet_scroll,
+            &ui.min_rect(),
+            playing_track_position,
+        );
 
         // Display incremental search query overlay at the bottom
         incremental_search::post_render(ui, &ui_state.incremental_search, &search_results);

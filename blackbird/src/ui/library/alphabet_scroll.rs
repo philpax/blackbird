@@ -1,7 +1,7 @@
-use egui::{Align2, Rect, TextStyle, Ui, pos2};
+use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
 use crate::{
-    bc,
+    bc::{self, blackbird_state::TrackId},
     ui::{AlphabetScrollState, style},
 };
 
@@ -112,12 +112,53 @@ pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState)
     state.positions = clustered_positions;
 }
 
+/// Computes the position fraction (0.0-1.0) of a track in the library
+pub fn compute_track_position_fraction(logic: &bc::Logic, track_id: &TrackId) -> Option<f32> {
+    let app_state = logic.get_state();
+    let app_state = app_state.read().unwrap();
+
+    let track = app_state.library.track_map.get(track_id)?;
+    let album_id = track.album_id.as_ref()?;
+
+    let mut current_row = 0;
+    let mut track_row = None;
+
+    for group in &app_state.library.groups {
+        if group.album_id == *album_id {
+            track_row = Some(
+                current_row
+                    + group::GROUP_ARTIST_LINE_COUNT
+                    + group::GROUP_ALBUM_LINE_COUNT
+                    + group.tracks.iter().take_while(|id| *id != track_id).count(),
+            );
+            break;
+        }
+
+        current_row += group::line_count(group);
+    }
+
+    let track_row = track_row?;
+    let total_rows: usize = app_state
+        .library
+        .groups
+        .iter()
+        .map(|g| group::line_count(g))
+        .sum();
+
+    if total_rows == 0 {
+        return None;
+    }
+
+    Some(track_row as f32 / total_rows as f32)
+}
+
 /// Renders alphabet letters to the right side where the scrollbar would be
 pub fn render(
     ui: &mut Ui,
     style: &style::Style,
     state: &AlphabetScrollState,
     viewport_rect: &Rect,
+    playing_track_position: Option<f32>,
 ) {
     if state.positions.is_empty() {
         return;
@@ -142,6 +183,18 @@ pub fn render(
             *letter,
             font_id.clone(),
             letter_color,
+        );
+    }
+
+    // Draw indicator line for currently playing track
+    if let Some(position_fraction) = playing_track_position {
+        let y = viewport_rect.top() + (position_fraction * viewport_height);
+        let line_start_x = viewport_rect.right() - scroll_style.bar_inner_margin - scroll_style.bar_width;
+        let line_end_x = viewport_rect.right() - scroll_style.bar_inner_margin;
+
+        ui.painter().line_segment(
+            [pos2(line_start_x, y), pos2(line_end_x, y)],
+            Stroke::new(2.0, style.track_name_playing()),
         );
     }
 }
