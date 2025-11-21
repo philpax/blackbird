@@ -6,6 +6,7 @@ mod cover_art_cache;
 #[cfg(feature = "tray-icon")]
 mod tray;
 mod ui;
+mod windows;
 
 use blackbird_core as bc;
 
@@ -22,6 +23,11 @@ fn main() {
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blackbird=info")),
         )
         .init();
+
+    // Register as a Windows host process to display app name in media controls
+    if let Err(e) = windows::register_host_process() {
+        tracing::warn!("Failed to register as Windows host process: {}", e);
+    }
 
     let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
         .unwrap()

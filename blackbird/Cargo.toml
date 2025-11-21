@@ -33,3 +33,6 @@ souvlaki = { version = "0.8.3", optional = true }
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.2", optional = true }
 global-hotkey = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.52"
