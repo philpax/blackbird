@@ -10,11 +10,14 @@ use windows::{
             PKEY_AppUserModel_RelaunchDisplayNameResource,
         },
         System::{
-            Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, StructuredStorage::PropVariantClear},
-            Variant::{VARIANT, VT_LPWSTR},
+            Com::{
+                COINIT_APARTMENTTHREADED, CoInitializeEx,
+                StructuredStorage::{PROPVARIANT, PropVariantClear},
+            },
+            Variant::VT_LPWSTR,
         },
         UI::Shell::{
-            PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow, PROPVARIANT},
+            PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
             SetCurrentProcessExplicitAppUserModelID,
         },
     },
@@ -120,8 +123,7 @@ pub fn set_window_app_id(window_handle: WindowHandle) -> anyhow::Result<()> {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED)
             .ok()
             .context("Failed to initialize COM")?;
-        let result = update_property_store(hwnd);
-        result
+        update_property_store(hwnd)
     }
 }
 
@@ -132,18 +134,18 @@ fn set_property_string(
     value: &str,
 ) -> anyhow::Result<()> {
     let value_hstring = HSTRING::from(value);
-    let mut value_pwstr = PWSTR::from_raw(value_hstring.as_ptr() as *mut u16);
+    let value_pwstr = PWSTR::from_raw(value_hstring.as_ptr() as *mut u16);
 
     unsafe {
         // Create a PROPVARIANT with VT_LPWSTR type (single string, not vector)
         let mut prop_variant = PROPVARIANT::default();
-        prop_variant.Anonymous.Anonymous.vt = VT_LPWSTR;
-        prop_variant.Anonymous.Anonymous.Anonymous.pwszVal = value_pwstr;
+        (*prop_variant.Anonymous.Anonymous).vt = VT_LPWSTR;
+        (*prop_variant.Anonymous.Anonymous).Anonymous.pwszVal = value_pwstr;
 
         let result = property_store.SetValue(key, &prop_variant);
 
         // Clear the PROPVARIANT (but don't free the string - it's owned by value_hstring)
-        prop_variant.Anonymous.Anonymous.Anonymous.pwszVal = PWSTR::null();
+        (*prop_variant.Anonymous.Anonymous).Anonymous.pwszVal = PWSTR::null();
         PropVariantClear(&mut prop_variant).ok();
 
         result
