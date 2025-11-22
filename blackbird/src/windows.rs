@@ -9,16 +9,16 @@ use windows::{
             PKEY_AppUserModel_ID, PKEY_AppUserModel_RelaunchCommand,
             PKEY_AppUserModel_RelaunchDisplayNameResource,
         },
-        System::Com::{
-            COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize,
-            StructuredStorage::{InitPropVariantFromStringAsVector, PropVariantClear},
+        System::{
+            Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, StructuredStorage::PropVariantClear},
+            Variant::{VARIANT, VT_LPWSTR},
         },
         UI::Shell::{
-            PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow},
+            PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow, PROPVARIANT},
             SetCurrentProcessExplicitAppUserModelID,
         },
     },
-    core::HSTRING,
+    core::{HSTRING, PWSTR},
 };
 
 /// Application User Model ID for blackbird
@@ -132,12 +132,20 @@ fn set_property_string(
     value: &str,
 ) -> anyhow::Result<()> {
     let value_hstring = HSTRING::from(value);
+    let mut value_pwstr = PWSTR::from_raw(value_hstring.as_ptr() as *mut u16);
 
     unsafe {
-        let mut prop_variant = InitPropVariantFromStringAsVector(&value_hstring)
-            .with_context(|| format!("Failed to initialize PROPVARIANT for {value}"))?;
+        // Create a PROPVARIANT with VT_LPWSTR type (single string, not vector)
+        let mut prop_variant = PROPVARIANT::default();
+        prop_variant.Anonymous.Anonymous.vt = VT_LPWSTR;
+        prop_variant.Anonymous.Anonymous.Anonymous.pwszVal = value_pwstr;
+
         let result = property_store.SetValue(key, &prop_variant);
+
+        // Clear the PROPVARIANT (but don't free the string - it's owned by value_hstring)
+        prop_variant.Anonymous.Anonymous.Anonymous.pwszVal = PWSTR::null();
         PropVariantClear(&mut prop_variant).ok();
+
         result
     }
     .with_context(|| format!("Failed to set property value for {value}"))
