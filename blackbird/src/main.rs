@@ -6,6 +6,7 @@ mod cover_art_cache;
 #[cfg(feature = "tray-icon")]
 mod tray;
 mod ui;
+#[cfg(target_os = "windows")]
 mod windows;
 
 use blackbird_core as bc;
@@ -25,6 +26,7 @@ fn main() {
         .init();
 
     // Register as a Windows host process to display app name in media controls
+    #[cfg(target_os = "windows")]
     if let Err(e) = windows::register_host_process() {
         tracing::warn!("Failed to register as Windows host process: {}", e);
     }
