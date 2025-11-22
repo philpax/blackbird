@@ -50,6 +50,7 @@ async fn main() -> anyhow::Result<()> {
                         duration: track.duration,
                         disc_number: track.disc_number,
                         starred: track.starred,
+                        play_count: track.play_count,
                     }
                 })
                 .collect(),

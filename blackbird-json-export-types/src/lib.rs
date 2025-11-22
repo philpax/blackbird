@@ -13,8 +13,14 @@ pub struct OutputTrack {
     pub duration: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disc_number: Option<u32>,
+    #[serde(skip_serializing_if = "is_optional_zero", default)]
+    pub play_count: Option<u64>,
     #[serde(skip_serializing_if = "is_false", default)]
     pub starred: bool,
+}
+
+fn is_optional_zero(n: &Option<u64>) -> bool {
+    n.is_none() || n.unwrap() == 0
 }
 
 fn is_false(b: &bool) -> bool {
