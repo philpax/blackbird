@@ -157,6 +157,22 @@ impl App {
             }
         });
 
+        // Set Windows AppUserModel properties on the window for media controls
+        #[cfg(all(target_os = "windows", feature = "media-controls"))]
+        {
+            use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+            if let Ok(handle) = cc.window_handle() {
+                if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
+                    let hwnd = win32_handle.hwnd.get() as *mut std::ffi::c_void;
+                    // SAFETY: hwnd is a valid window handle from the eframe CreationContext
+                    if let Err(e) = unsafe { windows::set_window_app_id(hwnd) } {
+                        tracing::warn!("Failed to set window AppUserModel properties: {}", e);
+                    }
+                }
+            }
+        }
+
         #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
             Some(cc),
