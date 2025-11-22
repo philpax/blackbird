@@ -25,10 +25,10 @@ fn main() {
         )
         .init();
 
-    // Register as a Windows host process to display app name in media controls
+    // Set AppUserModelID to display app name in Windows media controls
     #[cfg(target_os = "windows")]
     if let Err(e) = windows::register_host_process() {
-        tracing::warn!("Failed to register as Windows host process: {}", e);
+        tracing::warn!("Failed to set AppUserModelID: {}", e);
     }
 
     let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
