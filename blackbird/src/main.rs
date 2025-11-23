@@ -16,11 +16,14 @@ use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _
 
 fn main() {
     // Initialize GTK on Linux for tray icon support
+    // GTK must be initialized on the main thread, but the event loop runs in a separate thread
     #[cfg(all(target_os = "linux", feature = "tray-icon"))]
-    std::thread::spawn(|| {
+    {
         gtk::init().unwrap();
-        gtk::main();
-    });
+        std::thread::spawn(|| {
+            gtk::main();
+        });
+    }
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
