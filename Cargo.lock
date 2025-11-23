@@ -585,6 +585,7 @@ dependencies = [
  "egui-phosphor",
  "egui_extras",
  "global-hotkey",
+ "gtk",
  "image",
  "raw-window-handle",
  "serde",

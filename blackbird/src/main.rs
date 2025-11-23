@@ -15,6 +15,13 @@ use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {
+    // Initialize GTK on Linux for tray icon support
+    #[cfg(all(target_os = "linux", feature = "tray-icon"))]
+    std::thread::spawn(|| {
+        gtk::init().unwrap();
+        gtk::main();
+    });
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
         .with(
