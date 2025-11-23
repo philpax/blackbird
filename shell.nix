@@ -13,6 +13,14 @@ pkgs.mkShell rec {
     wayland
     libxkbcommon
     libGL
+    gdk-pixbuf
+    gtk3
+    cairo
+    pango
+    atk
+    xdotool
+    glib
+    libappindicator-gtk3
   ];
 
   LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath buildInputs;
