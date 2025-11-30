@@ -257,7 +257,7 @@ fn jaro_similarity(s1: &str, s2: &str) -> f64 {
     let len1 = s1.chars().count();
     let len2 = s2.chars().count();
 
-    if len1 == 0 || len2 == 0 {
+    if len1 == 0 || len2 == 0 || (len1 + len2 <= 2) {
         return 0.0;
     }
 
