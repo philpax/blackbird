@@ -34,5 +34,5 @@ opt-level = 3
 [profile.release.package.image]
 opt-level = 3
 
-[patch.'https://github.com/RustAudio/cpal']
+[patch.crates-io]
 cpal = { git = "https://github.com/philpax/cpal.git", branch = "audio-device-fix-updated" }

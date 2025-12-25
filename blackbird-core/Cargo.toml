@@ -16,4 +16,4 @@ tracing = { workspace = true }
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 blackbird-state = { path = "../blackbird-state" }
 
-rodio = { git = "https://github.com/philpax/rodio.git", branch = "latest-cpal-fixes", optional = true }
+rodio = { git = "https://github.com/RustAudio/rodio.git", optional = true }
