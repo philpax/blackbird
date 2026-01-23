@@ -1,9 +1,7 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 mod library;
 mod lyrics;
-mod mini_library;
 mod playing_track;
 mod scrub_bar;
 mod search;
@@ -13,13 +11,12 @@ mod util;
 pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::Style;
 
-use blackbird_core::blackbird_state::TrackId;
 use egui::{
-    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Ui,
+    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText,
     Visuals,
 };
 
-use crate::{App, bc, config::Config, cover_art_cache::CoverArtCache};
+use crate::{App, bc, config::Config};
 
 #[derive(Default)]
 pub struct SearchState {
@@ -37,90 +34,11 @@ pub struct LyricsState {
 }
 
 #[derive(Default)]
-pub struct IncrementalSearchState {
-    pub(crate) query: String,
-    pub(crate) last_input: Option<Instant>,
-    pub(crate) result_index: usize,
-}
-
-#[derive(Default)]
-pub struct AlphabetScrollState {
-    pub(crate) positions: Vec<(char, f32)>, // (letter, position fraction 0.0-1.0)
-    pub(crate) needs_update: bool,
-    pub(crate) cached_playing_track_id: Option<bc::blackbird_state::TrackId>,
-    pub(crate) cached_playing_track_position: Option<f32>,
-}
-
-/// Shared state for library view rendering (used by both main library and mini-library)
-#[derive(Default)]
-pub struct LibraryViewState {
-    pub(crate) alphabet_scroll: AlphabetScrollState,
-    pub(crate) incremental_search: IncrementalSearchState,
-}
-
-impl LibraryViewState {
-    pub fn invalidate_alphabet_scroll(&mut self) {
-        self.alphabet_scroll.needs_update = true;
-        self.alphabet_scroll.cached_playing_track_id = None;
-        self.alphabet_scroll.cached_playing_track_position = None;
-    }
-}
-
-/// Render player controls: mouse button handling, now playing, scrub bar, and separator.
-/// Returns track_to_scroll_to if the user clicked on the playing track info.
-pub(crate) fn render_player_controls(
-    ui: &mut Ui,
-    logic: &mut bc::Logic,
-    config: &Config,
-    has_loaded_all_tracks: bool,
-    cover_art_cache: &mut CoverArtCache,
-) -> Option<TrackId> {
-    // Handle mouse buttons for track navigation
-    ui.input(|i| {
-        if let Some(button) = config
-            .keybindings
-            .parse_mouse_button(&config.keybindings.mouse_previous_track)
-            && i.pointer.button_released(button)
-        {
-            logic.previous();
-        }
-        if let Some(button) = config
-            .keybindings
-            .parse_mouse_button(&config.keybindings.mouse_next_track)
-            && i.pointer.button_released(button)
-        {
-            logic.next();
-        }
-    });
-
-    let mut track_to_scroll_to = None;
-    playing_track::ui(
-        ui,
-        logic,
-        config,
-        has_loaded_all_tracks,
-        &mut track_to_scroll_to,
-        cover_art_cache,
-    );
-
-    scrub_bar::ui(ui, logic, config);
-    ui.separator();
-
-    track_to_scroll_to
-}
-
-#[derive(Default)]
-pub struct MiniLibraryState {
-    pub(crate) open: bool,
-    pub(crate) library_view: LibraryViewState,
-}
-
-#[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
-    pub library_view: LibraryViewState,
-    pub mini_library: MiniLibraryState,
+    pub library_view: library::LibraryViewState,
+    pub mini_library: library::MiniLibraryState,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -285,7 +203,7 @@ impl App {
         let has_loaded_all_tracks = logic.has_loaded_all_tracks();
 
         if self.ui_state.mini_library.open {
-            mini_library::ui(
+            library::mini::ui(
                 logic,
                 ctx,
                 config,
@@ -294,6 +212,7 @@ impl App {
                 &mut self.ui_state.mini_library,
             );
         }
+
         CentralPanel::default()
             .frame(
                 Frame::default()
@@ -306,7 +225,7 @@ impl App {
                     .fill(config.style.background()),
             )
             .show(ctx, |ui| {
-                if let Some(id) = render_player_controls(
+                if let Some(id) = library::shared::render_player_controls(
                     ui,
                     logic,
                     config,
@@ -316,7 +235,7 @@ impl App {
                     track_to_scroll_to = Some(id);
                 }
 
-                library::ui(
+                library::full::ui(
                     ui,
                     logic,
                     config,
@@ -324,7 +243,11 @@ impl App {
                     scroll_margin.into(),
                     track_to_scroll_to.as_ref(),
                     &mut self.cover_art_cache,
-                    &mut self.ui_state,
+                    &mut self.ui_state.library_view,
+                    &library::full::FullLibraryState {
+                        search_open: self.ui_state.search.open,
+                        lyrics_open: self.ui_state.lyrics.open,
+                    },
                 );
             });
 

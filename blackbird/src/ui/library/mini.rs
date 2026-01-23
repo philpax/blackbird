@@ -1,15 +1,20 @@
+//! Mini library view (popup window)
+
 use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportBuilder, ViewportId};
 
 use crate::{bc, config::Config, cover_art_cache::CoverArtCache};
 
-use super::{
-    MiniLibraryState,
-    library::{self, LibraryViewConfig},
-    render_player_controls,
-};
+use super::shared::{LibraryViewConfig, LibraryViewState, render_library_view, render_player_controls};
 
 /// Height of the mini-library as a fraction of screen height
-const MINI_LIBRARY_HEIGHT_FRACTION: f32 = 0.4;
+const HEIGHT_FRACTION: f32 = 0.4;
+
+/// State for the mini-library window
+#[derive(Default)]
+pub struct MiniLibraryState {
+    pub open: bool,
+    pub(crate) library_view: LibraryViewState,
+}
 
 /// Mini-library window UI
 pub fn ui(
@@ -21,18 +26,18 @@ pub fn ui(
     state: &mut MiniLibraryState,
 ) {
     if !state.open {
-        ctx.send_viewport_cmd_to(mini_library_viewport_id(), egui::ViewportCommand::Close);
+        ctx.send_viewport_cmd_to(viewport_id(), egui::ViewportCommand::Close);
         return;
     }
 
     let screen_rect = ctx.screen_rect();
-    let window_height = screen_rect.height() * MINI_LIBRARY_HEIGHT_FRACTION;
+    let window_height = screen_rect.height() * HEIGHT_FRACTION;
     let window_width = screen_rect.width() * 0.5;
 
     let mut close_window = false;
 
     ctx.show_viewport_immediate(
-        mini_library_viewport_id(),
+        viewport_id(),
         ViewportBuilder::default()
             .with_title("Blackbird - Mini Library")
             .with_inner_size([window_width, window_height])
@@ -65,7 +70,7 @@ pub fn ui(
 
                     render_player_controls(ui, logic, config, has_loaded_all_tracks, cover_art_cache);
 
-                    library::render_library_view(
+                    render_library_view(
                         ui,
                         logic,
                         config,
@@ -88,6 +93,6 @@ pub fn ui(
     }
 }
 
-fn mini_library_viewport_id() -> ViewportId {
+fn viewport_id() -> ViewportId {
     ViewportId::from_hash_of("mini_library_window")
 }

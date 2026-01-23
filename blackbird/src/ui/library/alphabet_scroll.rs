@@ -2,10 +2,10 @@ use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
 use crate::{
     bc::{self, blackbird_state::TrackId},
-    ui::{AlphabetScrollState, style},
+    ui::style,
 };
 
-use super::group;
+use super::{group, shared::AlphabetScrollState};
 
 /// Computes alphabet scroll positions as fractions of total content
 pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState) {
