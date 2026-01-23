@@ -1,12 +1,13 @@
 //! Mini library view (popup window)
 
+use blackbird_core::blackbird_state::TrackId;
 use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportBuilder, ViewportId};
 
 use crate::{bc, config::Config, cover_art_cache::CoverArtCache};
 
 use super::shared::{LibraryViewConfig, LibraryViewState, render_library_view, render_player_controls};
 
-/// Height of the mini-library as a fraction of screen height
+/// Height of the mini-library as a fraction of main window height
 const HEIGHT_FRACTION: f32 = 0.4;
 
 /// State for the mini-library window
@@ -14,6 +15,16 @@ const HEIGHT_FRACTION: f32 = 0.4;
 pub struct MiniLibraryState {
     pub open: bool,
     pub(crate) library_view: LibraryViewState,
+    /// Track to scroll to when window opens (set on open, cleared after scroll)
+    scroll_to_track: Option<TrackId>,
+}
+
+impl MiniLibraryState {
+    /// Call when opening the window to scroll to the currently playing track
+    pub fn open_with_playing_track(&mut self, playing_track: Option<TrackId>) {
+        self.open = true;
+        self.scroll_to_track = playing_track;
+    }
 }
 
 /// Mini-library window UI
@@ -30,9 +41,14 @@ pub fn ui(
         return;
     }
 
+    // Use main window dimensions from config
+    let window_width = config.general.window_width as f32;
+    let window_height = config.general.window_height as f32 * HEIGHT_FRACTION;
+
+    // Center on screen
     let screen_rect = ctx.screen_rect();
-    let window_height = screen_rect.height() * HEIGHT_FRACTION;
-    let window_width = screen_rect.width() * 0.5;
+    let window_x = screen_rect.center().x - window_width / 2.0;
+    let window_y = screen_rect.center().y - window_height / 2.0;
 
     let mut close_window = false;
 
@@ -41,10 +57,7 @@ pub fn ui(
         ViewportBuilder::default()
             .with_title("Blackbird - Mini Library")
             .with_inner_size([window_width, window_height])
-            .with_position([
-                screen_rect.center().x - window_width / 2.0,
-                screen_rect.center().y - window_height / 2.0,
-            ])
+            .with_position([window_x, window_y])
             .with_active(true),
         |ctx, _class| {
             let margin = 8;
@@ -70,6 +83,9 @@ pub fn ui(
 
                     render_player_controls(ui, logic, config, has_loaded_all_tracks, cover_art_cache);
 
+                    // Take the scroll target (only scrolls once)
+                    let scroll_target = state.scroll_to_track.take();
+
                     render_library_view(
                         ui,
                         logic,
@@ -79,8 +95,8 @@ pub fn ui(
                         cover_art_cache,
                         &mut state.library_view,
                         LibraryViewConfig {
-                            scroll_target: None,
-                            auto_scroll_to_playing: true,
+                            scroll_target: scroll_target.as_ref(),
+                            auto_scroll_to_playing: false,
                             incremental_search_enabled: true,
                         },
                     );

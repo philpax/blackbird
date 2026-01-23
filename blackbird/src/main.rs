@@ -266,7 +266,12 @@ impl eframe::App for App {
                     self.ui_state.search.open = !self.ui_state.search.open;
                     ctx.request_repaint();
                 } else if event.id == self.mini_library_hotkey.id() {
-                    self.ui_state.mini_library.open = !self.ui_state.mini_library.open;
+                    if self.ui_state.mini_library.open {
+                        self.ui_state.mini_library.open = false;
+                    } else {
+                        let playing_track = self.logic.get_playing_track_id();
+                        self.ui_state.mini_library.open_with_playing_track(playing_track);
+                    }
                     ctx.request_repaint();
                 }
             }
