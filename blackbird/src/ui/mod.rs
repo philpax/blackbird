@@ -3,6 +3,7 @@ use std::time::Instant;
 
 mod library;
 mod lyrics;
+mod mini_library;
 mod playing_track;
 mod scrub_bar;
 mod search;
@@ -49,11 +50,19 @@ pub struct AlphabetScrollState {
 }
 
 #[derive(Default)]
+pub struct MiniLibraryState {
+    pub(crate) open: bool,
+    pub(crate) alphabet_scroll: AlphabetScrollState,
+    pub(crate) incremental_search: IncrementalSearchState,
+}
+
+#[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
     pub incremental_search: IncrementalSearchState,
     pub alphabet_scroll: AlphabetScrollState,
+    pub mini_library: MiniLibraryState,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -191,6 +200,10 @@ impl App {
             // Invalidate cached position since library changed
             self.ui_state.alphabet_scroll.cached_playing_track_id = None;
             self.ui_state.alphabet_scroll.cached_playing_track_position = None;
+            // Also update mini-library alphabet scroll
+            self.ui_state.mini_library.alphabet_scroll.needs_update = true;
+            self.ui_state.mini_library.alphabet_scroll.cached_playing_track_id = None;
+            self.ui_state.mini_library.alphabet_scroll.cached_playing_track_position = None;
         }
 
         if self.ui_state.search.open {
@@ -218,6 +231,17 @@ impl App {
         let margin = 8;
         let scroll_margin = 4;
         let has_loaded_all_tracks = logic.has_loaded_all_tracks();
+
+        if self.ui_state.mini_library.open {
+            mini_library::ui(
+                logic,
+                ctx,
+                config,
+                has_loaded_all_tracks,
+                &mut self.cover_art_cache,
+                &mut self.ui_state.mini_library,
+            );
+        }
         CentralPanel::default()
             .frame(
                 Frame::default()

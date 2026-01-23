@@ -1,6 +1,6 @@
-mod alphabet_scroll;
-mod group;
-mod incremental_search;
+pub(crate) mod alphabet_scroll;
+pub(crate) mod group;
+pub(crate) mod incremental_search;
 mod track;
 
 pub use group::GROUP_ALBUM_ART_SIZE;

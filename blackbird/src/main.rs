@@ -123,6 +123,7 @@ pub struct App {
     tray_menu: tray::TrayMenu,
     _global_hotkey_manager: GlobalHotKeyManager,
     search_hotkey: HotKey,
+    mini_library_hotkey: HotKey,
 }
 impl App {
     pub fn new(
@@ -197,6 +198,19 @@ impl App {
             .register(search_hotkey)
             .expect("Failed to register global search hotkey");
 
+        // Parse global mini-library hotkey from config
+        let (code, modifiers) = {
+            let cfg = config.read().unwrap();
+            cfg.keybindings
+                .parse_global_hotkey(&cfg.keybindings.global_mini_library)
+                .expect("Failed to parse global mini-library hotkey from config")
+        };
+
+        let mini_library_hotkey = HotKey::new(Some(modifiers), code);
+        global_hotkey_manager
+            .register(mini_library_hotkey)
+            .expect("Failed to register global mini-library hotkey");
+
         App {
             config,
             _config_reload_thread,
@@ -218,6 +232,7 @@ impl App {
             tray_menu,
             _global_hotkey_manager: global_hotkey_manager,
             search_hotkey,
+            mini_library_hotkey,
         }
     }
 }
@@ -245,12 +260,16 @@ impl eframe::App for App {
         }
 
         // Handle global hotkey events
-        if let Ok(event) = GlobalHotKeyEvent::receiver().try_recv()
-            && event.id == self.search_hotkey.id()
-            && event.state == HotKeyState::Released
-        {
-            self.ui_state.search.open = !self.ui_state.search.open;
-            ctx.request_repaint();
+        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
+            if event.state == HotKeyState::Released {
+                if event.id == self.search_hotkey.id() {
+                    self.ui_state.search.open = !self.ui_state.search.open;
+                    ctx.request_repaint();
+                } else if event.id == self.mini_library_hotkey.id() {
+                    self.ui_state.mini_library.open = !self.ui_state.mini_library.open;
+                    ctx.request_repaint();
+                }
+            }
         }
 
         // Check for shutdown signal from Tokio thread

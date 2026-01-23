@@ -98,6 +98,10 @@ pub struct Keybindings {
     /// Key can be a letter (A-Z) or function key (F1-F12)
     pub global_search: String,
 
+    /// Global hotkey to toggle mini-library window (works even when app is not focused)
+    /// Shows a smaller library view centered on the currently playing track
+    pub global_mini_library: String,
+
     /// Local keybindings (work only when app window is focused)
     /// Format: "Cmd+F" where Cmd is Ctrl on Linux/Windows and Command on macOS
     pub local_search: String,
@@ -113,6 +117,7 @@ impl Default for Keybindings {
     fn default() -> Self {
         Self {
             global_search: "Cmd+Alt+Shift+F".to_string(),
+            global_mini_library: "Cmd+Alt+Shift+L".to_string(),
             local_search: "Cmd+F".to_string(),
             local_lyrics: "Cmd+L".to_string(),
             mouse_previous_track: "Extra1".to_string(),
