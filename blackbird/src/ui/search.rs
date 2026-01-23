@@ -30,7 +30,7 @@ pub fn ui(
     ctx.show_viewport_immediate(
         search_viewport_id(),
         ViewportBuilder::default()
-            .with_title("Blackbird - Search")
+            .with_title("blackbird: search")
             .with_inner_size([800.0, 300.0])
             .with_active(true)
             .with_always_on_top(),

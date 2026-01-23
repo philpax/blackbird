@@ -54,7 +54,7 @@ pub fn ui(
             ViewportBuilder::default().with_position([window_x, window_y])
         })
         .unwrap_or_default()
-        .with_title("Blackbird - Mini Library")
+        .with_title("blackbird: mini library")
         .with_inner_size([window_width, window_height])
         .with_active(true);
 
