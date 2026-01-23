@@ -10,18 +10,29 @@ use egui::{Align, Pos2, Rect, ScrollArea, Spinner, Ui, pos2, style::ScrollStyle,
 
 use crate::{bc, config::Config, cover_art_cache::CoverArtCache, ui::util};
 
-use super::UiState;
+use super::{LibraryViewState, UiState};
 
+/// Configuration for library view rendering behavior
+pub(crate) struct LibraryViewConfig<'a> {
+    /// External scroll target (e.g., from track started event)
+    pub scroll_target: Option<&'a TrackId>,
+    /// Whether to auto-scroll to the currently playing track when no other target
+    pub auto_scroll_to_playing: bool,
+    /// Whether incremental search input is enabled
+    pub incremental_search_enabled: bool,
+}
+
+/// Render the library view with the given configuration
 #[allow(clippy::too_many_arguments)]
-pub fn ui(
+pub fn render_library_view(
     ui: &mut Ui,
     logic: &mut bc::Logic,
     config: &Config,
     has_loaded_all_tracks: bool,
     scroll_margin: f32,
-    track_to_scroll_to: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
-    ui_state: &mut UiState,
+    view_state: &mut LibraryViewState,
+    view_config: LibraryViewConfig<'_>,
 ) {
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
@@ -30,28 +41,24 @@ pub fn ui(
         }
 
         // Compute alphabet scroll positions if library was populated
-        if ui_state.alphabet_scroll.needs_update {
-            alphabet_scroll::compute_positions(logic, &mut ui_state.alphabet_scroll);
-            ui_state.alphabet_scroll.needs_update = false;
+        if view_state.alphabet_scroll.needs_update {
+            alphabet_scroll::compute_positions(logic, &mut view_state.alphabet_scroll);
+            view_state.alphabet_scroll.needs_update = false;
         }
-
-        // Only capture keyboard input if search modal and lyrics window are not open
-        let can_handle_incremental_search = !ui_state.search.open && !ui_state.lyrics.open;
 
         // Handle incremental search (type-to-search)
         let search_results = incremental_search::pre_render(
             ui,
             logic,
             config,
-            &mut ui_state.incremental_search,
-            can_handle_incremental_search,
+            &mut view_state.incremental_search,
+            view_config.incremental_search_enabled,
         );
 
         let current_search_match = search_results.current_match.clone();
         let incremental_search_scroll_target = search_results.scroll_target.clone();
 
-        // Make the scroll bar solid, and hide its background. Ideally, we'd set the opacity
-        // to 0, but egui doesn't allow that for solid scroll bars.
+        // Make the scroll bar solid, and hide its background
         ui.style_mut().spacing.scroll = ScrollStyle {
             bar_inner_margin: scroll_margin,
             bar_width: 20.0,
@@ -65,14 +72,24 @@ pub fn ui(
             logic.calculate_total_rows(group::line_count) - group::GROUP_MARGIN_BOTTOM_ROW_COUNT;
 
         let area_offset_y = ui.cursor().top();
+        let playing_track_id = logic.get_playing_track_id();
 
         ScrollArea::vertical()
             .auto_shrink(false)
             .show_viewport(ui, |ui, viewport| {
-                // Determine which track to scroll to (prioritize incremental search)
+                // Determine scroll target priority:
+                // 1. Incremental search target
+                // 2. External scroll target (track_to_scroll_to)
+                // 3. Playing track (if auto_scroll_to_playing)
+                let auto_scroll_target = if view_config.auto_scroll_to_playing {
+                    playing_track_id.as_ref()
+                } else {
+                    None
+                };
                 let scroll_target = incremental_search_scroll_target
                     .as_ref()
-                    .or(track_to_scroll_to);
+                    .or(view_config.scroll_target)
+                    .or(auto_scroll_target);
 
                 if let Some(scroll_to_height) = scroll_target.and_then(|id| {
                     group::target_scroll_height_for_track(
@@ -91,13 +108,13 @@ pub fn ui(
                     );
                 }
 
-                // Set the total height for the virtual content (with spacing)
+                // Set the total height for the virtual content
                 ui.set_height(spaced_row_height * total_rows as f32);
 
                 // Calculate which rows are visible with some buffer
                 let first_visible_row =
                     ((viewport.min.y / spaced_row_height).floor().max(0.0)) as usize;
-                let last_visible_row = (viewport.max.y / spaced_row_height).ceil() as usize + 5; // Add buffer
+                let last_visible_row = (viewport.max.y / spaced_row_height).ceil() as usize + 5;
                 let last_visible_row = last_visible_row.min(total_rows);
 
                 if first_visible_row >= last_visible_row {
@@ -110,16 +127,14 @@ pub fn ui(
                 let visible_groups =
                     logic.get_visible_groups(visible_row_range.clone(), group::line_count);
 
-                let playing_track_id = logic.get_playing_track_id();
                 let mut current_row = visible_groups.start_row;
 
-                for group in visible_groups.groups {
-                    let group_lines = group::line_count(&group);
+                for grp in visible_groups.groups {
+                    let group_lines = group::line_count(&grp);
 
-                    // Calculate the Y position for this group in viewport coordinates
+                    // Calculate the Y position for this group
                     let group_y = current_row as f32 * spaced_row_height;
 
-                    // Always render complete albums (no partial visibility check)
                     let positioned_rect = Rect::from_min_size(
                         pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
                         vec2(
@@ -129,12 +144,10 @@ pub fn ui(
                         ),
                     );
 
-                    // Display the complete group
                     let group_response = ui
                         .scope_builder(egui::UiBuilder::new().max_rect(positioned_rect), |ui| {
-                            // Show the entire group (no row range filtering)
                             group::ui(
-                                &group,
+                                &grp,
                                 ui,
                                 &config.style,
                                 logic,
@@ -151,7 +164,7 @@ pub fn ui(
                     }
 
                     if group_response.clicked_heart {
-                        logic.set_album_starred(&group.album_id, !group.starred);
+                        logic.set_album_starred(&grp.album_id, !grp.starred);
                     }
 
                     current_row += group_lines;
@@ -159,17 +172,47 @@ pub fn ui(
             });
 
         // Render alphabet scroll indicator
-        let playing_track_id = logic.get_playing_track_id();
         alphabet_scroll::render(
             ui,
             &config.style,
-            &mut ui_state.alphabet_scroll,
+            &mut view_state.alphabet_scroll,
             &ui.min_rect(),
             &logic.get_state().read().unwrap(),
             playing_track_id.as_ref(),
         );
 
-        // Display incremental search query overlay at the bottom
-        incremental_search::post_render(ui, &ui_state.incremental_search, &search_results);
+        // Display incremental search query overlay
+        incremental_search::post_render(ui, &view_state.incremental_search, &search_results);
     });
+}
+
+/// Main library UI (convenience wrapper for render_library_view)
+#[allow(clippy::too_many_arguments)]
+pub fn ui(
+    ui: &mut Ui,
+    logic: &mut bc::Logic,
+    config: &Config,
+    has_loaded_all_tracks: bool,
+    scroll_margin: f32,
+    track_to_scroll_to: Option<&TrackId>,
+    cover_art_cache: &mut CoverArtCache,
+    ui_state: &mut UiState,
+) {
+    // Only capture keyboard input if search modal and lyrics window are not open
+    let can_handle_incremental_search = !ui_state.search.open && !ui_state.lyrics.open;
+
+    render_library_view(
+        ui,
+        logic,
+        config,
+        has_loaded_all_tracks,
+        scroll_margin,
+        cover_art_cache,
+        &mut ui_state.library_view,
+        LibraryViewConfig {
+            scroll_target: track_to_scroll_to,
+            auto_scroll_to_playing: false,
+            incremental_search_enabled: can_handle_incremental_search,
+        },
+    );
 }

@@ -49,19 +49,32 @@ pub struct AlphabetScrollState {
     pub(crate) cached_playing_track_position: Option<f32>,
 }
 
+/// Shared state for library view rendering (used by both main library and mini-library)
+#[derive(Default)]
+pub struct LibraryViewState {
+    pub(crate) alphabet_scroll: AlphabetScrollState,
+    pub(crate) incremental_search: IncrementalSearchState,
+}
+
+impl LibraryViewState {
+    pub fn invalidate_alphabet_scroll(&mut self) {
+        self.alphabet_scroll.needs_update = true;
+        self.alphabet_scroll.cached_playing_track_id = None;
+        self.alphabet_scroll.cached_playing_track_position = None;
+    }
+}
+
 #[derive(Default)]
 pub struct MiniLibraryState {
     pub(crate) open: bool,
-    pub(crate) alphabet_scroll: AlphabetScrollState,
-    pub(crate) incremental_search: IncrementalSearchState,
+    pub(crate) library_view: LibraryViewState,
 }
 
 #[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
-    pub incremental_search: IncrementalSearchState,
-    pub alphabet_scroll: AlphabetScrollState,
+    pub library_view: LibraryViewState,
     pub mini_library: MiniLibraryState,
 }
 
@@ -196,14 +209,8 @@ impl App {
 
         // Process library population signal
         while let Ok(()) = self.library_populated_rx.try_recv() {
-            self.ui_state.alphabet_scroll.needs_update = true;
-            // Invalidate cached position since library changed
-            self.ui_state.alphabet_scroll.cached_playing_track_id = None;
-            self.ui_state.alphabet_scroll.cached_playing_track_position = None;
-            // Also update mini-library alphabet scroll
-            self.ui_state.mini_library.alphabet_scroll.needs_update = true;
-            self.ui_state.mini_library.alphabet_scroll.cached_playing_track_id = None;
-            self.ui_state.mini_library.alphabet_scroll.cached_playing_track_position = None;
+            self.ui_state.library_view.invalidate_alphabet_scroll();
+            self.ui_state.mini_library.library_view.invalidate_alphabet_scroll();
         }
 
         if self.ui_state.search.open {
