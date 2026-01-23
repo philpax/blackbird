@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::time::Instant;
 
 mod library;
 mod lyrics;
@@ -13,7 +12,8 @@ pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::Style;
 
 use egui::{
-    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Visuals,
+    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText,
+    Visuals,
 };
 
 use crate::{App, bc, config::Config};
@@ -34,26 +34,11 @@ pub struct LyricsState {
 }
 
 #[derive(Default)]
-pub struct IncrementalSearchState {
-    pub(crate) query: String,
-    pub(crate) last_input: Option<Instant>,
-    pub(crate) result_index: usize,
-}
-
-#[derive(Default)]
-pub struct AlphabetScrollState {
-    pub(crate) positions: Vec<(char, f32)>, // (letter, position fraction 0.0-1.0)
-    pub(crate) needs_update: bool,
-    pub(crate) cached_playing_track_id: Option<bc::blackbird_state::TrackId>,
-    pub(crate) cached_playing_track_position: Option<f32>,
-}
-
-#[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
-    pub incremental_search: IncrementalSearchState,
-    pub alphabet_scroll: AlphabetScrollState,
+    pub library_view: library::LibraryViewState,
+    pub mini_library: library::MiniLibraryState,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -187,10 +172,8 @@ impl App {
 
         // Process library population signal
         while let Ok(()) = self.library_populated_rx.try_recv() {
-            self.ui_state.alphabet_scroll.needs_update = true;
-            // Invalidate cached position since library changed
-            self.ui_state.alphabet_scroll.cached_playing_track_id = None;
-            self.ui_state.alphabet_scroll.cached_playing_track_position = None;
+            self.ui_state.library_view.invalidate_alphabet_scroll();
+            self.ui_state.mini_library.library_view.invalidate_alphabet_scroll();
         }
 
         if self.ui_state.search.open {
@@ -218,6 +201,18 @@ impl App {
         let margin = 8;
         let scroll_margin = 4;
         let has_loaded_all_tracks = logic.has_loaded_all_tracks();
+
+        if self.ui_state.mini_library.open {
+            library::mini::ui(
+                logic,
+                ctx,
+                config,
+                has_loaded_all_tracks,
+                &mut self.cover_art_cache,
+                &mut self.ui_state.mini_library,
+            );
+        }
+
         CentralPanel::default()
             .frame(
                 Frame::default()
@@ -230,39 +225,17 @@ impl App {
                     .fill(config.style.background()),
             )
             .show(ctx, |ui| {
-                ui.input(|i| {
-                    // Handle mouse button for previous track
-                    if let Some(button) = config
-                        .keybindings
-                        .parse_mouse_button(&config.keybindings.mouse_previous_track)
-                        && i.pointer.button_released(button)
-                    {
-                        logic.previous();
-                    }
-
-                    // Handle mouse button for next track
-                    if let Some(button) = config
-                        .keybindings
-                        .parse_mouse_button(&config.keybindings.mouse_next_track)
-                        && i.pointer.button_released(button)
-                    {
-                        logic.next();
-                    }
-                });
-
-                playing_track::ui(
+                if let Some(id) = library::shared::render_player_controls(
                     ui,
                     logic,
                     config,
                     has_loaded_all_tracks,
-                    &mut track_to_scroll_to,
                     &mut self.cover_art_cache,
-                );
-                scrub_bar::ui(ui, logic, config);
+                ) {
+                    track_to_scroll_to = Some(id);
+                }
 
-                ui.separator();
-
-                library::ui(
+                library::full::ui(
                     ui,
                     logic,
                     config,
@@ -270,7 +243,11 @@ impl App {
                     scroll_margin.into(),
                     track_to_scroll_to.as_ref(),
                     &mut self.cover_art_cache,
-                    &mut self.ui_state,
+                    &mut self.ui_state.library_view,
+                    &library::full::FullLibraryState {
+                        search_open: self.ui_state.search.open,
+                        lyrics_open: self.ui_state.lyrics.open,
+                    },
                 );
             });
 

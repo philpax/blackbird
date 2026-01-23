@@ -3,7 +3,9 @@ use std::time::{Duration, Instant};
 use blackbird_core::blackbird_state::TrackId;
 use egui::{Align2, Color32, Key, Rect, TextStyle, Ui, pos2, vec2};
 
-use crate::{bc, config::Config, ui::IncrementalSearchState};
+use crate::{bc, config::Config};
+
+use super::shared::IncrementalSearchState;
 
 pub struct SearchResults {
     pub results: Vec<TrackId>,
