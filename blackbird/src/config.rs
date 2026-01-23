@@ -117,7 +117,7 @@ impl Default for Keybindings {
     fn default() -> Self {
         Self {
             global_search: "Cmd+Alt+Shift+F".to_string(),
-            global_mini_library: "Cmd+Alt+Shift+L".to_string(),
+            global_mini_library: "Ctrl+Alt+Shift+G".to_string(),
             local_search: "Cmd+F".to_string(),
             local_lyrics: "Cmd+L".to_string(),
             mouse_previous_track: "Extra1".to_string(),
