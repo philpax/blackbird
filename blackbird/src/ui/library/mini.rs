@@ -45,20 +45,24 @@ pub fn ui(
     let window_width = config.general.window_width as f32;
     let window_height = config.general.window_height as f32 * HEIGHT_FRACTION;
 
-    // Center on screen
-    let screen_rect = ctx.screen_rect();
-    let window_x = screen_rect.center().x - window_width / 2.0;
-    let window_y = screen_rect.center().y - window_height / 2.0;
+    // Center on monitor (use monitor_size from viewport info if available)
+    let viewport_builder = ctx
+        .input(|i| i.viewport().monitor_size)
+        .map(|monitor_size| {
+            let window_x = (monitor_size.x - window_width) / 2.0;
+            let window_y = (monitor_size.y - window_height) / 2.0;
+            ViewportBuilder::default().with_position([window_x, window_y])
+        })
+        .unwrap_or_default()
+        .with_title("Blackbird - Mini Library")
+        .with_inner_size([window_width, window_height])
+        .with_active(true);
 
     let mut close_window = false;
 
     ctx.show_viewport_immediate(
         viewport_id(),
-        ViewportBuilder::default()
-            .with_title("Blackbird - Mini Library")
-            .with_inner_size([window_width, window_height])
-            .with_position([window_x, window_y])
-            .with_active(true),
+        viewport_builder,
         |ctx, _class| {
             let margin = 8;
             let scroll_margin = 4;
