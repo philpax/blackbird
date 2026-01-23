@@ -2,12 +2,16 @@ use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportBuilder, ViewportI
 
 use crate::{bc, config::Config, cover_art_cache::CoverArtCache};
 
-use super::{MiniLibraryState, library::{self, LibraryViewConfig}};
+use super::{
+    MiniLibraryState,
+    library::{self, LibraryViewConfig},
+    render_player_controls,
+};
 
 /// Height of the mini-library as a fraction of screen height
 const MINI_LIBRARY_HEIGHT_FRACTION: f32 = 0.4;
 
-/// Main mini-library window UI
+/// Mini-library window UI
 pub fn ui(
     logic: &mut bc::Logic,
     ctx: &Context,
@@ -53,46 +57,14 @@ pub fn ui(
                         .fill(config.style.background()),
                 )
                 .show(ctx, |ui| {
-                    if ui.input(|i| i.key_pressed(Key::Escape)) {
+                    if ui.input(|i| i.key_pressed(Key::Escape))
+                        || ctx.input(|i| i.viewport().close_requested())
+                    {
                         close_window = true;
                     }
-                    if ctx.input(|i| i.viewport().close_requested()) {
-                        close_window = true;
-                    }
 
-                    // Handle mouse buttons for track navigation
-                    ui.input(|i| {
-                        if let Some(button) = config
-                            .keybindings
-                            .parse_mouse_button(&config.keybindings.mouse_previous_track)
-                            && i.pointer.button_released(button)
-                        {
-                            logic.previous();
-                        }
-                        if let Some(button) = config
-                            .keybindings
-                            .parse_mouse_button(&config.keybindings.mouse_next_track)
-                            && i.pointer.button_released(button)
-                        {
-                            logic.next();
-                        }
-                    });
+                    render_player_controls(ui, logic, config, has_loaded_all_tracks, cover_art_cache);
 
-                    // Playback controls
-                    let mut track_to_scroll_to = None;
-                    super::playing_track::ui(
-                        ui,
-                        logic,
-                        config,
-                        has_loaded_all_tracks,
-                        &mut track_to_scroll_to,
-                        cover_art_cache,
-                    );
-
-                    super::scrub_bar::ui(ui, logic, config);
-                    ui.separator();
-
-                    // Library view (auto-scrolls to playing track)
                     library::render_library_view(
                         ui,
                         logic,

@@ -13,11 +13,13 @@ mod util;
 pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::Style;
 
+use blackbird_core::blackbird_state::TrackId;
 use egui::{
-    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Visuals,
+    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Ui,
+    Visuals,
 };
 
-use crate::{App, bc, config::Config};
+use crate::{App, bc, config::Config, cover_art_cache::CoverArtCache};
 
 #[derive(Default)]
 pub struct SearchState {
@@ -62,6 +64,49 @@ impl LibraryViewState {
         self.alphabet_scroll.cached_playing_track_id = None;
         self.alphabet_scroll.cached_playing_track_position = None;
     }
+}
+
+/// Render player controls: mouse button handling, now playing, scrub bar, and separator.
+/// Returns track_to_scroll_to if the user clicked on the playing track info.
+pub(crate) fn render_player_controls(
+    ui: &mut Ui,
+    logic: &mut bc::Logic,
+    config: &Config,
+    has_loaded_all_tracks: bool,
+    cover_art_cache: &mut CoverArtCache,
+) -> Option<TrackId> {
+    // Handle mouse buttons for track navigation
+    ui.input(|i| {
+        if let Some(button) = config
+            .keybindings
+            .parse_mouse_button(&config.keybindings.mouse_previous_track)
+            && i.pointer.button_released(button)
+        {
+            logic.previous();
+        }
+        if let Some(button) = config
+            .keybindings
+            .parse_mouse_button(&config.keybindings.mouse_next_track)
+            && i.pointer.button_released(button)
+        {
+            logic.next();
+        }
+    });
+
+    let mut track_to_scroll_to = None;
+    playing_track::ui(
+        ui,
+        logic,
+        config,
+        has_loaded_all_tracks,
+        &mut track_to_scroll_to,
+        cover_art_cache,
+    );
+
+    scrub_bar::ui(ui, logic, config);
+    ui.separator();
+
+    track_to_scroll_to
 }
 
 #[derive(Default)]
@@ -261,37 +306,15 @@ impl App {
                     .fill(config.style.background()),
             )
             .show(ctx, |ui| {
-                ui.input(|i| {
-                    // Handle mouse button for previous track
-                    if let Some(button) = config
-                        .keybindings
-                        .parse_mouse_button(&config.keybindings.mouse_previous_track)
-                        && i.pointer.button_released(button)
-                    {
-                        logic.previous();
-                    }
-
-                    // Handle mouse button for next track
-                    if let Some(button) = config
-                        .keybindings
-                        .parse_mouse_button(&config.keybindings.mouse_next_track)
-                        && i.pointer.button_released(button)
-                    {
-                        logic.next();
-                    }
-                });
-
-                playing_track::ui(
+                if let Some(id) = render_player_controls(
                     ui,
                     logic,
                     config,
                     has_loaded_all_tracks,
-                    &mut track_to_scroll_to,
                     &mut self.cover_art_cache,
-                );
-                scrub_bar::ui(ui, logic, config);
-
-                ui.separator();
+                ) {
+                    track_to_scroll_to = Some(id);
+                }
 
                 library::ui(
                     ui,
