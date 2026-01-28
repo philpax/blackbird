@@ -252,13 +252,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     left_spans.push(Span::styled(title, title_style));
                     left_len += title.len();
 
-                    // Add playcount immediately after title (no parens, same color scheme as egui)
+                    // Add playcount immediately after title (uses track_number_color like egui)
                     if let Some(pc) = play_count {
                         let pc_str = format!(" {pc}");
                         left_len += pc_str.len();
                         left_spans.push(Span::styled(
                             pc_str,
-                            Style::default().fg(track_duration_color),
+                            Style::default().fg(track_number_color),
                         ));
                     }
 

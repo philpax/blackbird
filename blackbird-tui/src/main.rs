@@ -143,7 +143,7 @@ fn handle_mouse_event(
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // now playing + controls (2 lines + 1 margin)
+            Constraint::Length(2), // now playing + controls (2 lines, no margin)
             Constraint::Length(1), // scrub bar + volume
             Constraint::Min(3),    // library / search / lyrics
             Constraint::Length(1), // help bar
