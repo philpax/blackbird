@@ -38,7 +38,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let entries = app.get_flat_library();
+    // Copy values we need before borrowing entries.
+    let scroll_offset = app.library_scroll_offset;
+    let selected_index = app.library_selected_index;
+    let playing_track_id = app.logic.get_playing_track_id();
+
+    // Clone entries to avoid borrow conflicts when accessing cover_art_cache later.
+    let entries: Vec<LibraryEntry> = app.get_flat_library().to_vec();
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No tracks found")
@@ -49,7 +55,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Calculate visible range to only pre-compute colors for visible group headers.
     let visible_height = inner.height as usize;
-    let scroll_offset = app.library_scroll_offset;
     let visible_start = scroll_offset;
     let visible_end = (scroll_offset + visible_height + 5).min(entries.len()); // +5 for buffer
 
@@ -60,23 +65,22 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .skip(visible_start)
         .take(visible_end - visible_start)
     {
-        if let LibraryEntry::GroupHeader { cover_art_id, .. } = entry {
-            if let Some(id) = cover_art_id {
-                if !art_colors.contains_key(id) {
-                    let colors = app.cover_art_cache.get(&app.logic, Some(id));
-                    art_colors.insert(id.clone(), colors);
-                }
-            }
+        if let LibraryEntry::GroupHeader {
+            cover_art_id: Some(id),
+            ..
+        } = entry
+            && !art_colors.contains_key(id)
+        {
+            let colors = app.cover_art_cache.get(&app.logic, Some(id));
+            art_colors.insert(id.clone(), colors);
         }
     }
-
-    let playing_track_id = app.logic.get_playing_track_id();
 
     let items: Vec<ListItem> = entries
         .iter()
         .enumerate()
         .map(|(i, entry)| {
-            let is_selected = i == app.library_selected_index;
+            let is_selected = i == selected_index;
             match entry {
                 LibraryEntry::GroupHeader {
                     artist,
@@ -207,14 +211,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::styled(title, title_style));
 
                     // Show artist if different from album artist.
-                    if let Some(track_artist) = artist {
-                        if track_artist != album_artist {
-                            spans.push(Span::raw(" \u{2014} "));
-                            spans.push(Span::styled(
-                                track_artist,
-                                Style::default().fg(string_to_color(track_artist)),
-                            ));
-                        }
+                    if let Some(track_artist) = artist
+                        && track_artist != album_artist
+                    {
+                        spans.push(Span::raw(" \u{2014} "));
+                        spans.push(Span::styled(
+                            track_artist,
+                            Style::default().fg(string_to_color(track_artist)),
+                        ));
                     }
 
                     if let Some(pc) = play_count {
@@ -251,7 +255,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Use a ListState to manage selection/scrolling.
     let mut state = ListState::default();
-    state.select(Some(app.library_selected_index));
+    state.select(Some(selected_index));
 
     frame.render_stateful_widget(list, inner, &mut state);
 

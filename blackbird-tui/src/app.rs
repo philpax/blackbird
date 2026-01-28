@@ -160,10 +160,10 @@ impl App {
         // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
             self.flat_library_dirty = true;
-            if self.library_needs_scroll_to_playing {
-                if let Some(track_id) = self.logic.get_playing_track_id() {
-                    self.scroll_to_track = Some(track_id);
-                }
+            if self.library_needs_scroll_to_playing
+                && let Some(track_id) = self.logic.get_playing_track_id()
+            {
+                self.scroll_to_track = Some(track_id);
             }
         }
 

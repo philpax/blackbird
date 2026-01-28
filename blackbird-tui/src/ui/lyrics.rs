@@ -78,20 +78,20 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let mut spans = Vec::new();
 
-            if let Some(start_ms) = line.start {
-                if !line.value.trim().is_empty() {
-                    let timestamp_secs = (start_ms / 1000) as u32;
-                    let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
-                    let ts_color = if is_current {
-                        Color::Cyan
-                    } else {
-                        Color::Rgb(80, 80, 80)
-                    };
-                    spans.push(Span::styled(
-                        format!("{timestamp_str:>6} "),
-                        Style::default().fg(ts_color),
-                    ));
-                }
+            if let Some(start_ms) = line.start
+                && !line.value.trim().is_empty()
+            {
+                let timestamp_secs = (start_ms / 1000) as u32;
+                let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
+                let ts_color = if is_current {
+                    Color::Cyan
+                } else {
+                    Color::Rgb(80, 80, 80)
+                };
+                spans.push(Span::styled(
+                    format!("{timestamp_str:>6} "),
+                    Style::default().fg(ts_color),
+                ));
             }
 
             let text_style = if is_current {

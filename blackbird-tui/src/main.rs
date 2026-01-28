@@ -106,13 +106,11 @@ fn run_app(
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
-                // Only handle key press events, not release or repeat.
-                if key.kind == event::KeyEventKind::Press {
-                    handle_key_event(app, &key);
-                }
-            }
+        if event::poll(timeout)?
+            && let Event::Key(key) = event::read()?
+            && key.kind == event::KeyEventKind::Press
+        {
+            handle_key_event(app, &key);
         }
 
         if last_tick.elapsed() >= tick_rate {

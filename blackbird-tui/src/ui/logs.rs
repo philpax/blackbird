@@ -54,7 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let line = Line::from(vec![
                 Span::styled(
-                    format!("{level_str}"),
+                    level_str,
                     Style::default()
                         .fg(level_color)
                         .add_modifier(Modifier::BOLD),

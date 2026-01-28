@@ -115,21 +115,21 @@ impl CoverArtCache {
         entry.last_requested = std::time::Instant::now();
 
         // Try loading from disk cache first.
-        if let CacheEntryState::Unloaded = entry.state {
-            if let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id) {
-                let colors = compute_quadrant_colors(&data);
-                entry.state = CacheEntryState::Loaded(colors);
-                return colors;
-            }
+        if let CacheEntryState::Unloaded = entry.state
+            && let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id)
+        {
+            let colors = compute_quadrant_colors(&data);
+            entry.state = CacheEntryState::Loaded(colors);
+            return colors;
         }
 
         // Request from network after delay.
-        if entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT {
-            if let CacheEntryState::Unloaded = entry.state {
-                // Request a small size since we only need colours.
-                logic.request_cover_art(cover_art_id, Some(64));
-                entry.state = CacheEntryState::Loading;
-            }
+        if entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT
+            && let CacheEntryState::Unloaded = entry.state
+        {
+            // Request a small size since we only need colours.
+            logic.request_cover_art(cover_art_id, Some(64));
+            entry.state = CacheEntryState::Loading;
         }
 
         match &entry.state {
@@ -201,13 +201,13 @@ fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
     let row_height = h / 2;
 
     let mut colors = [[Color::DarkGray; 4]; 2];
-    for row in 0..2 {
-        for col in 0..4 {
+    for (row, row_colors) in colors.iter_mut().enumerate() {
+        for (col, color) in row_colors.iter_mut().enumerate() {
             let x0 = col * col_width;
             let y0 = row * row_height;
             let x1 = if col == 3 { w } else { (col + 1) * col_width };
             let y1 = if row == 1 { h } else { (row + 1) * row_height };
-            colors[row][col] = average_region(x0, y0, x1.max(x0 + 1), y1.max(y0 + 1));
+            *color = average_region(x0, y0, x1.max(x0 + 1), y1.max(y0 + 1));
         }
     }
 
