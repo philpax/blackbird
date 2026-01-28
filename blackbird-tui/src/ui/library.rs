@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState},
+    widgets::{List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
 
 use crate::{
@@ -358,4 +358,24 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Save the offset for use by keyboard navigation.
     app.library_scroll_offset = state.offset();
+
+    // Render scrollbar on the right edge.
+    // Calculate total content height in lines.
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+
+    if total_lines > visible_height {
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(centered_offset);
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
 }
