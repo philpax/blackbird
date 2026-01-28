@@ -21,9 +21,6 @@ pub use cover_art::CoverArtId;
 mod group;
 pub use group::Group;
 
-mod playback_mode;
-pub use playback_mode::PlaybackMode;
-
 mod track;
 pub use track::{Track, TrackId};
 

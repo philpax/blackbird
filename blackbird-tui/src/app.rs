@@ -260,10 +260,10 @@ impl App {
         let mut config = self.config.clone();
         config.general.volume = self.logic.get_volume();
         if let Some(tap) = self.logic.get_playing_track_and_position() {
-            config.last_playback.track_id = Some(tap.track_id);
-            config.last_playback.track_position_secs = tap.position.as_secs_f64();
+            config.shared.last_playback.track_id = Some(tap.track_id);
+            config.shared.last_playback.track_position_secs = tap.position.as_secs_f64();
         }
-        config.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
         config.save();
     }
 

@@ -36,19 +36,19 @@ fn main() -> anyhow::Result<()> {
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
-        base_url: config.server.base_url.clone(),
-        username: config.server.username.clone(),
-        password: config.server.password.clone(),
-        transcode: config.server.transcode,
+        base_url: config.shared.server.base_url.clone(),
+        username: config.shared.server.username.clone(),
+        password: config.shared.server.password.clone(),
+        transcode: config.shared.server.transcode,
         volume: config.general.volume,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
     });
 
-    // Restore last playback state
-    logic.set_playback_mode(config.last_playback.playback_mode);
-    if let Some(track_id) = &config.last_playback.track_id {
+    // Restore last playback state.
+    logic.set_playback_mode(config.shared.last_playback.playback_mode);
+    if let Some(track_id) = &config.shared.last_playback.track_id {
         logic.set_scroll_target(track_id);
     }
 

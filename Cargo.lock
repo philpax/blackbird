@@ -607,7 +607,8 @@ dependencies = [
 name = "blackbird-client-shared"
 version = "0.1.0"
 dependencies = [
- "blackbird-state",
+ "blackbird-core",
+ "blackbird-shared",
  "serde",
 ]
 

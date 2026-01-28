@@ -7,12 +7,10 @@ use crate::ui;
 pub struct Config {
     #[serde(default)]
     pub general: General,
-    #[serde(default)]
-    pub server: blackbird_shared::config::Server,
+    #[serde(flatten)]
+    pub shared: blackbird_client_shared::config::Config,
     #[serde(default)]
     pub style: ui::Style,
-    #[serde(default)]
-    pub last_playback: blackbird_client_shared::config::LastPlayback,
     #[serde(default)]
     pub keybindings: Keybindings,
 }
@@ -22,19 +20,19 @@ impl Config {
     pub fn load() -> Self {
         match std::fs::read_to_string(Self::FILENAME) {
             Ok(contents) => {
-                // Config exists, try to parse it
+                // Config exists, try to parse it.
                 match toml::from_str(&contents) {
                     Ok(config) => config,
                     Err(e) => panic!("Failed to parse {}: {e}", Self::FILENAME),
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // No config exists, create default
+                // No config exists, create default.
                 tracing::info!("no config file found, creating default config");
                 Config::default()
             }
             Err(e) => {
-                // Some other IO error occurred while reading
+                // Some other IO error occurred while reading.
                 panic!("Failed to read {}: {e}", Self::FILENAME)
             }
         }
@@ -74,23 +72,23 @@ impl Default for General {
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Keybindings {
-    /// Global hotkey to toggle search window (works even when app is not focused)
-    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super, Win, or Cmd
-    /// "Cmd" is platform-aware: maps to Command on macOS, Ctrl on Linux/Windows
-    /// Key can be a letter (A-Z) or function key (F1-F12)
+    /// Global hotkey to toggle search window (works even when app is not focused).
+    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super, Win, or Cmd.
+    /// "Cmd" is platform-aware: maps to Command on macOS, Ctrl on Linux/Windows.
+    /// Key can be a letter (A-Z) or function key (F1-F12).
     pub global_search: String,
 
-    /// Global hotkey to toggle mini-library window (works even when app is not focused)
-    /// Shows a smaller library view centered on the currently playing track
+    /// Global hotkey to toggle mini-library window (works even when app is not focused).
+    /// Shows a smaller library view centered on the currently playing track.
     pub global_mini_library: String,
 
-    /// Local keybindings (work only when app window is focused)
-    /// Format: "Cmd+F" where Cmd is Ctrl on Linux/Windows and Command on macOS
+    /// Local keybindings (work only when app window is focused).
+    /// Format: "Cmd+F" where Cmd is Ctrl on Linux/Windows and Command on macOS.
     pub local_search: String,
     pub local_lyrics: String,
 
-    /// Mouse button bindings for track navigation
-    /// Valid values: "Extra1" (button 4), "Extra2" (button 5), or "None" to disable
+    /// Mouse button bindings for track navigation.
+    /// Valid values: "Extra1" (button 4), "Extra2" (button 5), or "None" to disable.
     pub mouse_previous_track: String,
     pub mouse_next_track: String,
 }
@@ -109,7 +107,7 @@ impl Default for Keybindings {
 }
 
 impl Keybindings {
-    /// Parse a global hotkey string into (Code, Modifiers) for global-hotkey crate
+    /// Parse a global hotkey string into (Code, Modifiers) for global-hotkey crate.
     pub fn parse_global_hotkey(
         &self,
         binding: &str,
@@ -133,7 +131,7 @@ impl Keybindings {
                 "Alt" => modifiers |= Modifiers::ALT,
                 "Shift" => modifiers |= Modifiers::SHIFT,
                 "Super" | "Win" => modifiers |= Modifiers::SUPER,
-                // "Cmd" is platform-aware: Super on macOS, Control on Linux/Windows
+                // "Cmd" is platform-aware: Super on macOS, Control on Linux/Windows.
                 "Cmd" => {
                     #[cfg(target_os = "macos")]
                     {
@@ -193,7 +191,7 @@ impl Keybindings {
         Some((code, modifiers))
     }
 
-    /// Parse a local keybinding string into egui::Key
+    /// Parse a local keybinding string into egui::Key.
     pub fn parse_local_key(&self, binding: &str) -> Option<egui::Key> {
         let parts: Vec<&str> = binding.split('+').collect();
         let key_str = parts.last()?.trim();
@@ -229,12 +227,12 @@ impl Keybindings {
         }
     }
 
-    /// Check if a local keybinding requires the command modifier (Cmd on Mac, Ctrl elsewhere)
+    /// Check if a local keybinding requires the command modifier (Cmd on Mac, Ctrl elsewhere).
     pub fn requires_command(&self, binding: &str) -> bool {
         binding.contains("Cmd")
     }
 
-    /// Parse a mouse button string into egui::PointerButton
+    /// Parse a mouse button string into egui::PointerButton.
     pub fn parse_mouse_button(&self, binding: &str) -> Option<egui::PointerButton> {
         match binding.trim() {
             "Extra1" => Some(egui::PointerButton::Extra1),

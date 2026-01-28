@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-blackbird-state = { path = "../blackbird-state" }
+blackbird-core = { path = "../blackbird-core", default-features = false }
+blackbird-shared = { path = "../blackbird-shared" }
 
 serde = { workspace = true }
