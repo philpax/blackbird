@@ -165,6 +165,8 @@ impl App {
             {
                 self.scroll_to_track = Some(track_id);
             }
+            // Ensure selection is on a track, not a group header.
+            self.ensure_selection_on_track();
         }
 
         // Handle scroll-to-track.
@@ -355,5 +357,29 @@ impl App {
             }
         }
         None
+    }
+
+    /// Ensures the current selection is on a track, not a group header.
+    /// If currently on a header, moves to the first track in the library.
+    pub fn ensure_selection_on_track(&mut self) {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library();
+            self.flat_library_dirty = false;
+        }
+
+        // Check if current selection is already a track.
+        if let Some(LibraryEntry::Track { .. }) =
+            self.cached_flat_library.get(self.library_selected_index)
+        {
+            return;
+        }
+
+        // Find the first track in the library.
+        for (i, entry) in self.cached_flat_library.iter().enumerate() {
+            if let LibraryEntry::Track { .. } = entry {
+                self.library_selected_index = i;
+                return;
+            }
+        }
     }
 }

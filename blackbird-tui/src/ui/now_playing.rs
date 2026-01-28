@@ -28,8 +28,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(9),  // album art (4 cols x 2 rows of half-blocks)
-            Constraint::Min(20),    // track info
+            Constraint::Length(6), // album art (4 cols x 2 rows of half-blocks + 1 margin + 1 space)
+            Constraint::Min(20),   // track info
             Constraint::Length(24), // transport controls
         ])
         .split(area);
@@ -54,7 +54,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let artist_display = if let Some(ref track_artist) = tdd.track_artist {
         if track_artist.as_str() != tdd.album_artist.as_str() {
-            format!("{} \u{2014} ", track_artist)
+            format!("{} ", track_artist)
         } else {
             String::new()
         }

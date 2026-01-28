@@ -15,10 +15,11 @@ use keys::Action;
 use log_buffer::{LogBuffer, LogBufferLayer};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -101,16 +102,23 @@ fn run_app(
     tick_rate: Duration,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
+    let mut last_click: Option<(Instant, u16, u16)> = None;
 
     loop {
+        let size = terminal.size()?;
         terminal.draw(|frame| ui::draw(frame, app))?;
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
-        if event::poll(timeout)?
-            && let Event::Key(key) = event::read()?
-            && key.kind == event::KeyEventKind::Press
-        {
-            handle_key_event(app, &key);
+        if event::poll(timeout)? {
+            match event::read()? {
+                Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                    handle_key_event(app, &key);
+                }
+                Event::Mouse(mouse) => {
+                    handle_mouse_event(app, &mouse, size, &mut last_click);
+                }
+                _ => {}
+            }
         }
 
         if last_tick.elapsed() >= tick_rate {
@@ -121,6 +129,152 @@ fn run_app(
         if app.should_quit {
             return Ok(());
         }
+    }
+}
+
+fn handle_mouse_event(
+    app: &mut App,
+    mouse: &event::MouseEvent,
+    size: Rect,
+    last_click: &mut Option<(Instant, u16, u16)>,
+) {
+    // Compute layout areas matching ui::draw
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4), // now playing + controls
+            Constraint::Length(1), // scrub bar + volume
+            Constraint::Min(3),    // library / search / lyrics
+            Constraint::Length(1), // help bar
+        ])
+        .split(size);
+
+    let library_area = main_chunks[2];
+    let scrub_area = main_chunks[1];
+
+    match mouse.kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            let x = mouse.column;
+            let y = mouse.row;
+
+            // Check for double-click (within 500ms at same position)
+            let is_double_click = last_click
+                .map(|(time, lx, ly)| {
+                    time.elapsed() < Duration::from_millis(500) && lx == x && ly == y
+                })
+                .unwrap_or(false);
+
+            *last_click = Some((Instant::now(), x, y));
+
+            // Click in library area
+            if y >= library_area.y
+                && y < library_area.y + library_area.height
+                && x >= library_area.x
+                && x < library_area.x + library_area.width
+                && app.focused_panel == FocusedPanel::Library
+            {
+                // Calculate which entry was clicked
+                // Account for border (1 line at top)
+                let inner_y = y.saturating_sub(library_area.y + 1);
+
+                // Convert click position to entry index
+                // GroupHeaders take 2 lines, Tracks take 1 line
+                let entries = app.get_flat_library().to_vec();
+                let scroll_offset = app.library_scroll_offset;
+
+                let mut line = 0usize;
+                let mut clicked_index = None;
+
+                for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+                    let entry_height = match entry {
+                        LibraryEntry::GroupHeader { .. } => 2,
+                        LibraryEntry::Track { .. } => 1,
+                    };
+
+                    if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
+                        clicked_index = Some(i);
+                        break;
+                    }
+                    line += entry_height;
+                }
+
+                if let Some(index) = clicked_index {
+                    // Only select tracks, not group headers
+                    if let Some(LibraryEntry::Track { id, .. }) = entries.get(index) {
+                        app.library_selected_index = index;
+
+                        if is_double_click {
+                            // Double-click plays the track
+                            app.logic.request_play_track(id);
+                        }
+                    }
+                }
+            }
+
+            // Click in scrub bar area
+            if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
+                // Calculate seek position based on click
+                let vol_width = 12u16; // approximate volume widget width
+                let scrub_width = scrub_area.width.saturating_sub(vol_width);
+
+                if x < scrub_area.x + scrub_width {
+                    // Clicked on scrub bar
+                    let ratio = (x - scrub_area.x) as f32 / scrub_width as f32;
+                    if let Some(details) = app.logic.get_track_display_details() {
+                        let seek_pos =
+                            Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
+                        app.logic.seek_current(seek_pos);
+                    }
+                }
+            }
+        }
+        MouseEventKind::ScrollUp => {
+            if app.focused_panel == FocusedPanel::Library {
+                // Scroll up in library (move selection up by 3)
+                for _ in 0..3 {
+                    let mut new_index = app.library_selected_index;
+                    while new_index > 0 {
+                        new_index -= 1;
+                        if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                            break;
+                        }
+                    }
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                        app.library_selected_index = new_index;
+                    }
+                }
+            } else if app.focused_panel == FocusedPanel::Lyrics {
+                app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(3);
+            } else if app.focused_panel == FocusedPanel::Logs {
+                app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(3);
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            if app.focused_panel == FocusedPanel::Library {
+                // Scroll down in library (move selection down by 3)
+                let entries_len = app.flat_library_len();
+                for _ in 0..3 {
+                    let mut new_index = app.library_selected_index;
+                    while new_index < entries_len.saturating_sub(1) {
+                        new_index += 1;
+                        if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                            break;
+                        }
+                    }
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                        app.library_selected_index = new_index;
+                    }
+                }
+            } else if app.focused_panel == FocusedPanel::Lyrics {
+                app.lyrics_scroll_offset += 3;
+            } else if app.focused_panel == FocusedPanel::Logs {
+                let log_len = app.log_buffer.len();
+                if log_len > 0 {
+                    app.logs_scroll_offset = (app.logs_scroll_offset + 3).min(log_len - 1);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -198,27 +352,84 @@ fn handle_library_action(app: &mut App, action: Action) {
             }
         }
         Action::MoveUp => {
-            if app.library_selected_index > 0 {
-                app.library_selected_index -= 1;
+            // Skip album headers, only select tracks
+            let mut new_index = app.library_selected_index;
+            while new_index > 0 {
+                new_index -= 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+            // If we ended up on a header and there's no track above, stay put
+            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                app.library_selected_index = new_index;
             }
         }
         Action::MoveDown => {
-            if entries_len > 0 && app.library_selected_index < entries_len - 1 {
-                app.library_selected_index += 1;
+            // Skip album headers, only select tracks
+            let mut new_index = app.library_selected_index;
+            while new_index < entries_len.saturating_sub(1) {
+                new_index += 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+            // If we ended up on a header at the end, stay put
+            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                app.library_selected_index = new_index;
             }
         }
         Action::PageUp => {
-            app.library_selected_index = app.library_selected_index.saturating_sub(20);
+            let target = app.library_selected_index.saturating_sub(20);
+            // Find nearest track at or after target
+            let mut new_index = target;
+            while new_index < entries_len {
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+                new_index += 1;
+            }
+            if new_index < entries_len {
+                app.library_selected_index = new_index;
+            }
         }
         Action::PageDown => {
             if entries_len > 0 {
-                app.library_selected_index = (app.library_selected_index + 20).min(entries_len - 1);
+                let target = (app.library_selected_index + 20).min(entries_len - 1);
+                // Find nearest track at or before target
+                let mut new_index = target;
+                loop {
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                        break;
+                    }
+                    if new_index == 0 {
+                        break;
+                    }
+                    new_index -= 1;
+                }
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    app.library_selected_index = new_index;
+                }
             }
         }
-        Action::Home => app.library_selected_index = 0,
+        Action::Home => {
+            // Find first track
+            for i in 0..entries_len {
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
+                    app.library_selected_index = i;
+                    break;
+                }
+            }
+        }
         Action::End => {
+            // Find last track
             if entries_len > 0 {
-                app.library_selected_index = entries_len - 1;
+                for i in (0..entries_len).rev() {
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
+                        app.library_selected_index = i;
+                        break;
+                    }
+                }
             }
         }
         Action::Select => {

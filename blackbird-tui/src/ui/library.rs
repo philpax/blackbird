@@ -88,6 +88,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
+    let list_width = inner.width as usize;
+
     let items: Vec<ListItem> = entries
         .iter()
         .enumerate()
@@ -119,7 +121,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let year_str = year.map(|y| format!(" ({y})")).unwrap_or_default();
                     let dur_str = seconds_to_hms_string(*duration, false);
 
-                    // Line 1: Album art (rows 0-1) + heart + album name + year + duration
+                    // Line 1: Album art (rows 0-1) + artist name
                     let line1 = Line::from(vec![
                         Span::styled(
                             "\u{2580}",
@@ -146,15 +148,17 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                                 .bg(colors.colors[1][3]),
                         ),
                         Span::raw(" "),
-                        Span::styled(heart, heart_style),
-                        Span::raw(" "),
-                        Span::styled(album, Style::default().fg(album_color)),
-                        Span::styled(year_str, Style::default().fg(album_year_color)),
-                        Span::raw(" "),
-                        Span::styled(dur_str, Style::default().fg(album_length_color)),
+                        Span::styled(artist, Style::default().fg(string_to_color(artist))),
                     ]);
 
-                    // Line 2: Album art (rows 2-3) + artist name
+                    // Line 2: Album art (rows 2-3) + heart + album name + year + duration (right-aligned)
+                    // Calculate padding for right-alignment
+                    let left_content_len = 4 + 1 + 1 + 1 + album.len() + year_str.len(); // art + space + heart + space + album + year
+                    let right_content = format!(" {dur_str}");
+                    let padding_needed = list_width
+                        .saturating_sub(left_content_len + right_content.len())
+                        .saturating_sub(1);
+
                     let line2 = Line::from(vec![
                         Span::styled(
                             "\u{2580}",
@@ -180,8 +184,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                                 .fg(colors.colors[2][3])
                                 .bg(colors.colors[3][3]),
                         ),
-                        Span::raw("   "),
-                        Span::styled(artist, Style::default().fg(string_to_color(artist))),
+                        Span::raw(" "),
+                        Span::styled(heart, heart_style),
+                        Span::raw(" "),
+                        Span::styled(album, Style::default().fg(album_color)),
+                        Span::styled(year_str, Style::default().fg(album_year_color)),
+                        Span::raw(" ".repeat(padding_needed)),
+                        Span::styled(right_content, Style::default().fg(album_length_color)),
                     ]);
 
                     let style = if is_selected {
@@ -229,8 +238,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(track_name_color)
                     };
 
-                    let mut spans = vec![
-                        Span::raw("      "),
+                    // Build left side: indent + heart + track number + play icon + title
+                    let mut left_spans = vec![
+                        Span::raw("     "),
                         Span::styled(heart, heart_style),
                         Span::raw(" "),
                         Span::styled(
@@ -239,39 +249,60 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         ),
                     ];
 
+                    let mut left_len = 5 + 1 + 1 + 6; // indent + heart + space + track_str formatted
+
                     if is_playing {
-                        spans.push(Span::styled(
+                        left_spans.push(Span::styled(
                             "\u{25B6} ",
                             Style::default()
                                 .fg(track_name_playing_color)
                                 .add_modifier(Modifier::BOLD),
                         ));
+                        left_len += 2;
                     }
 
-                    spans.push(Span::styled(title, title_style));
+                    left_spans.push(Span::styled(title, title_style));
+                    left_len += title.len();
 
-                    // Show artist if different from album artist.
-                    if let Some(track_artist) = artist
-                        && track_artist != album_artist
-                    {
-                        spans.push(Span::raw(" \u{2014} "));
-                        spans.push(Span::styled(
-                            track_artist,
-                            Style::default().fg(string_to_color(track_artist)),
-                        ));
-                    }
+                    // Build right side: [play_count] [artist] duration
+                    let mut right_spans = Vec::new();
+                    let mut right_len = 0;
 
                     if let Some(pc) = play_count {
-                        spans.push(Span::styled(
-                            format!(" ({pc})"),
+                        let pc_str = format!("({pc}) ");
+                        right_len += pc_str.len();
+                        right_spans.push(Span::styled(
+                            pc_str,
                             Style::default().fg(track_duration_color),
                         ));
                     }
 
-                    spans.push(Span::styled(
-                        format!("  {dur_str}"),
+                    // Show artist if different from album artist (no dash)
+                    if let Some(track_artist) = artist
+                        && track_artist != album_artist
+                    {
+                        let artist_str = format!("{track_artist} ");
+                        right_len += artist_str.len();
+                        right_spans.push(Span::styled(
+                            artist_str,
+                            Style::default().fg(string_to_color(track_artist)),
+                        ));
+                    }
+
+                    right_len += dur_str.len();
+                    right_spans.push(Span::styled(
+                        dur_str,
                         Style::default().fg(track_length_color),
                     ));
+
+                    // Calculate padding for right-alignment
+                    let padding_needed = list_width
+                        .saturating_sub(left_len + right_len)
+                        .saturating_sub(1);
+
+                    let mut spans = left_spans;
+                    spans.push(Span::raw(" ".repeat(padding_needed)));
+                    spans.extend(right_spans);
 
                     let line = Line::from(spans);
 
@@ -293,9 +324,44 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
 
-    // Use a ListState to manage selection/scrolling.
+    // Use a ListState to manage selection/scrolling with center-scroll behavior.
     let mut state = ListState::default();
     state.select(Some(selected_index));
+
+    // Calculate the line offset for center-scroll.
+    // GroupHeaders take 2 lines, Tracks take 1 line.
+    let mut line_offset = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        if i >= selected_index {
+            break;
+        }
+        match entry {
+            LibraryEntry::GroupHeader { .. } => line_offset += 2,
+            LibraryEntry::Track { .. } => line_offset += 1,
+        }
+    }
+
+    // Center the selected item in the visible area.
+    let half_height = (visible_height / 2).saturating_sub(1);
+    let centered_offset = line_offset.saturating_sub(half_height);
+
+    // Convert line offset back to item offset for ListState.
+    // We need to find which item index corresponds to this line offset.
+    let mut item_offset = 0usize;
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        if current_line >= centered_offset {
+            item_offset = i;
+            break;
+        }
+        match entry {
+            LibraryEntry::GroupHeader { .. } => current_line += 2,
+            LibraryEntry::Track { .. } => current_line += 1,
+        }
+        item_offset = i + 1;
+    }
+
+    *state.offset_mut() = item_offset.min(entries.len().saturating_sub(1));
 
     frame.render_stateful_widget(list, inner, &mut state);
 
