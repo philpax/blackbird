@@ -1,6 +1,7 @@
 mod app;
 mod config;
 mod cover_art;
+mod keys;
 mod ui;
 
 use std::time::{Duration, Instant};
@@ -9,9 +10,10 @@ use app::{App, FocusedPanel, LibraryEntry};
 use blackbird_core as bc;
 use config::Config;
 use cover_art::CoverArtCache;
+use keys::Action;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -28,7 +30,6 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let config = Config::load();
-    config.save();
 
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
@@ -45,10 +46,8 @@ fn main() -> anyhow::Result<()> {
         library_populated_tx,
     });
 
-    // Restore last playback mode
+    // Restore last playback state
     logic.set_playback_mode(config.last_playback.playback_mode);
-
-    // Set the scroll target to the last played track
     if let Some(track_id) = &config.last_playback.track_id {
         logic.set_scroll_target(track_id);
     }
@@ -103,7 +102,7 @@ fn run_app(
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                handle_key_event(app, key);
+                handle_key_event(app, &key);
             }
         }
 
@@ -118,50 +117,60 @@ fn run_app(
     }
 }
 
-fn handle_key_event(app: &mut App, key: event::KeyEvent) {
+fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
     // Handle volume editing mode first
     if app.volume_editing {
-        match key.code {
-            KeyCode::Up | KeyCode::Right => app.adjust_volume(0.05),
-            KeyCode::Down | KeyCode::Left => app.adjust_volume(-0.05),
-            KeyCode::Esc | KeyCode::Char('v') | KeyCode::Enter => {
-                app.volume_editing = false;
+        if let Some(action) = keys::volume_action(key) {
+            match action {
+                Action::VolumeUp => app.adjust_volume(0.05),
+                Action::VolumeDown => app.adjust_volume(-0.05),
+                Action::Back => app.volume_editing = false,
+                _ => {}
             }
-            _ => {}
         }
         return;
     }
 
     match app.focused_panel {
-        FocusedPanel::Library => handle_library_keys(app, key),
-        FocusedPanel::Search => handle_search_keys(app, key),
-        FocusedPanel::Lyrics => handle_lyrics_keys(app, key),
+        FocusedPanel::Library => {
+            if let Some(action) = keys::library_action(key) {
+                handle_library_action(app, action);
+            }
+        }
+        FocusedPanel::Search => {
+            if let Some(action) = keys::search_action(key) {
+                handle_search_action(app, action);
+            }
+        }
+        FocusedPanel::Lyrics => {
+            if let Some(action) = keys::lyrics_action(key) {
+                handle_lyrics_action(app, action);
+            }
+        }
     }
 }
 
-fn handle_library_keys(app: &mut App, key: event::KeyEvent) {
+fn handle_library_action(app: &mut App, action: Action) {
     let entries_len = app.build_flat_library().len();
 
-    match key.code {
-        KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Char(' ') => app.logic.toggle_current(),
-        KeyCode::Char('n') => app.logic.next(),
-        KeyCode::Char('p') => app.logic.previous(),
-        KeyCode::Char('s') => app.logic.stop_current(),
-        KeyCode::Char('m') => app.cycle_playback_mode(),
-        KeyCode::Char('/') => app.toggle_search(),
-        KeyCode::Char('l') => app.toggle_lyrics(),
-        KeyCode::Char('v') => app.volume_editing = true,
-        KeyCode::Char('g') => {
-            // Go to currently playing track
+    match action {
+        Action::Quit => app.should_quit = true,
+        Action::PlayPause => app.logic.toggle_current(),
+        Action::Next => app.logic.next(),
+        Action::Previous => app.logic.previous(),
+        Action::Stop => app.logic.stop_current(),
+        Action::CyclePlaybackMode => app.cycle_playback_mode(),
+        Action::Search => app.toggle_search(),
+        Action::Lyrics => app.toggle_lyrics(),
+        Action::VolumeMode => app.volume_editing = true,
+        Action::GotoPlaying => {
             if let Some(track_id) = app.logic.get_playing_track_id() {
                 app.scroll_to_track = Some(track_id);
             }
         }
-        KeyCode::Char('<') | KeyCode::Char(',') => app.seek_relative(-5),
-        KeyCode::Char('>') | KeyCode::Char('.') => app.seek_relative(5),
-        KeyCode::Char('*') => {
-            // Toggle star on selected item
+        Action::SeekBackward => app.seek_relative(-5),
+        Action::SeekForward => app.seek_relative(5),
+        Action::Star => {
             let entries = app.build_flat_library();
             if let Some(entry) = entries.get(app.library_selected_index) {
                 match entry {
@@ -176,102 +185,97 @@ fn handle_library_keys(app: &mut App, key: event::KeyEvent) {
                 }
             }
         }
-        KeyCode::Up => {
+        Action::MoveUp => {
             if app.library_selected_index > 0 {
                 app.library_selected_index -= 1;
             }
         }
-        KeyCode::Down => {
+        Action::MoveDown => {
             if entries_len > 0 && app.library_selected_index < entries_len - 1 {
                 app.library_selected_index += 1;
             }
         }
-        KeyCode::PageUp => {
+        Action::PageUp => {
             app.library_selected_index = app.library_selected_index.saturating_sub(20);
         }
-        KeyCode::PageDown => {
+        Action::PageDown => {
             if entries_len > 0 {
                 app.library_selected_index =
                     (app.library_selected_index + 20).min(entries_len - 1);
             }
         }
-        KeyCode::Home => {
-            app.library_selected_index = 0;
-        }
-        KeyCode::End => {
+        Action::Home => app.library_selected_index = 0,
+        Action::End => {
             if entries_len > 0 {
                 app.library_selected_index = entries_len - 1;
             }
         }
-        KeyCode::Enter => {
+        Action::Select => {
             let entries = app.build_flat_library();
-            if let Some(entry) = entries.get(app.library_selected_index) {
-                if let LibraryEntry::Track { id, .. } = entry {
-                    app.logic.request_play_track(id);
-                }
+            if let Some(LibraryEntry::Track { id, .. }) = entries.get(app.library_selected_index) {
+                app.logic.request_play_track(id);
             }
         }
         _ => {}
     }
 }
 
-fn handle_search_keys(app: &mut App, key: event::KeyEvent) {
-    match key.code {
-        KeyCode::Esc => app.toggle_search(),
-        KeyCode::Enter => {
+fn handle_search_action(app: &mut App, action: Action) {
+    match action {
+        Action::Back => app.toggle_search(),
+        Action::Select => {
             if let Some(track_id) = app.search_results.get(app.search_selected_index) {
                 app.logic.request_play_track(track_id);
                 app.toggle_search();
             }
         }
-        KeyCode::Up => {
+        Action::MoveUp => {
             if app.search_selected_index > 0 {
                 app.search_selected_index -= 1;
             }
         }
-        KeyCode::Down => {
+        Action::MoveDown => {
             if !app.search_results.is_empty()
                 && app.search_selected_index < app.search_results.len() - 1
             {
                 app.search_selected_index += 1;
             }
         }
-        KeyCode::Backspace => {
+        Action::Backspace => {
             app.search_query.pop();
             app.update_search();
         }
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'u' {
-                app.search_query.clear();
-                app.update_search();
-            } else {
-                app.search_query.push(c);
-                app.update_search();
-            }
+        Action::ClearLine => {
+            app.search_query.clear();
+            app.update_search();
+        }
+        Action::Char(c) => {
+            app.search_query.push(c);
+            app.update_search();
         }
         _ => {}
     }
 }
 
-fn handle_lyrics_keys(app: &mut App, key: event::KeyEvent) {
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('l') => app.toggle_lyrics(),
-        KeyCode::Char('q') => app.should_quit = true,
-        KeyCode::Up => {
+fn handle_lyrics_action(app: &mut App, action: Action) {
+    match action {
+        Action::Back => app.toggle_lyrics(),
+        Action::Quit => app.should_quit = true,
+        Action::MoveUp => {
             app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(1);
         }
-        KeyCode::Down => {
+        Action::MoveDown => {
             app.lyrics_scroll_offset += 1;
         }
-        KeyCode::PageUp => {
+        Action::PageUp => {
             app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(20);
         }
-        KeyCode::PageDown => {
+        Action::PageDown => {
             app.lyrics_scroll_offset += 20;
         }
-        KeyCode::Char(' ') => app.logic.toggle_current(),
-        KeyCode::Char('n') => app.logic.next(),
-        KeyCode::Char('p') => app.logic.previous(),
+        Action::PlayPause => app.logic.toggle_current(),
+        Action::Next => app.logic.next(),
+        Action::Previous => app.logic.previous(),
         _ => {}
     }
 }

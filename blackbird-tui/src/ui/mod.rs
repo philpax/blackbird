@@ -5,13 +5,16 @@ mod search;
 
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
 };
 
-use crate::app::{App, FocusedPanel};
+use crate::{
+    app::{App, FocusedPanel},
+    keys,
+};
 
 /// Hash a string to produce a pleasing colour (matches egui client behaviour).
 pub fn string_to_color(s: &str) -> Color {
@@ -24,7 +27,6 @@ pub fn string_to_color(s: &str) -> Color {
     let hash = hasher.finish();
     let hue = (hash % DISTINCT_COLOURS) as f32 / DISTINCT_COLOURS as f32;
 
-    // Convert HSV(hue, 0.75, 0.75) to RGB
     hsv_to_rgb(hue, 0.75, 0.75)
 }
 
@@ -58,18 +60,18 @@ fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
 
-    // Main layout: [NowPlaying + Controls] | [Scrub + Volume] | [Library/Search/Lyrics]
+    // Main layout matches egui: [NowPlaying] | [Scrub+Volume] | [Library/Search/Lyrics] | [Help]
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(5), // now playing + controls
-            Constraint::Length(1), // scrub bar
+            Constraint::Length(4), // now playing + controls
+            Constraint::Length(1), // scrub bar + volume
             Constraint::Min(3),   // library / search / lyrics
             Constraint::Length(1), // help bar
         ])
         .split(size);
 
-    // Draw now playing area
+    // Draw now playing area (track info, album art, controls)
     now_playing::draw(frame, app, main_chunks[0]);
 
     // Draw scrub bar + volume
@@ -86,7 +88,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_help_bar(frame, app, main_chunks[3]);
 }
 
-fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let details = app.logic.get_track_display_details();
 
     let (position_secs, duration_secs) = details
@@ -97,9 +99,9 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
     let position_str = blackbird_core::util::seconds_to_hms_string(position_secs as u32, true);
     let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
     let volume = app.logic.get_volume();
-    let vol_str = format!("Vol: {:3.0}%", volume * 100.0);
+    let vol_str = format!("Vol:{:3.0}%", volume * 100.0);
 
-    let label = format!("{position_str} / {duration_str}");
+    let label = format!(" {position_str} / {duration_str} ");
 
     let ratio = if duration_secs > 0.0 {
         (position_secs / duration_secs).clamp(0.0, 1.0)
@@ -114,7 +116,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
         .split(area);
 
     let gauge = Gauge::default()
-        .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
+        .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 30, 40)))
         .ratio(ratio as f64)
         .label(label);
     frame.render_widget(gauge, chunks[0]);
@@ -122,58 +124,38 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
     let vol_style = if app.volume_editing {
         Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::White)
+        Style::default().fg(Color::DarkGray)
     };
     let vol_widget = Paragraph::new(Span::styled(format!(" {vol_str}"), vol_style));
     frame.render_widget(vol_widget, chunks[1]);
 }
 
-fn draw_help_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let mode = app.logic.get_playback_mode();
-    let mode_label = format!(":mode({mode}) ");
 
-    let help_items: Vec<Span> = match app.focused_panel {
-        FocusedPanel::Library => vec![
-            Span::styled(" q", Style::default().fg(Color::Yellow)),
-            Span::raw(":quit "),
-            Span::styled("Space", Style::default().fg(Color::Yellow)),
-            Span::raw(":play/pause "),
-            Span::styled("n/p", Style::default().fg(Color::Yellow)),
-            Span::raw(":next/prev "),
-            Span::styled("s", Style::default().fg(Color::Yellow)),
-            Span::raw(":stop "),
-            Span::styled("m", Style::default().fg(Color::Yellow)),
-            Span::raw(mode_label),
-            Span::styled("/", Style::default().fg(Color::Yellow)),
-            Span::raw(":search "),
-            Span::styled("l", Style::default().fg(Color::Yellow)),
-            Span::raw(":lyrics "),
-            Span::styled("v", Style::default().fg(Color::Yellow)),
-            Span::raw(":vol "),
-            Span::styled("*", Style::default().fg(Color::Yellow)),
-            Span::raw(":star "),
-            Span::styled("</>", Style::default().fg(Color::Yellow)),
-            Span::raw(":seek "),
-            Span::styled("g", Style::default().fg(Color::Yellow)),
-            Span::raw(":goto playing"),
-        ],
-        FocusedPanel::Search => vec![
-            Span::styled("Esc", Style::default().fg(Color::Yellow)),
-            Span::raw(":close "),
-            Span::styled("Enter", Style::default().fg(Color::Yellow)),
-            Span::raw(":play "),
-            Span::styled("Up/Down", Style::default().fg(Color::Yellow)),
-            Span::raw(":navigate"),
-        ],
-        FocusedPanel::Lyrics => vec![
-            Span::styled("Esc/l", Style::default().fg(Color::Yellow)),
-            Span::raw(":close "),
-            Span::styled("Up/Down", Style::default().fg(Color::Yellow)),
-            Span::raw(":scroll"),
-        ],
+    let help_actions: &[keys::Action] = match app.focused_panel {
+        FocusedPanel::Library => keys::LIBRARY_HELP,
+        FocusedPanel::Search => keys::SEARCH_HELP,
+        FocusedPanel::Lyrics => keys::LYRICS_HELP,
     };
 
-    let help_line = Line::from(help_items);
-    let help = Paragraph::new(help_line).style(Style::default().bg(Color::DarkGray));
+    let mut spans: Vec<Span> = Vec::new();
+    spans.push(Span::raw(" "));
+
+    for action in help_actions {
+        if let Some((key, label)) = action.help_label() {
+            spans.push(Span::styled(key, Style::default().fg(Color::Yellow)));
+            spans.push(Span::raw(format!(":{label} ")));
+        }
+    }
+
+    // Append playback mode for library view
+    if app.focused_panel == FocusedPanel::Library {
+        spans.push(Span::styled("m", Style::default().fg(Color::Yellow)));
+        spans.push(Span::raw(format!(":mode({mode}) ")));
+    }
+
+    let help_line = Line::from(spans);
+    let help = Paragraph::new(help_line).style(Style::default().bg(Color::Rgb(30, 30, 40)));
     frame.render_widget(help, area);
 }
