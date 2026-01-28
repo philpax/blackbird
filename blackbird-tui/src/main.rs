@@ -143,7 +143,7 @@ fn handle_mouse_event(
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4), // now playing + controls
+            Constraint::Length(3), // now playing + controls (2 lines + 1 margin)
             Constraint::Length(1), // scrub bar + volume
             Constraint::Min(3),    // library / search / lyrics
             Constraint::Length(1), // help bar
@@ -174,9 +174,8 @@ fn handle_mouse_event(
                 && x < library_area.x + library_area.width
                 && app.focused_panel == FocusedPanel::Library
             {
-                // Calculate which entry was clicked
-                // Account for border (1 line at top)
-                let inner_y = y.saturating_sub(library_area.y + 1);
+                // Calculate which entry was clicked (no border anymore)
+                let inner_y = y.saturating_sub(library_area.y);
 
                 // Convert click position to entry index
                 // GroupHeaders take 2 lines, Tracks take 1 line
