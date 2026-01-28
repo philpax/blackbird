@@ -5,10 +5,10 @@ use blackbird_core::{
 };
 use egui::{
     CentralPanel, Color32, Context, Key, Sense, TextEdit, TextFormat, TextStyle, Ui, Vec2, Vec2b,
-    ViewportBuilder, ViewportId, vec2,
+    ViewportId, vec2,
 };
 
-use crate::{bc, ui::style};
+use crate::{bc, ui::style, ui::util::global_window_builder};
 
 /// Main search window UI
 pub fn ui(
@@ -27,88 +27,83 @@ pub fn ui(
     let mut requested_track_id = None;
     let mut clear = false;
 
-    ctx.show_viewport_immediate(
-        search_viewport_id(),
-        ViewportBuilder::default()
-            .with_title("blackbird: search")
-            .with_inner_size([800.0, 300.0])
-            .with_active(true)
-            .with_always_on_top(),
-        |ctx, _class| {
-            CentralPanel::default().show(ctx, |ui| {
-                let response = ui.add_sized(
-                    Vec2::new(ui.available_width(), ui.text_style_height(&TextStyle::Body)),
-                    TextEdit::singleline(search_query).hint_text("Your search here..."),
-                );
-                response.request_focus();
+    let viewport_builder =
+        global_window_builder(ctx, vec2(800.0, 300.0)).with_title("blackbird: search");
 
-                let mut play_first_track = false;
-                if response.has_focus() {
-                    if ui.input(|i| i.key_pressed(Key::Escape)) {
-                        clear = true;
-                    } else if ui.input(|i| i.key_pressed(Key::Enter)) {
-                        play_first_track = true;
-                    }
-                }
+    ctx.show_viewport_immediate(search_viewport_id(), viewport_builder, |ctx, _class| {
+        CentralPanel::default().show(ctx, |ui| {
+            let response = ui.add_sized(
+                Vec2::new(ui.available_width(), ui.text_style_height(&TextStyle::Body)),
+                TextEdit::singleline(search_query).hint_text("Your search here..."),
+            );
+            response.request_focus();
 
-                egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
-                    ui.set_min_size(ui.available_size());
-
-                    let length = search_query.len();
-                    if length == 0 {
-                        ui.label("Type something in to search...");
-                        return;
-                    } else if length < 3 {
-                        ui.label("Query too short, please enter at least 3 characters...");
-                        return;
-                    }
-
-                    let app_state = logic.get_state();
-                    let mut app_state = app_state.write().unwrap();
-                    let results = app_state.library.search(search_query);
-                    if results.is_empty() {
-                        ui.label("No results found...");
-                        return;
-                    }
-
-                    // If Enter was pressed and we have results, select the first item
-                    if play_first_track && !results.is_empty() {
-                        requested_track_id = Some(results[0].clone());
-                    }
-
-                    let response = egui::ScrollArea::new(Vec2b::TRUE)
-                        .auto_shrink(Vec2b::FALSE)
-                        .show_rows(
-                            ui,
-                            ui.text_style_height(&TextStyle::Body),
-                            results.len(),
-                            |ui, row_indices| {
-                                render_search_results(ui, row_indices, &results, &app_state, style)
-                            },
-                        );
-
-                    if requested_track_id.is_none() {
-                        requested_track_id = response.inner;
-                    }
-                });
-
-                // Check if viewport was closed
-                if ctx.input(|i| i.viewport().close_requested()) {
+            let mut play_first_track = false;
+            if response.has_focus() {
+                if ui.input(|i| i.key_pressed(Key::Escape)) {
                     clear = true;
+                } else if ui.input(|i| i.key_pressed(Key::Enter)) {
+                    play_first_track = true;
+                }
+            }
+
+            egui::Frame::dark_canvas(ui.style()).show(ui, |ui| {
+                ui.set_min_size(ui.available_size());
+
+                let length = search_query.len();
+                if length == 0 {
+                    ui.label("Type something in to search...");
+                    return;
+                } else if length < 3 {
+                    ui.label("Query too short, please enter at least 3 characters...");
+                    return;
                 }
 
-                if let Some(track_id) = &requested_track_id {
-                    logic.request_play_track(track_id);
-                    clear = true;
+                let app_state = logic.get_state();
+                let mut app_state = app_state.write().unwrap();
+                let results = app_state.library.search(search_query);
+                if results.is_empty() {
+                    ui.label("No results found...");
+                    return;
                 }
 
-                if clear {
-                    *search_open = false;
-                    search_query.clear();
+                // If Enter was pressed and we have results, select the first item
+                if play_first_track && !results.is_empty() {
+                    requested_track_id = Some(results[0].clone());
+                }
+
+                let response = egui::ScrollArea::new(Vec2b::TRUE)
+                    .auto_shrink(Vec2b::FALSE)
+                    .show_rows(
+                        ui,
+                        ui.text_style_height(&TextStyle::Body),
+                        results.len(),
+                        |ui, row_indices| {
+                            render_search_results(ui, row_indices, &results, &app_state, style)
+                        },
+                    );
+
+                if requested_track_id.is_none() {
+                    requested_track_id = response.inner;
                 }
             });
-        },
-    );
+
+            // Check if viewport was closed
+            if ctx.input(|i| i.viewport().close_requested()) {
+                clear = true;
+            }
+
+            if let Some(track_id) = &requested_track_id {
+                logic.request_play_track(track_id);
+                clear = true;
+            }
+
+            if clear {
+                *search_open = false;
+                search_query.clear();
+            }
+        });
+    });
 }
 
 /// Renders search result rows and returns the clicked track ID if any

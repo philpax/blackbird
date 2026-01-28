@@ -67,3 +67,18 @@ pub fn draw_heart(
 
     (response, size)
 }
+
+/// Create a viewport builder for a global popup window, centered on the monitor.
+///
+/// Uses `monitor_size` from the viewport info to calculate the centered position.
+/// Falls back to an unpositioned viewport if monitor size is unavailable.
+pub fn global_window_builder(ctx: &Context, size: Vec2) -> ViewportBuilder {
+    ctx.input(|i| i.viewport().monitor_size)
+        .map(|monitor_size| {
+            let pos = (monitor_size - size) / 2.0;
+            ViewportBuilder::default().with_position(pos.to_pos2())
+        })
+        .unwrap_or_default()
+        .with_inner_size(size)
+        .with_active(true)
+}
