@@ -91,7 +91,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4), // now playing + controls
+            Constraint::Length(3), // now playing + controls (2 lines + 1 margin)
             Constraint::Length(1), // scrub bar + volume
             Constraint::Min(3),    // library / search / lyrics
             Constraint::Length(1), // help bar

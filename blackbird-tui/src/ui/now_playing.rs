@@ -106,7 +106,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     ));
 
     let info_lines = vec![
-        Line::from(""),
         Line::from(track_spans),
         Line::from(album_spans),
     ];
@@ -139,7 +138,6 @@ fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let lines = vec![
-        Line::from(""),
         Line::from(Span::styled(
             " blackbird",
             Style::default()
@@ -213,7 +211,7 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
 
     // Transport row:  |<  []  >|
     let transport = Line::from(vec![
-        Span::styled(" \u{23EE}", Style::default().fg(style.text_color())),
+        Span::styled("\u{23EE}", Style::default().fg(style.text_color())),
         Span::raw("  "),
         Span::styled(
             play_icon,
@@ -227,12 +225,12 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
 
     // Mode line
     let mode_line = Line::from(vec![Span::styled(
-        format!(" [{mode}]"),
+        format!("[{mode}]"),
         Style::default().fg(style.track_duration_color()),
     )]);
 
-    let lines = vec![Line::from(""), transport, mode_line];
+    let lines = vec![transport, mode_line];
 
-    let widget = Paragraph::new(lines).alignment(Alignment::Left);
+    let widget = Paragraph::new(lines).alignment(Alignment::Right);
     frame.render_widget(widget, area);
 }

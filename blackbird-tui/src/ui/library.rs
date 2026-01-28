@@ -6,7 +6,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState},
+    widgets::{List, ListItem, ListState},
 };
 
 use crate::{
@@ -18,7 +18,6 @@ use super::{StyleExt, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
-    let text_color = app.config.style.text_color();
     let album_color = app.config.style.album_color();
     let album_year_color = app.config.style.album_year_color();
     let album_length_color = app.config.style.album_length_color();
@@ -31,17 +30,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let has_loaded = app.logic.has_loaded_all_tracks();
 
-    let block = Block::default()
-        .title(if has_loaded {
-            " Library "
-        } else {
-            " Library (loading...) "
-        })
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(text_color));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    // Use the full area directly (no frame/border)
+    let inner = area;
 
     if !has_loaded {
         let loading = ratatui::widgets::Paragraph::new("Loading library...")
@@ -151,12 +141,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::styled(artist, Style::default().fg(string_to_color(artist))),
                     ]);
 
-                    // Line 2: Album art (rows 2-3) + heart + album name + year + duration (right-aligned)
+                    // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
                     // Calculate padding for right-alignment
-                    let left_content_len = 4 + 1 + 1 + 1 + album.len() + year_str.len(); // art + space + heart + space + album + year
-                    let right_content = format!(" {dur_str}");
+                    let left_content_len = 4 + 1 + album.len() + year_str.len(); // art + space + album + year
+                    let right_content = format!(" {dur_str} ");
+                    let right_len = right_content.len() + 1; // duration + heart
                     let padding_needed = list_width
-                        .saturating_sub(left_content_len + right_content.len())
+                        .saturating_sub(left_content_len + right_len)
                         .saturating_sub(1);
 
                     let line2 = Line::from(vec![
@@ -185,12 +176,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                                 .bg(colors.colors[3][3]),
                         ),
                         Span::raw(" "),
-                        Span::styled(heart, heart_style),
-                        Span::raw(" "),
                         Span::styled(album, Style::default().fg(album_color)),
                         Span::styled(year_str, Style::default().fg(album_year_color)),
                         Span::raw(" ".repeat(padding_needed)),
                         Span::styled(right_content, Style::default().fg(album_length_color)),
+                        Span::styled(heart, heart_style),
                     ]);
 
                     let style = if is_selected {
@@ -238,18 +228,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(track_name_color)
                     };
 
-                    // Build left side: indent + heart + track number + play icon + title
+                    // Build left side: indent + track number + play icon + title + playcount
                     let mut left_spans = vec![
                         Span::raw("     "),
-                        Span::styled(heart, heart_style),
-                        Span::raw(" "),
                         Span::styled(
                             format!("{:>5} ", track_str),
                             Style::default().fg(track_number_color),
                         ),
                     ];
 
-                    let mut left_len = 5 + 1 + 1 + 6; // indent + heart + space + track_str formatted
+                    let mut left_len = 5 + 6; // indent + track_str formatted
 
                     if is_playing {
                         left_spans.push(Span::styled(
@@ -264,18 +252,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     left_spans.push(Span::styled(title, title_style));
                     left_len += title.len();
 
-                    // Build right side: [play_count] [artist] duration
-                    let mut right_spans = Vec::new();
-                    let mut right_len = 0;
-
+                    // Add playcount immediately after title (no parens, same color scheme as egui)
                     if let Some(pc) = play_count {
-                        let pc_str = format!("({pc}) ");
-                        right_len += pc_str.len();
-                        right_spans.push(Span::styled(
+                        let pc_str = format!(" {pc}");
+                        left_len += pc_str.len();
+                        left_spans.push(Span::styled(
                             pc_str,
                             Style::default().fg(track_duration_color),
                         ));
                     }
+
+                    // Build right side: [artist] duration heart
+                    let mut right_spans = Vec::new();
+                    let mut right_len = 0;
 
                     // Show artist if different from album artist (no dash)
                     if let Some(track_artist) = artist
@@ -289,11 +278,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         ));
                     }
 
-                    right_len += dur_str.len();
+                    right_len += dur_str.len() + 2; // duration + space + heart
                     right_spans.push(Span::styled(
                         dur_str,
                         Style::default().fg(track_length_color),
                     ));
+                    right_spans.push(Span::raw(" "));
+                    right_spans.push(Span::styled(heart, heart_style));
 
                     // Calculate padding for right-alignment
                     let padding_needed = list_width
