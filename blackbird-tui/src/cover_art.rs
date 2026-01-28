@@ -8,18 +8,18 @@ use std::{
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::style::Color;
 
-/// 4 columns × 2 rows of colours extracted from album art.
-/// This ratio better matches terminal character aspect ratio (chars are ~2x tall as wide).
+/// 4 columns × 4 rows of colours extracted from album art.
+/// This allows 2 terminal lines of album art (each half-block shows 2 rows).
 #[derive(Debug, Clone, Copy)]
 pub struct ArtColors {
     /// Colors arranged as [row][col], where row 0 is top, col 0 is left.
-    pub colors: [[Color; 4]; 2],
+    pub colors: [[Color; 4]; 4],
 }
 
 impl Default for ArtColors {
     fn default() -> Self {
         Self {
-            colors: [[Color::DarkGray; 4]; 2],
+            colors: [[Color::DarkGray; 4]; 4],
         }
     }
 }
@@ -156,7 +156,7 @@ enum CacheEntryState {
     Loaded(QuadrantColors),
 }
 
-/// Computes the average colour of each region in a 4×2 grid (4 cols, 2 rows).
+/// Computes the average colour of each region in a 4×4 grid (4 cols, 4 rows).
 fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
     let Ok(img) = image::load_from_memory(image_data) else {
         return ArtColors::default();
@@ -196,17 +196,17 @@ fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
         )
     };
 
-    // 4 columns, 2 rows
+    // 4 columns, 4 rows
     let col_width = w / 4;
-    let row_height = h / 2;
+    let row_height = h / 4;
 
-    let mut colors = [[Color::DarkGray; 4]; 2];
+    let mut colors = [[Color::DarkGray; 4]; 4];
     for (row, row_colors) in colors.iter_mut().enumerate() {
         for (col, color) in row_colors.iter_mut().enumerate() {
             let x0 = col * col_width;
             let y0 = row * row_height;
             let x1 = if col == 3 { w } else { (col + 1) * col_width };
-            let y1 = if row == 1 { h } else { (row + 1) * row_height };
+            let y1 = if row == 3 { h } else { (row + 1) * row_height };
             *color = average_region(x0, y0, x1.max(x0 + 1), y1.max(y0 + 1));
         }
     }

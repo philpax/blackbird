@@ -167,31 +167,31 @@ fn draw_album_art(
         return;
     }
 
-    // Render 4 cols × 2 rows using half-block characters (U+2580 upper half).
+    // Render 4 cols × 4 rows using half-block characters (U+2580 upper half).
     // Each terminal character shows 2 vertical colors: fg = top row, bg = bottom row.
-    // This gives us 4 columns × 2 rows in just 1 terminal row, 4 characters wide.
-    // We repeat multiple terminal rows to make it visually larger.
+    // This gives us 4 columns × 4 rows in 2 terminal rows, 4 characters wide.
 
     let art_width = 4u16; // 4 columns of color
-    let art_height = 2u16; // 2 terminal rows (each showing top/bottom via half-block)
+    let art_height = 2u16; // 2 terminal rows (each showing 2 color rows via half-block)
     let left_x = area.x + 1; // +1 for left margin
 
     // Center vertically
     let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
 
-    // Each terminal row repeats the same pattern to fill vertical space.
-    // We'll draw `art_height` terminal rows, each using half-blocks.
+    // Terminal row 0: color rows 0-1, Terminal row 1: color rows 2-3
     for term_row in 0..art_height.min(area.height) {
         let row_rect = Rect::new(left_x, top_y + term_row, art_width, 1);
         let mut spans = Vec::new();
 
+        let color_row_top = (term_row * 2) as usize;
+        let color_row_bot = color_row_top + 1;
+
         for col in 0..4 {
-            // Use half-block: fg = top color (row 0), bg = bottom color (row 1)
             spans.push(Span::styled(
                 "\u{2580}",
                 Style::default()
-                    .fg(art.colors[0][col])
-                    .bg(art.colors[1][col]),
+                    .fg(art.colors[color_row_top][col])
+                    .bg(art.colors[color_row_bot][col]),
             ));
         }
 

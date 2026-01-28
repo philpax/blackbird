@@ -119,8 +119,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let year_str = year.map(|y| format!(" ({y})")).unwrap_or_default();
                     let dur_str = seconds_to_hms_string(*duration, false);
 
-                    let line = Line::from(vec![
-                        // Album art indicator: 4 half-blocks showing 4×2 color grid.
+                    // Line 1: Album art (rows 0-1) + heart + album name + year + duration
+                    let line1 = Line::from(vec![
                         Span::styled(
                             "\u{2580}",
                             Style::default()
@@ -148,12 +148,40 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::raw(" "),
                         Span::styled(heart, heart_style),
                         Span::raw(" "),
-                        Span::styled(artist, Style::default().fg(string_to_color(artist))),
-                        Span::raw(" \u{2014} "),
                         Span::styled(album, Style::default().fg(album_color)),
                         Span::styled(year_str, Style::default().fg(album_year_color)),
                         Span::raw(" "),
                         Span::styled(dur_str, Style::default().fg(album_length_color)),
+                    ]);
+
+                    // Line 2: Album art (rows 2-3) + artist name
+                    let line2 = Line::from(vec![
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[2][0])
+                                .bg(colors.colors[3][0]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[2][1])
+                                .bg(colors.colors[3][1]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[2][2])
+                                .bg(colors.colors[3][2]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[2][3])
+                                .bg(colors.colors[3][3]),
+                        ),
+                        Span::raw("   "),
+                        Span::styled(artist, Style::default().fg(string_to_color(artist))),
                     ]);
 
                     let style = if is_selected {
@@ -162,7 +190,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default()
                     };
 
-                    ListItem::new(line).style(style)
+                    ListItem::new(vec![line1, line2]).style(style)
                 }
                 LibraryEntry::Track {
                     id,
