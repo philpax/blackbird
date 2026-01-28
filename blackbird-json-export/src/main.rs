@@ -33,8 +33,8 @@ async fn main() -> anyhow::Result<()> {
     let mut output = Output::new();
     for group in fetched.groups {
         output.push(OutputGroup {
-            artist: group.artist.clone(),
-            album: group.album.clone(),
+            artist: group.artist.to_string(),
+            album: group.album.to_string(),
             year: group.year,
             duration: group.duration,
             tracks: group
@@ -43,8 +43,8 @@ async fn main() -> anyhow::Result<()> {
                 .map(|id| {
                     let track = fetched.track_map.get(id).unwrap();
                     OutputTrack {
-                        title: track.title.clone(),
-                        artist: track.artist.clone(),
+                        title: track.title.to_string(),
+                        artist: track.artist.as_ref().map(|a| a.to_string()),
                         track: track.track,
                         year: track.year,
                         duration: track.duration,

@@ -42,7 +42,12 @@
 ### Rust edition and linting
 
 - Use Rust 2024 edition.
-- Lint and format with `cargo clippy --all-features --all-targets` and `cargo fmt`. Ensure this is run at the end of each complete task. (You do not need to do this for intermediate steps.)
+- Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
+  - `cargo fmt --all -- --check`
+  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `cargo clippy --all-targets --no-default-features -- -D warnings`
+  - `cargo test --workspace`
+  - `cargo test --workspace --no-default-features`
 
 ### Type system patterns
 
