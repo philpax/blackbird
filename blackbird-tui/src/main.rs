@@ -105,8 +105,9 @@ fn run_app(
     let mut last_click: Option<(Instant, u16, u16)> = None;
 
     loop {
-        let size = terminal.size()?;
         terminal.draw(|frame| ui::draw(frame, app))?;
+        let term_size = terminal.size()?;
+        let size = Rect::new(0, 0, term_size.width, term_size.height);
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
