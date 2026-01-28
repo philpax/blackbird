@@ -78,7 +78,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    let list_width = inner.width as usize;
+    // Calculate total content height in lines to determine if scrollbar is needed.
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+
+    let has_scrollbar = total_lines > visible_height;
+    // Subtract 1 from width if scrollbar is shown to prevent overlap
+    let list_width = inner.width as usize - if has_scrollbar { 1 } else { 0 };
 
     let items: Vec<ListItem> = entries
         .iter()
@@ -359,17 +370,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Save the offset for use by keyboard navigation.
     app.library_scroll_offset = state.offset();
 
-    // Render scrollbar on the right edge.
-    // Calculate total content height in lines.
-    let total_lines: usize = entries
-        .iter()
-        .map(|e| match e {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        })
-        .sum();
-
-    if total_lines > visible_height {
+    // Render scrollbar on the right edge if needed.
+    if has_scrollbar {
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(centered_offset);
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .begin_symbol(None)

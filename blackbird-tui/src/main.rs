@@ -174,38 +174,46 @@ fn handle_mouse_event(
                 && x < library_area.x + library_area.width
                 && app.focused_panel == FocusedPanel::Library
             {
-                // Calculate which entry was clicked (no border anymore)
-                let inner_y = y.saturating_sub(library_area.y);
-
-                // Convert click position to entry index
-                // GroupHeaders take 2 lines, Tracks take 1 line
                 let entries = app.get_flat_library().to_vec();
-                let scroll_offset = app.library_scroll_offset;
+                let scrollbar_x = library_area.x + library_area.width - 1;
 
-                let mut line = 0usize;
-                let mut clicked_index = None;
+                // Check if clicking on scrollbar (rightmost column)
+                if x == scrollbar_x {
+                    // Scroll to position based on click Y
+                    scroll_library_to_y(app, &entries, library_area, y);
+                } else {
+                    // Calculate which entry was clicked (no border anymore)
+                    let inner_y = y.saturating_sub(library_area.y);
 
-                for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
-                    let entry_height = match entry {
-                        LibraryEntry::GroupHeader { .. } => 2,
-                        LibraryEntry::Track { .. } => 1,
-                    };
+                    // Convert click position to entry index
+                    // GroupHeaders take 2 lines, Tracks take 1 line
+                    let scroll_offset = app.library_scroll_offset;
 
-                    if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
-                        clicked_index = Some(i);
-                        break;
+                    let mut line = 0usize;
+                    let mut clicked_index = None;
+
+                    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+                        let entry_height = match entry {
+                            LibraryEntry::GroupHeader { .. } => 2,
+                            LibraryEntry::Track { .. } => 1,
+                        };
+
+                        if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
+                            clicked_index = Some(i);
+                            break;
+                        }
+                        line += entry_height;
                     }
-                    line += entry_height;
-                }
 
-                if let Some(index) = clicked_index {
-                    // Only select tracks, not group headers
-                    if let Some(LibraryEntry::Track { id, .. }) = entries.get(index) {
-                        app.library_selected_index = index;
+                    if let Some(index) = clicked_index {
+                        // Only select tracks, not group headers
+                        if let Some(LibraryEntry::Track { id, .. }) = entries.get(index) {
+                            app.library_selected_index = index;
 
-                        if is_double_click {
-                            // Double-click plays the track
-                            app.logic.request_play_track(id);
+                            if is_double_click {
+                                // Double-click plays the track
+                                app.logic.request_play_track(id);
+                            }
                         }
                     }
                 }
@@ -274,7 +282,69 @@ fn handle_mouse_event(
                 }
             }
         }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            // Handle scrollbar dragging in library
+            if app.focused_panel == FocusedPanel::Library {
+                let x = mouse.column;
+                let y = mouse.row;
+
+                if y >= library_area.y
+                    && y < library_area.y + library_area.height
+                    && x >= library_area.x
+                    && x < library_area.x + library_area.width
+                {
+                    let scrollbar_x = library_area.x + library_area.width - 1;
+                    if x == scrollbar_x {
+                        let entries = app.get_flat_library().to_vec();
+                        scroll_library_to_y(app, &entries, library_area, y);
+                    }
+                }
+            }
+        }
         _ => {}
+    }
+}
+
+/// Scroll library to a position based on Y coordinate (for scrollbar dragging).
+fn scroll_library_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, y: u16) {
+    let visible_height = library_area.height as usize;
+    let inner_y = y.saturating_sub(library_area.y);
+    let ratio = inner_y as f32 / visible_height as f32;
+
+    // Calculate total lines
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+
+    // Find the entry at this line position
+    let target_line = ((total_lines as f32) * ratio) as usize;
+
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let entry_height = match entry {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        };
+
+        if current_line + entry_height > target_line {
+            // Find nearest track at or after this position
+            let mut track_index = i;
+            while track_index < entries.len() {
+                if let LibraryEntry::Track { .. } = &entries[track_index] {
+                    break;
+                }
+                track_index += 1;
+            }
+            if track_index < entries.len() {
+                app.library_selected_index = track_index;
+            }
+            return;
+        }
+        current_line += entry_height;
     }
 }
 
