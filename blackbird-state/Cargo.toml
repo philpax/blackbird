@@ -8,3 +8,4 @@ blackbird-subsonic = { path = "../blackbird-subsonic" }
 icu_collator = "2.0.0"
 
 serde = { workspace = true }
+smol_str = { version = "0.3.5", features = ["serde"] }

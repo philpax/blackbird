@@ -17,3 +17,4 @@ blackbird-subsonic = { path = "../blackbird-subsonic" }
 blackbird-state = { path = "../blackbird-state" }
 
 rodio = { git = "https://github.com/RustAudio/rodio.git", optional = true }
+smol_str = { version = "0.3.5", features = ["serde"] }

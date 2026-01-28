@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 
 use crate::{AlbumId, bs};
 
@@ -17,9 +18,9 @@ pub struct Track {
     /// The track ID
     pub id: TrackId,
     /// The track title
-    pub title: String,
+    pub title: SmolStr,
     /// The track artist
-    pub artist: Option<String>,
+    pub artist: Option<SmolStr>,
     /// The track number
     pub track: Option<u32>,
     /// The release year
@@ -41,14 +42,17 @@ impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
         Track {
             id: TrackId(child.id),
-            title: child.title,
-            artist: child.artist.filter(|a| a != "[Unknown Artist]"),
+            title: child.title.into(),
+            artist: child
+                .artist
+                .filter(|a| a != "[Unknown Artist]")
+                .map(|a| a.into()),
             track: child.track,
             year: child.year,
             _genre: child.genre,
             duration: child.duration,
             disc_number: child.disc_number,
-            album_id: child.album_id.map(AlbumId),
+            album_id: child.album_id.map(|id| AlbumId(id.into())),
             starred: child.starred.is_some(),
             play_count: child.play_count,
         }

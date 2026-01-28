@@ -43,7 +43,8 @@ pub fn ui<'a>(
             // Artist
             ui.add(
                 Label::new(
-                    RichText::new(&group.artist).color(style::string_to_colour(&group.artist)),
+                    RichText::new(group.artist.as_str())
+                        .color(style::string_to_colour(&group.artist)),
                 )
                 .selectable(false),
             );
@@ -125,7 +126,7 @@ pub fn ui<'a>(
         let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
         egui::Image::new(cover_art_cache.get(
             logic,
-            group.cover_art_id.as_deref(),
+            group.cover_art_id.as_ref(),
             CachePriority::Visible,
         ))
         .show_loading_spinner(false)

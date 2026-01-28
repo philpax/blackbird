@@ -7,9 +7,13 @@ use std::{collections::HashMap, sync::Arc};
 
 pub use blackbird_subsonic as bs;
 use blackbird_subsonic::ArtistID3;
+use smol_str::{SmolStr, format_smolstr};
 
 mod album;
 pub use album::{Album, AlbumId};
+
+mod cover_art;
+pub use cover_art::CoverArtId;
 
 mod group;
 pub use group::Group;
@@ -119,7 +123,7 @@ pub async fn fetch_all(
             response
                 .artist
                 .into_iter()
-                .map(|a| (ArtistId(a.id.clone()), a)),
+                .map(|a| (ArtistId(a.id.clone().into()), a)),
         );
 
         offset += artist_count as u32;
@@ -231,7 +235,7 @@ pub async fn fetch_all(
     })
 }
 
-fn normalized_artist_sort_name(album: &Album, artists: &HashMap<ArtistId, ArtistID3>) -> String {
+fn normalized_artist_sort_name(album: &Album, artists: &HashMap<ArtistId, ArtistID3>) -> SmolStr {
     let album_artist = album.artist.to_lowercase();
     album
         .artist_id
@@ -239,22 +243,22 @@ fn normalized_artist_sort_name(album: &Album, artists: &HashMap<ArtistId, Artist
         .and_then(|id| {
             let raw_artist_sort_name = artists.get(id)?.sort_name.as_ref()?;
             Some(if album_artist.starts_with("the ") {
-                format!("the {raw_artist_sort_name}")
+                format_smolstr!("the {raw_artist_sort_name}")
             } else if album_artist.starts_with("an ") {
-                format!("an {raw_artist_sort_name}")
+                format_smolstr!("an {raw_artist_sort_name}")
             } else if album_artist.starts_with("a ") {
-                format!("a {raw_artist_sort_name}")
+                format_smolstr!("a {raw_artist_sort_name}")
             } else if album_artist.starts_with("el ") {
-                format!("el {raw_artist_sort_name}")
+                format_smolstr!("el {raw_artist_sort_name}")
             } else if album_artist.starts_with("los ") {
-                format!("los {raw_artist_sort_name}")
+                format_smolstr!("los {raw_artist_sort_name}")
             } else if album_artist.starts_with("las ") {
-                format!("las {raw_artist_sort_name}")
+                format_smolstr!("las {raw_artist_sort_name}")
             } else if album_artist.starts_with("les ") {
-                format!("les {raw_artist_sort_name}")
+                format_smolstr!("les {raw_artist_sort_name}")
             } else {
-                raw_artist_sort_name.clone()
+                SmolStr::from(raw_artist_sort_name.clone())
             })
         })
-        .unwrap_or(album_artist)
+        .unwrap_or_else(|| album_artist.into())
 }

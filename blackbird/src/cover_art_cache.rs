@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use blackbird_core::{CoverArt, Logic};
+use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 
 const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
 const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -16,7 +16,7 @@ const CACHE_DIR_NAME: &str = "album-art-cache";
 
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
-    cache: HashMap<String, CacheEntry>,
+    cache: HashMap<CoverArtId, CacheEntry>,
     target_size: Option<usize>,
     cache_dir: PathBuf,
 }
@@ -87,6 +87,7 @@ impl CoverArtCache {
                 // Only if it doesn't already exist
                 let safe_filename = incoming_cover_art
                     .cover_art_id
+                    .0
                     .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
                 let cache_path = self.cache_dir.join(format!("{}.png", safe_filename));
                 if !cache_path.exists() {
@@ -150,7 +151,7 @@ impl CoverArtCache {
                     "Forgetting cover art for {cover_art_id} from cache due to size limit (priority: {:?})",
                     cache_entry.priority
                 );
-                removal_candidates.insert(cover_art_id.to_string());
+                removal_candidates.insert((*cover_art_id).clone());
             }
         }
 
@@ -166,7 +167,7 @@ impl CoverArtCache {
     pub fn get(
         &mut self,
         logic: &Logic,
-        cover_art_id: Option<&str>,
+        cover_art_id: Option<&CoverArtId>,
         priority: CachePriority,
     ) -> egui::ImageSource<'static> {
         let loading_image = egui::include_image!("../assets/no-album-art.png");
@@ -178,7 +179,7 @@ impl CoverArtCache {
 
         let cache_entry = self
             .cache
-            .entry(cover_art_id.to_string())
+            .entry(cover_art_id.clone())
             .or_insert(CacheEntry {
                 first_requested: std::time::Instant::now(),
                 last_requested: std::time::Instant::now(),
@@ -233,24 +234,26 @@ impl CoverArtCache {
     pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
         let cover_art_ids = logic.get_next_track_surrounding_cover_art_ids();
 
-        for cover_art_id in cover_art_ids {
+        for cover_art_id in &cover_art_ids {
             // Use get with NextTrack priority to trigger loading
-            self.get(logic, Some(&cover_art_id), CachePriority::NextTrack);
+            self.get(logic, Some(cover_art_id), CachePriority::NextTrack);
         }
     }
 }
 
-fn cover_art_id_to_url(cover_art_id: &str, is_low_res: bool) -> String {
+fn cover_art_id_to_url(cover_art_id: &CoverArtId, is_low_res: bool) -> String {
     if is_low_res {
-        format!("bytes://low-res/{cover_art_id}")
+        format!("bytes://low-res/{}", cover_art_id.0)
     } else {
-        format!("bytes://{cover_art_id}")
+        format!("bytes://{}", cover_art_id.0)
     }
 }
 
-fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &str) -> Option<Arc<[u8]>> {
+fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<Arc<[u8]>> {
     // Sanitize the cover_art_id to make it a valid filename
-    let safe_filename = cover_art_id.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+    let safe_filename = cover_art_id
+        .0
+        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
     let path = cache_dir.join(format!("{}.png", safe_filename));
     match std::fs::read(&path) {
         Ok(data) => {

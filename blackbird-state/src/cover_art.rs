@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-/// An artist ID
+/// A cover art ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct ArtistId(pub SmolStr);
-impl std::fmt::Display for ArtistId {
+pub struct CoverArtId(pub SmolStr);
+
+impl std::fmt::Display for CoverArtId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }

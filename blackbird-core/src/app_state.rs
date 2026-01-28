@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blackbird_state::{AlbumId, TrackId};
+use blackbird_state::{AlbumId, CoverArtId, TrackId};
 use serde::{Deserialize, Serialize};
 
 use crate::{Library, TrackDisplayDetails, queue::QueueState};
@@ -52,14 +52,37 @@ pub struct ScrobbleState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppStateError {
-    InitialFetchFailed { error: String },
-    CoverArtFetchFailed { cover_art_id: String, error: String },
-    LoadTrackFailed { track_id: TrackId, error: String },
-    DecodeTrackFailed { track_id: TrackId, error: String },
-    StarTrackFailed { track_id: TrackId, error: String },
-    UnstarTrackFailed { track_id: TrackId, error: String },
-    StarAlbumFailed { album_id: AlbumId, error: String },
-    UnstarAlbumFailed { album_id: AlbumId, error: String },
+    InitialFetchFailed {
+        error: String,
+    },
+    CoverArtFetchFailed {
+        cover_art_id: CoverArtId,
+        error: String,
+    },
+    LoadTrackFailed {
+        track_id: TrackId,
+        error: String,
+    },
+    DecodeTrackFailed {
+        track_id: TrackId,
+        error: String,
+    },
+    StarTrackFailed {
+        track_id: TrackId,
+        error: String,
+    },
+    UnstarTrackFailed {
+        track_id: TrackId,
+        error: String,
+    },
+    StarAlbumFailed {
+        album_id: AlbumId,
+        error: String,
+    },
+    UnstarAlbumFailed {
+        album_id: AlbumId,
+        error: String,
+    },
 }
 impl AppStateError {
     /// Should be paired with [`Self::display_message`]

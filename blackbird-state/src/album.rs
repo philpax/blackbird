@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use smol_str::SmolStr;
 
-use crate::{ArtistId, bs};
+use crate::{ArtistId, CoverArtId, bs};
 
 /// An album ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct AlbumId(pub String);
+#[serde(transparent)]
+pub struct AlbumId(pub SmolStr);
 impl std::fmt::Display for AlbumId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
@@ -17,13 +19,13 @@ pub struct Album {
     /// The album ID
     pub id: AlbumId,
     /// The album name
-    pub name: String,
+    pub name: SmolStr,
     /// The album artist name
-    pub artist: String,
+    pub artist: SmolStr,
     /// The artist ID
     pub artist_id: Option<ArtistId>,
     /// The album cover art ID
-    pub cover_art_id: Option<String>,
+    pub cover_art_id: Option<CoverArtId>,
     /// The number of tracks in the album
     pub track_count: u32,
     /// The total duration of the album in seconds
@@ -38,11 +40,14 @@ pub struct Album {
 impl From<bs::AlbumID3> for Album {
     fn from(album: bs::AlbumID3) -> Self {
         Album {
-            id: AlbumId(album.id),
-            name: album.name,
-            artist: album.artist.unwrap_or_else(|| "Unknown Artist".to_string()),
-            artist_id: album.artist_id.map(ArtistId),
-            cover_art_id: album.cover_art,
+            id: AlbumId(album.id.into()),
+            name: album.name.into(),
+            artist: album
+                .artist
+                .unwrap_or_else(|| "Unknown Artist".to_string())
+                .into(),
+            artist_id: album.artist_id.map(|id| ArtistId(id.into())),
+            cover_art_id: album.cover_art.map(|id| CoverArtId(id.into())),
             track_count: album.song_count,
             duration: album.duration,
             year: album.year,
@@ -53,8 +58,8 @@ impl From<bs::AlbumID3> for Album {
 }
 impl PartialEq for Album {
     fn eq(&self, other: &Self) -> bool {
-        (self.artist.as_str(), self.year, &self.name)
-            == (other.artist.as_str(), other.year, &other.name)
+        (self.artist.as_str(), self.year, self.name.as_str())
+            == (other.artist.as_str(), other.year, other.name.as_str())
     }
 }
 impl Eq for Album {}

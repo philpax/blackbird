@@ -61,7 +61,7 @@ pub fn ui(
                             vec2(image_size, image_size),
                             egui::Image::new(cover_art_cache.get(
                                 logic,
-                                tdd.cover_art_id.as_deref(),
+                                tdd.cover_art_id.as_ref(),
                                 CachePriority::Visible,
                             ))
                             .show_loading_spinner(false),
@@ -87,11 +87,11 @@ pub fn ui(
                                 if let Some(artist) = tdd
                                     .track_artist
                                     .as_ref()
-                                    .filter(|a| **a != tdd.album_artist)
+                                    .filter(|a| a.as_str() != tdd.album_artist.as_str())
                                 {
                                     ui.add(
                                         Label::new(
-                                            RichText::new(artist)
+                                            RichText::new(artist.as_str())
                                                 .color(style::string_to_colour(artist)),
                                         )
                                         .selectable(false),
@@ -100,7 +100,7 @@ pub fn ui(
                                 }
                                 ui.add(
                                     Label::new(
-                                        RichText::new(&tdd.track_title)
+                                        RichText::new(tdd.track_title.as_str())
                                             .color(config.style.track_name_playing()),
                                     )
                                     .selectable(false),
@@ -122,14 +122,15 @@ pub fn ui(
 
                                 ui.add(
                                     Label::new(
-                                        RichText::new(&tdd.album_name).color(config.style.album()),
+                                        RichText::new(tdd.album_name.as_str())
+                                            .color(config.style.album()),
                                     )
                                     .selectable(false),
                                 );
                                 ui.add(Label::new(" by ").selectable(false));
                                 ui.add(
                                     Label::new(
-                                        RichText::new(&tdd.album_artist)
+                                        RichText::new(tdd.album_artist.as_str())
                                             .color(style::string_to_colour(&tdd.album_artist)),
                                     )
                                     .selectable(false),

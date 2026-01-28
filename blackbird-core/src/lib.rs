@@ -1,8 +1,9 @@
 pub mod util;
 
 pub use blackbird_state;
-use blackbird_state::{AlbumId, Track, TrackId};
+use blackbird_state::{AlbumId, CoverArtId, Track, TrackId};
 pub use blackbird_subsonic as bs;
+use smol_str::SmolStr;
 
 use std::{
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -65,7 +66,7 @@ impl LogicRequestHandle {
 
 #[derive(Debug, Clone)]
 pub struct CoverArt {
-    pub cover_art_id: String,
+    pub cover_art_id: CoverArtId,
     pub cover_art: Vec<u8>,
 }
 
@@ -78,12 +79,12 @@ pub struct LyricsData {
 #[derive(Debug, Clone)]
 pub struct TrackDisplayDetails {
     pub album_id: AlbumId,
-    pub album_name: String,
-    pub album_artist: String,
-    pub cover_art_id: Option<String>,
+    pub album_name: SmolStr,
+    pub album_artist: SmolStr,
+    pub cover_art_id: Option<CoverArtId>,
     pub track_id: TrackId,
-    pub track_title: String,
-    pub track_artist: Option<String>,
+    pub track_title: SmolStr,
+    pub track_artist: Option<SmolStr>,
     pub track_duration: Duration,
     pub track_position: Duration,
     pub show_time: bool,
@@ -402,13 +403,13 @@ impl Logic {
     }
 }
 impl Logic {
-    pub fn request_cover_art(&self, cover_art_id: &str, size: Option<usize>) {
+    pub fn request_cover_art(&self, cover_art_id: &CoverArtId, size: Option<usize>) {
         let client = self.client.clone();
         let state = self.state.clone();
-        let cover_art_id = cover_art_id.to_string();
+        let cover_art_id = cover_art_id.clone();
         let cover_art_loaded_tx = self.cover_art_loaded_tx.clone();
         self.tokio_thread.spawn(async move {
-            match client.get_cover_art(&cover_art_id, size).await {
+            match client.get_cover_art(cover_art_id.0.as_str(), size).await {
                 Ok(cover_art) => {
                     cover_art_loaded_tx
                         .send(CoverArt {
@@ -485,9 +486,9 @@ impl Logic {
                 .library
                 .set_album_starred(&album_id, starred);
             let operation = if starred {
-                client.star([], [album_id.0.clone()], []).await
+                client.star([], [album_id.0.to_string()], []).await
             } else {
-                client.unstar([], [album_id.0.clone()], []).await
+                client.unstar([], [album_id.0.to_string()], []).await
             };
 
             let Err(e) = operation else {
@@ -644,7 +645,7 @@ impl Logic {
 
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
     /// Returns an empty vector if there is no next track or if the library is not populated.
-    pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<String> {
+    pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<CoverArtId> {
         let st = self.read_state();
 
         // Get the next track ID
