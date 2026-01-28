@@ -10,7 +10,7 @@ pub struct Config {
     #[serde(default)]
     pub server: blackbird_shared::config::Server,
     #[serde(default)]
-    pub last_playback: blackbird_shared::config::LastPlayback,
+    pub last_playback: blackbird_client_shared::config::LastPlayback,
 }
 impl Config {
     pub const FILENAME: &str = "config.toml";

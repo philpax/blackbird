@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "blackbird",
+    "blackbird-client-shared",
     "blackbird-core",
     "blackbird-id3mover",
     "blackbird-json-export",

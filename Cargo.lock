@@ -584,6 +584,7 @@ name = "blackbird"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blackbird-client-shared",
  "blackbird-core",
  "blackbird-shared",
  "eframe",
@@ -600,6 +601,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+]
+
+[[package]]
+name = "blackbird-client-shared"
+version = "0.1.0"
+dependencies = [
+ "blackbird-state",
+ "serde",
 ]
 
 [[package]]
@@ -652,7 +661,6 @@ dependencies = [
 name = "blackbird-shared"
 version = "0.1.0"
 dependencies = [
- "blackbird-state",
  "serde",
 ]
 
@@ -700,6 +708,7 @@ name = "blackbird-tui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blackbird-client-shared",
  "blackbird-core",
  "blackbird-shared",
  "crossterm",

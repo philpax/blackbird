@@ -12,7 +12,7 @@ pub struct Config {
     #[serde(default)]
     pub style: ui::Style,
     #[serde(default)]
-    pub last_playback: blackbird_shared::config::LastPlayback,
+    pub last_playback: blackbird_client_shared::config::LastPlayback,
     #[serde(default)]
     pub keybindings: Keybindings,
 }

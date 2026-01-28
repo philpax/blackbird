@@ -8,6 +8,7 @@ default = ["audio"]
 audio = ["blackbird-core/audio"]
 
 [dependencies]
+blackbird-client-shared = { path = "../blackbird-client-shared" }
 blackbird-core = { path = "../blackbird-core", default-features = false }
 blackbird-shared = { path = "../blackbird-shared" }
 

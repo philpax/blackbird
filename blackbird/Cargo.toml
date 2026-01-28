@@ -10,6 +10,7 @@ audio = ["blackbird-core/audio"]
 media-controls = ["dep:souvlaki"]
 
 [dependencies]
+blackbird-client-shared = { path = "../blackbird-client-shared" }
 blackbird-core = { path = "../blackbird-core", default-features = false }
 blackbird-shared = { path = "../blackbird-shared" }
 
