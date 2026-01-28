@@ -90,8 +90,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .sum();
 
     let has_scrollbar = total_lines > visible_height;
-    // Subtract 2 for alphabet column + 1 for scrollbar if shown
-    let list_width = inner.width as usize - 2 - if has_scrollbar { 1 } else { 0 };
+    // Subtract 1 for alphabet column (to the right of scrollbar) + 1 for scrollbar if shown
+    let list_width = inner.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
 
     let items: Vec<ListItem> = entries
         .iter()
@@ -396,12 +396,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-/// Renders alphabet letters on the right side of the library view.
+/// Renders alphabet letters as a global indicator on the right side of the library view.
+/// Letters are positioned as fractions of total content to show where each alphabetical
+/// section is in the overall library, similar to the egui implementation.
 fn render_alphabet_scroll(
     frame: &mut Frame,
     entries: &[LibraryEntry],
     area: Rect,
-    scroll_offset: usize,
+    _scroll_offset: usize,
     visible_height: usize,
     total_lines: usize,
     text_color: Color,
@@ -410,8 +412,8 @@ fn render_alphabet_scroll(
         return;
     }
 
-    // Compute letter positions as line numbers.
-    let mut letter_positions: Vec<(char, usize)> = Vec::new();
+    // Compute letter positions as fractions of total content.
+    let mut letter_positions: Vec<(char, f32, usize)> = Vec::new(); // (letter, fraction, count)
     let mut current_line = 0usize;
     let mut last_letter: Option<char> = None;
 
@@ -420,10 +422,14 @@ fn render_alphabet_scroll(
             && let Some(first_char) = artist.chars().next()
         {
             let letter = first_char.to_uppercase().next().unwrap_or(first_char);
-            // Only add if different from last letter
+            // Only add first occurrence of each letter
             if last_letter != Some(letter) {
-                letter_positions.push((letter, current_line));
+                let fraction = current_line as f32 / total_lines as f32;
+                letter_positions.push((letter, fraction, 1));
                 last_letter = Some(letter);
+            } else if let Some(last) = letter_positions.last_mut() {
+                // Increment count for clustering
+                last.2 += 1;
             }
         }
         match entry {
@@ -436,16 +442,44 @@ fn render_alphabet_scroll(
         return;
     }
 
-    // Convert line positions to screen Y positions relative to viewport.
-    // Only render letters that are visible in the current viewport.
-    let letter_x = area.x + area.width - 2; // 2 chars from right (before scrollbar)
+    // Cluster nearby letters to avoid overlap in terminal.
+    // Threshold: letters within ~3% of viewport height are considered overlapping
+    // (more aggressive than egui since terminal has fewer rows)
+    let cluster_threshold = 1.0 / visible_height as f32;
 
-    for (letter, line_pos) in &letter_positions {
-        // Calculate screen position
-        let screen_line = (*line_pos as isize) - (scroll_offset as isize);
+    let mut clustered: Vec<(char, f32)> = Vec::new();
+    let mut i = 0;
 
-        if screen_line >= 0 && (screen_line as usize) < visible_height {
-            let y = area.y + screen_line as u16;
+    while i < letter_positions.len() {
+        let mut cluster_end = i + 1;
+
+        // Find all letters in this cluster
+        while cluster_end < letter_positions.len() {
+            let distance = letter_positions[cluster_end].1 - letter_positions[i].1;
+            if distance >= cluster_threshold {
+                break;
+            }
+            cluster_end += 1;
+        }
+
+        // Select the letter with the highest count in this cluster
+        let best = letter_positions[i..cluster_end]
+            .iter()
+            .max_by_key(|(_, _, count)| count)
+            .unwrap();
+
+        clustered.push((best.0, best.1));
+        i = cluster_end;
+    }
+
+    // Render letters at the rightmost column of the area (to the right of scrollbar)
+    let letter_x = area.x + area.width.saturating_sub(1);
+
+    for (letter, fraction) in &clustered {
+        // Position based on fraction of viewport height
+        let y = area.y + (fraction * visible_height as f32) as u16;
+
+        if y < area.y + area.height {
             let span = Span::styled(letter.to_string(), Style::default().fg(text_color));
             let line = Line::from(span);
             let rect = Rect::new(letter_x, y, 1, 1);
