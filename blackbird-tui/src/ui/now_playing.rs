@@ -105,10 +105,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         Style::default().fg(string_to_color(&tdd.album_artist)),
     ));
 
-    let info_lines = vec![
-        Line::from(track_spans),
-        Line::from(album_spans),
-    ];
+    let info_lines = vec![Line::from(track_spans), Line::from(album_spans)];
 
     let info = Paragraph::new(info_lines);
     frame.render_widget(info, chunks[1]);
