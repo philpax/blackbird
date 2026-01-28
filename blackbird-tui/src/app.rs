@@ -1,10 +1,11 @@
 use std::time::Duration;
 
 use blackbird_core as bc;
-use blackbird_core::{PlaybackMode, PlaybackToLogicMessage, blackbird_state::TrackId};
+use blackbird_core::{blackbird_state::TrackId, PlaybackMode, PlaybackToLogicMessage};
 
 use crate::config::Config;
 use crate::cover_art::CoverArtCache;
+use crate::log_buffer::LogBuffer;
 
 /// Which panel/mode the UI is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +13,7 @@ pub enum FocusedPanel {
     Library,
     Search,
     Lyrics,
+    Logs,
 }
 
 /// A single entry in the flat library list.
@@ -53,6 +55,10 @@ pub struct App {
     pub library_selected_index: usize,
     pub library_needs_scroll_to_playing: bool,
 
+    // Cached flat library for performance.
+    cached_flat_library: Vec<LibraryEntry>,
+    flat_library_dirty: bool,
+
     // Search state
     pub search_query: String,
     pub search_results: Vec<TrackId>,
@@ -70,6 +76,10 @@ pub struct App {
     // Track that should be scrolled into view.
     pub scroll_to_track: Option<TrackId>,
 
+    // Logs state
+    pub log_buffer: LogBuffer,
+    pub logs_scroll_offset: usize,
+
     pub should_quit: bool,
 }
 
@@ -81,6 +91,7 @@ impl App {
         cover_art_cache: CoverArtCache,
         lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
         library_populated_rx: std::sync::mpsc::Receiver<()>,
+        log_buffer: LogBuffer,
     ) -> Self {
         Self {
             logic,
@@ -95,6 +106,9 @@ impl App {
             library_selected_index: 0,
             library_needs_scroll_to_playing: true,
 
+            cached_flat_library: Vec::new(),
+            flat_library_dirty: true,
+
             search_query: String::new(),
             search_results: Vec::new(),
             search_selected_index: 0,
@@ -107,6 +121,10 @@ impl App {
             volume_editing: false,
 
             scroll_to_track: None,
+
+            log_buffer,
+            logs_scroll_offset: 0,
+
             should_quit: false,
         }
     }
@@ -141,6 +159,7 @@ impl App {
 
         // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
+            self.flat_library_dirty = true;
             if self.library_needs_scroll_to_playing {
                 if let Some(track_id) = self.logic.get_playing_track_id() {
                     self.scroll_to_track = Some(track_id);
@@ -165,15 +184,37 @@ impl App {
         }
     }
 
-    /// Builds a flat list of entries for the library view.
-    /// Each entry is either a group header or a track.
-    pub fn build_flat_library(&self) -> Vec<LibraryEntry> {
+    /// Returns the cached flat library, rebuilding if needed.
+    pub fn get_flat_library(&mut self) -> &[LibraryEntry] {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library();
+            self.flat_library_dirty = false;
+        }
+        &self.cached_flat_library
+    }
+
+    /// Returns the length of the flat library without requiring mutable access.
+    pub fn flat_library_len(&self) -> usize {
+        self.cached_flat_library.len()
+    }
+
+    /// Returns a clone of the entry at the given index, if it exists.
+    pub fn get_library_entry(&mut self, index: usize) -> Option<LibraryEntry> {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library();
+            self.flat_library_dirty = false;
+        }
+        self.cached_flat_library.get(index).cloned()
+    }
+
+    /// Rebuilds the cached flat library from the current state.
+    fn rebuild_flat_library(&mut self) {
         let state = self.logic.get_state();
         let state = state.read().unwrap();
 
-        let mut entries = Vec::new();
+        self.cached_flat_library.clear();
         for group in &state.library.groups {
-            entries.push(LibraryEntry::GroupHeader {
+            self.cached_flat_library.push(LibraryEntry::GroupHeader {
                 artist: group.artist.to_string(),
                 album: group.album.to_string(),
                 year: group.year,
@@ -185,7 +226,7 @@ impl App {
 
             for track_id in &group.tracks {
                 if let Some(track) = state.library.track_map.get(track_id) {
-                    entries.push(LibraryEntry::Track {
+                    self.cached_flat_library.push(LibraryEntry::Track {
                         id: track.id.clone(),
                         title: track.title.to_string(),
                         artist: track.artist.as_ref().map(|a| a.to_string()),
@@ -199,7 +240,6 @@ impl App {
                 }
             }
         }
-        entries
     }
 
     pub fn toggle_search(&mut self) {
@@ -228,6 +268,17 @@ impl App {
                 self.lyrics_data = None;
                 self.logic.request_lyrics(&track_id);
             }
+        }
+    }
+
+    pub fn toggle_logs(&mut self) {
+        if self.focused_panel == FocusedPanel::Logs {
+            self.focused_panel = FocusedPanel::Library;
+        } else {
+            self.focused_panel = FocusedPanel::Logs;
+            // Scroll to the end of the log buffer.
+            let len = self.log_buffer.len();
+            self.logs_scroll_offset = len.saturating_sub(1);
         }
     }
 

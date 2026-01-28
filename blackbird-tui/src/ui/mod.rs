@@ -1,4 +1,5 @@
 mod library;
+mod logs;
 mod lyrics;
 mod now_playing;
 mod search;
@@ -6,11 +7,11 @@ mod search;
 use std::hash::{Hash, Hasher};
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
+    Frame,
 };
 
 use crate::{
@@ -39,6 +40,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         FocusedPanel::Library => library::draw(frame, app, main_chunks[2]),
         FocusedPanel::Search => search::draw(frame, app, main_chunks[2]),
         FocusedPanel::Lyrics => lyrics::draw(frame, app, main_chunks[2]),
+        FocusedPanel::Logs => logs::draw(frame, app, main_chunks[2]),
     }
 
     draw_help_bar(frame, app, main_chunks[3]);
@@ -142,6 +144,7 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         FocusedPanel::Library => keys::LIBRARY_HELP,
         FocusedPanel::Search => keys::SEARCH_HELP,
         FocusedPanel::Lyrics => keys::LYRICS_HELP,
+        FocusedPanel::Logs => keys::LOGS_HELP,
     };
 
     let mut spans: Vec<Span> = Vec::new();

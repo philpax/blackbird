@@ -2,6 +2,7 @@ mod app;
 mod config;
 mod cover_art;
 mod keys;
+mod log_buffer;
 mod ui;
 
 use std::time::{Duration, Instant};
@@ -11,18 +12,22 @@ use blackbird_core as bc;
 use config::Config;
 use cover_art::CoverArtCache;
 use keys::Action;
+use log_buffer::{LogBuffer, LogBufferLayer};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() -> anyhow::Result<()> {
+    // Create log buffer for TUI display instead of stdout.
+    let log_buffer = LogBuffer::new();
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(LogBufferLayer::new(log_buffer.clone()))
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blackbird=info")),
@@ -62,6 +67,7 @@ fn main() -> anyhow::Result<()> {
         cover_art_cache,
         lyrics_loaded_rx,
         library_populated_rx,
+        log_buffer,
     );
 
     // Setup terminal
@@ -102,7 +108,10 @@ fn run_app(
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                handle_key_event(app, &key);
+                // Only handle key press events, not release or repeat.
+                if key.kind == event::KeyEventKind::Press {
+                    handle_key_event(app, &key);
+                }
             }
         }
 
@@ -147,11 +156,16 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
                 handle_lyrics_action(app, action);
             }
         }
+        FocusedPanel::Logs => {
+            if let Some(action) = keys::logs_action(key) {
+                handle_logs_action(app, action);
+            }
+        }
     }
 }
 
 fn handle_library_action(app: &mut App, action: Action) {
-    let entries_len = app.build_flat_library().len();
+    let entries_len = app.flat_library_len();
 
     match action {
         Action::Quit => app.should_quit = true,
@@ -162,6 +176,7 @@ fn handle_library_action(app: &mut App, action: Action) {
         Action::CyclePlaybackMode => app.cycle_playback_mode(),
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),
+        Action::Logs => app.toggle_logs(),
         Action::VolumeMode => app.volume_editing = true,
         Action::GotoPlaying => {
             if let Some(track_id) = app.logic.get_playing_track_id() {
@@ -171,16 +186,15 @@ fn handle_library_action(app: &mut App, action: Action) {
         Action::SeekBackward => app.seek_relative(-5),
         Action::SeekForward => app.seek_relative(5),
         Action::Star => {
-            let entries = app.build_flat_library();
-            if let Some(entry) = entries.get(app.library_selected_index) {
+            if let Some(entry) = app.get_library_entry(app.library_selected_index) {
                 match entry {
                     LibraryEntry::Track { id, starred, .. } => {
-                        app.logic.set_track_starred(id, !starred);
+                        app.logic.set_track_starred(&id, !starred);
                     }
                     LibraryEntry::GroupHeader {
                         album_id, starred, ..
                     } => {
-                        app.logic.set_album_starred(album_id, !starred);
+                        app.logic.set_album_starred(&album_id, !starred);
                     }
                 }
             }
@@ -210,9 +224,10 @@ fn handle_library_action(app: &mut App, action: Action) {
             }
         }
         Action::Select => {
-            let entries = app.build_flat_library();
-            if let Some(LibraryEntry::Track { id, .. }) = entries.get(app.library_selected_index) {
-                app.logic.request_play_track(id);
+            if let Some(LibraryEntry::Track { id, .. }) =
+                app.get_library_entry(app.library_selected_index)
+            {
+                app.logic.request_play_track(&id);
             }
         }
         _ => {}
@@ -275,6 +290,40 @@ fn handle_lyrics_action(app: &mut App, action: Action) {
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
+        _ => {}
+    }
+}
+
+fn handle_logs_action(app: &mut App, action: Action) {
+    let log_len = app.log_buffer.len();
+
+    match action {
+        Action::Back => app.toggle_logs(),
+        Action::Quit => app.should_quit = true,
+        Action::MoveUp => {
+            app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(1);
+        }
+        Action::MoveDown => {
+            if log_len > 0 {
+                app.logs_scroll_offset = (app.logs_scroll_offset + 1).min(log_len - 1);
+            }
+        }
+        Action::PageUp => {
+            app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(20);
+        }
+        Action::PageDown => {
+            if log_len > 0 {
+                app.logs_scroll_offset = (app.logs_scroll_offset + 20).min(log_len - 1);
+            }
+        }
+        Action::Home => {
+            app.logs_scroll_offset = 0;
+        }
+        Action::End => {
+            if log_len > 0 {
+                app.logs_scroll_offset = log_len - 1;
+            }
+        }
         _ => {}
     }
 }

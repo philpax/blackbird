@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use blackbird_core::{blackbird_state::CoverArtId, util::seconds_to_hms_string};
 use ratatui::{
-    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
+    Frame,
 };
 
 use crate::{
@@ -38,7 +38,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let entries = app.build_flat_library();
+    let entries = app.get_flat_library();
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No tracks found")
@@ -47,9 +47,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Pre-compute quadrant colors for all group headers
+    // Calculate visible range to only pre-compute colors for visible group headers.
+    let visible_height = inner.height as usize;
+    let scroll_offset = app.library_scroll_offset;
+    let visible_start = scroll_offset;
+    let visible_end = (scroll_offset + visible_height + 5).min(entries.len()); // +5 for buffer
+
+    // Pre-compute quadrant colors only for visible group headers.
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
-    for entry in &entries {
+    for entry in entries
+        .iter()
+        .skip(visible_start)
+        .take(visible_end - visible_start)
+    {
         if let LibraryEntry::GroupHeader { cover_art_id, .. } = entry {
             if let Some(id) = cover_art_id {
                 if !art_colors.contains_key(id) {
@@ -94,11 +104,31 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let dur_str = seconds_to_hms_string(*duration, false);
 
                     let line = Line::from(vec![
-                        // Album art quadrant indicator: 4 coloured blocks
-                        Span::styled("\u{2588}", Style::default().fg(colors.top_left)),
-                        Span::styled("\u{2588}", Style::default().fg(colors.top_right)),
-                        Span::styled("\u{2588}", Style::default().fg(colors.bottom_left)),
-                        Span::styled("\u{2588}", Style::default().fg(colors.bottom_right)),
+                        // Album art indicator: 4 half-blocks showing 4×2 color grid.
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[0][0])
+                                .bg(colors.colors[1][0]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[0][1])
+                                .bg(colors.colors[1][1]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[0][2])
+                                .bg(colors.colors[1][2]),
+                        ),
+                        Span::styled(
+                            "\u{2580}",
+                            Style::default()
+                                .fg(colors.colors[0][3])
+                                .bg(colors.colors[1][3]),
+                        ),
                         Span::raw(" "),
                         Span::styled(heart, heart_style),
                         Span::raw(" "),
@@ -176,7 +206,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     spans.push(Span::styled(title, title_style));
 
-                    // Show artist if different from album artist
+                    // Show artist if different from album artist.
                     if let Some(track_artist) = artist {
                         if track_artist != album_artist {
                             spans.push(Span::raw(" \u{2014} "));
@@ -219,12 +249,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     );
 
-    // Use a ListState to manage selection/scrolling
+    // Use a ListState to manage selection/scrolling.
     let mut state = ListState::default();
     state.select(Some(app.library_selected_index));
 
     frame.render_stateful_widget(list, inner, &mut state);
 
-    // Save the offset for use by keyboard navigation
+    // Save the offset for use by keyboard navigation.
     app.library_scroll_offset = state.offset();
 }

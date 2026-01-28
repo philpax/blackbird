@@ -1,10 +1,10 @@
-use blackbird_core::{TrackDisplayDetails, util::seconds_to_hms_string};
+use blackbird_core::{util::seconds_to_hms_string, TrackDisplayDetails};
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    Frame,
 };
 
 use super::string_to_color;

@@ -1,9 +1,9 @@
 use ratatui::{
-    Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
+    Frame,
 };
 
 use crate::app::App;
@@ -151,60 +151,42 @@ fn draw_album_art(
     area: Rect,
     cover_art_id: Option<&blackbird_core::blackbird_state::CoverArtId>,
 ) {
-    let colors = app.cover_art_cache.get(&app.logic, cover_art_id);
+    let art = app.cover_art_cache.get(&app.logic, cover_art_id);
 
-    if area.height < 2 || area.width < 4 {
+    if area.height < 1 || area.width < 6 {
         return;
     }
 
-    // Render 2x2 grid of coloured blocks using half-block characters (U+2580 upper half)
-    // Each row uses the upper half block with fg = top colour and bg = bottom colour
-    // This gives us a 2x2 grid in 2 terminal rows
-    let half_w = (area.width - 1) / 2; // -1 for right margin
+    // Render 4 cols × 2 rows using half-block characters (U+2580 upper half).
+    // Each terminal character shows 2 vertical colors: fg = top row, bg = bottom row.
+    // This gives us 4 columns × 2 rows in just 1 terminal row, 4 characters wide.
+    // We repeat multiple terminal rows to make it visually larger.
+
+    let art_width = 4u16; // 4 columns of color
+    let art_height = 2u16; // 2 terminal rows (each showing top/bottom via half-block)
     let left_x = area.x + 1; // +1 for left margin
 
     // Center vertically
-    let top_y = area.y + (area.height.saturating_sub(2)) / 2;
+    let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
 
-    // Row 0: top-left / top-right (using upper half block to combine top + bottom)
-    let row0 = Rect::new(left_x, top_y, half_w * 2, 1);
-    let mut row0_spans = Vec::new();
-    // Left half: fg=top_left, bg=bottom_left
-    for _ in 0..half_w {
-        row0_spans.push(Span::styled(
-            "\u{2580}",
-            Style::default().fg(colors.top_left).bg(colors.bottom_left),
-        ));
-    }
-    // Right half: fg=top_right, bg=bottom_right
-    for _ in 0..half_w {
-        row0_spans.push(Span::styled(
-            "\u{2580}",
-            Style::default()
-                .fg(colors.top_right)
-                .bg(colors.bottom_right),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(row0_spans)), row0);
+    // Each terminal row repeats the same pattern to fill vertical space.
+    // We'll draw `art_height` terminal rows, each using half-blocks.
+    for term_row in 0..art_height.min(area.height) {
+        let row_rect = Rect::new(left_x, top_y + term_row, art_width, 1);
+        let mut spans = Vec::new();
 
-    // Row 1: bottom halves (using lower half block)
-    let row1 = Rect::new(left_x, top_y + 1, half_w * 2, 1);
-    let mut row1_spans = Vec::new();
-    for _ in 0..half_w {
-        row1_spans.push(Span::styled(
-            "\u{2580}",
-            Style::default().fg(colors.top_left).bg(colors.bottom_left),
-        ));
+        for col in 0..4 {
+            // Use half-block: fg = top color (row 0), bg = bottom color (row 1)
+            spans.push(Span::styled(
+                "\u{2580}",
+                Style::default()
+                    .fg(art.colors[0][col])
+                    .bg(art.colors[1][col]),
+            ));
+        }
+
+        frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
     }
-    for _ in 0..half_w {
-        row1_spans.push(Span::styled(
-            "\u{2580}",
-            Style::default()
-                .fg(colors.top_right)
-                .bg(colors.bottom_right),
-        ));
-    }
-    frame.render_widget(Paragraph::new(Line::from(row1_spans)), row1);
 }
 
 fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {

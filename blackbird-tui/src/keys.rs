@@ -11,6 +11,7 @@ pub enum Action {
     CyclePlaybackMode,
     Search,
     Lyrics,
+    Logs,
     VolumeMode,
     VolumeUp,
     VolumeDown,
@@ -44,6 +45,7 @@ impl Action {
             Action::CyclePlaybackMode => None, // rendered separately with current mode
             Action::Search => Some(("/", "search")),
             Action::Lyrics => Some(("l", "lyrics")),
+            Action::Logs => Some(("L", "logs")),
             Action::VolumeMode => Some(("v", "vol")),
             Action::Star => Some(("*", "star")),
             Action::SeekForward => Some((">", "seek+")),
@@ -67,6 +69,7 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KeyCode::Char('m') => Some(Action::CyclePlaybackMode),
         KeyCode::Char('/') => Some(Action::Search),
         KeyCode::Char('l') => Some(Action::Lyrics),
+        KeyCode::Char('L') => Some(Action::Logs),
         KeyCode::Char('v') => Some(Action::VolumeMode),
         KeyCode::Char('g') => Some(Action::GotoPlaying),
         KeyCode::Char('<') | KeyCode::Char(',') => Some(Action::SeekBackward),
@@ -128,6 +131,21 @@ pub fn volume_action(key: &KeyEvent) -> Option<Action> {
     }
 }
 
+/// Resolve a key event into an action in logs context.
+pub fn logs_action(key: &KeyEvent) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('L') => Some(Action::Back),
+        KeyCode::Char('q') => Some(Action::Quit),
+        KeyCode::Up => Some(Action::MoveUp),
+        KeyCode::Down => Some(Action::MoveDown),
+        KeyCode::PageUp => Some(Action::PageUp),
+        KeyCode::PageDown => Some(Action::PageDown),
+        KeyCode::Home => Some(Action::Home),
+        KeyCode::End => Some(Action::End),
+        _ => None,
+    }
+}
+
 /// Ordered list of actions to show in the library help bar.
 pub const LIBRARY_HELP: &[Action] = &[
     Action::Quit,
@@ -162,3 +180,6 @@ pub const LYRICS_HELP: &[Action] = &[
     Action::Next,
     Action::Previous,
 ];
+
+/// Ordered list of actions to show in the logs help bar.
+pub const LOGS_HELP: &[Action] = &[Action::Back, Action::MoveUp, Action::MoveDown, Action::Quit];

@@ -5,28 +5,27 @@ use std::{
     time::Duration,
 };
 
-use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
+use blackbird_core::{blackbird_state::CoverArtId, CoverArt, Logic};
 use ratatui::style::Color;
 
-/// Four quadrant colours extracted from album art.
+/// 4 columns × 2 rows of colours extracted from album art.
+/// This ratio better matches terminal character aspect ratio (chars are ~2x tall as wide).
 #[derive(Debug, Clone, Copy)]
-pub struct QuadrantColors {
-    pub top_left: Color,
-    pub top_right: Color,
-    pub bottom_left: Color,
-    pub bottom_right: Color,
+pub struct ArtColors {
+    /// Colors arranged as [row][col], where row 0 is top, col 0 is left.
+    pub colors: [[Color; 4]; 2],
 }
 
-impl Default for QuadrantColors {
+impl Default for ArtColors {
     fn default() -> Self {
         Self {
-            top_left: Color::DarkGray,
-            top_right: Color::DarkGray,
-            bottom_left: Color::DarkGray,
-            bottom_right: Color::DarkGray,
+            colors: [[Color::DarkGray; 4]; 2],
         }
     }
 }
+
+// Keep the old name as an alias for compatibility during transition.
+pub type QuadrantColors = ArtColors;
 
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
@@ -157,21 +156,18 @@ enum CacheEntryState {
     Loaded(QuadrantColors),
 }
 
-/// Computes the average colour of each quadrant of an image.
-fn compute_quadrant_colors(image_data: &[u8]) -> QuadrantColors {
+/// Computes the average colour of each region in a 4×2 grid (4 cols, 2 rows).
+fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
     let Ok(img) = image::load_from_memory(image_data) else {
-        return QuadrantColors::default();
+        return ArtColors::default();
     };
 
     let rgb = img.to_rgb8();
     let (w, h) = (rgb.width() as usize, rgb.height() as usize);
 
     if w == 0 || h == 0 {
-        return QuadrantColors::default();
+        return ArtColors::default();
     }
-
-    let mid_x = w / 2;
-    let mid_y = h / 2;
 
     let average_region = |x0: usize, y0: usize, x1: usize, y1: usize| -> Color {
         let mut r_sum: u64 = 0;
@@ -200,12 +196,22 @@ fn compute_quadrant_colors(image_data: &[u8]) -> QuadrantColors {
         )
     };
 
-    QuadrantColors {
-        top_left: average_region(0, 0, mid_x.max(1), mid_y.max(1)),
-        top_right: average_region(mid_x, 0, w, mid_y.max(1)),
-        bottom_left: average_region(0, mid_y, mid_x.max(1), h),
-        bottom_right: average_region(mid_x, mid_y, w, h),
+    // 4 columns, 2 rows
+    let col_width = w / 4;
+    let row_height = h / 2;
+
+    let mut colors = [[Color::DarkGray; 4]; 2];
+    for row in 0..2 {
+        for col in 0..4 {
+            let x0 = col * col_width;
+            let y0 = row * row_height;
+            let x1 = if col == 3 { w } else { (col + 1) * col_width };
+            let y1 = if row == 1 { h } else { (row + 1) * row_height };
+            colors[row][col] = average_region(x0, y0, x1.max(x0 + 1), y1.max(y0 + 1));
+        }
     }
+
+    ArtColors { colors }
 }
 
 fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<Arc<[u8]>> {
