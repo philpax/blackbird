@@ -8,6 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::{
     app::{App, LibraryEntry},
@@ -18,6 +19,7 @@ use super::{StyleExt, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
+    let text_color = app.config.style.text_color();
     let album_color = app.config.style.album_color();
     let album_year_color = app.config.style.album_year_color();
     let album_length_color = app.config.style.album_length_color();
@@ -88,8 +90,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .sum();
 
     let has_scrollbar = total_lines > visible_height;
-    // Subtract 1 from width if scrollbar is shown to prevent overlap
-    let list_width = inner.width as usize - if has_scrollbar { 1 } else { 0 };
+    // Subtract 2 for alphabet column + 1 for scrollbar if shown
+    let list_width = inner.width as usize - 2 - if has_scrollbar { 1 } else { 0 };
 
     let items: Vec<ListItem> = entries
         .iter()
@@ -153,12 +155,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     ]);
 
                     // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
-                    // Calculate padding for right-alignment
-                    let left_content_len = 4 + 1 + album.len() + year_str.len(); // art + space + album + year
+                    // Calculate padding for right-alignment using unicode width
+                    let left_content_width = 4 + 1 + album.width() + year_str.width(); // art + space + album + year
                     let right_content = format!(" {dur_str} ");
-                    let right_len = right_content.len() + 1; // duration + heart
+                    let right_width = right_content.width() + 1; // duration + heart
                     let padding_needed = list_width
-                        .saturating_sub(left_content_len + right_len)
+                        .saturating_sub(left_content_width + right_width)
                         .saturating_sub(1);
 
                     let line2 = Line::from(vec![
@@ -240,15 +242,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     };
 
                     // Build left side: indent + track number + play icon + title + playcount
+                    let track_num_formatted = format!("{:>5} ", track_str);
                     let mut left_spans = vec![
                         Span::raw("     "),
                         Span::styled(
-                            format!("{:>5} ", track_str),
+                            track_num_formatted.clone(),
                             Style::default().fg(track_number_color),
                         ),
                     ];
 
-                    let mut left_len = 5 + 6; // indent + track_str formatted
+                    let mut left_width = 5 + track_num_formatted.width(); // indent + track_str formatted
 
                     if is_playing {
                         left_spans.push(Span::styled(
@@ -257,16 +260,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                                 .fg(track_name_playing_color)
                                 .add_modifier(Modifier::BOLD),
                         ));
-                        left_len += 2;
+                        left_width += 2;
                     }
 
                     left_spans.push(Span::styled(title, title_style));
-                    left_len += title.len();
+                    left_width += title.width();
 
                     // Add playcount immediately after title (uses track_number_color like egui)
                     if let Some(pc) = play_count {
                         let pc_str = format!(" {pc}");
-                        left_len += pc_str.len();
+                        left_width += pc_str.width();
                         left_spans.push(Span::styled(
                             pc_str,
                             Style::default().fg(track_number_color),
@@ -275,21 +278,21 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Build right side: [artist] duration heart
                     let mut right_spans = Vec::new();
-                    let mut right_len = 0;
+                    let mut right_width = 0;
 
                     // Show artist if different from album artist (no dash)
                     if let Some(track_artist) = artist
                         && track_artist != album_artist
                     {
                         let artist_str = format!("{track_artist} ");
-                        right_len += artist_str.len();
+                        right_width += artist_str.width();
                         right_spans.push(Span::styled(
                             artist_str,
                             Style::default().fg(string_to_color(track_artist)),
                         ));
                     }
 
-                    right_len += dur_str.len() + 2; // duration + space + heart
+                    right_width += dur_str.width() + 2; // duration + space + heart
                     right_spans.push(Span::styled(
                         dur_str,
                         Style::default().fg(track_length_color),
@@ -297,9 +300,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     right_spans.push(Span::raw(" "));
                     right_spans.push(Span::styled(heart, heart_style));
 
-                    // Calculate padding for right-alignment
+                    // Calculate padding for right-alignment using unicode width
                     let padding_needed = list_width
-                        .saturating_sub(left_len + right_len)
+                        .saturating_sub(left_width + right_width)
                         .saturating_sub(1);
 
                     let mut spans = left_spans;
@@ -379,5 +382,74 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .track_symbol(Some("│"))
             .thumb_symbol("█");
         frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
+    }
+
+    // Render alphabet scroll indicator letters on the right side.
+    render_alphabet_scroll(
+        frame,
+        &entries,
+        inner,
+        centered_offset,
+        visible_height,
+        total_lines,
+        text_color,
+    );
+}
+
+/// Renders alphabet letters on the right side of the library view.
+fn render_alphabet_scroll(
+    frame: &mut Frame,
+    entries: &[LibraryEntry],
+    area: Rect,
+    scroll_offset: usize,
+    visible_height: usize,
+    total_lines: usize,
+    text_color: Color,
+) {
+    if total_lines == 0 || visible_height == 0 {
+        return;
+    }
+
+    // Compute letter positions as line numbers.
+    let mut letter_positions: Vec<(char, usize)> = Vec::new();
+    let mut current_line = 0usize;
+    let mut last_letter: Option<char> = None;
+
+    for entry in entries {
+        if let LibraryEntry::GroupHeader { artist, .. } = entry
+            && let Some(first_char) = artist.chars().next()
+        {
+            let letter = first_char.to_uppercase().next().unwrap_or(first_char);
+            // Only add if different from last letter
+            if last_letter != Some(letter) {
+                letter_positions.push((letter, current_line));
+                last_letter = Some(letter);
+            }
+        }
+        match entry {
+            LibraryEntry::GroupHeader { .. } => current_line += 2,
+            LibraryEntry::Track { .. } => current_line += 1,
+        }
+    }
+
+    if letter_positions.is_empty() {
+        return;
+    }
+
+    // Convert line positions to screen Y positions relative to viewport.
+    // Only render letters that are visible in the current viewport.
+    let letter_x = area.x + area.width - 2; // 2 chars from right (before scrollbar)
+
+    for (letter, line_pos) in &letter_positions {
+        // Calculate screen position
+        let screen_line = (*line_pos as isize) - (scroll_offset as isize);
+
+        if screen_line >= 0 && (screen_line as usize) < visible_height {
+            let y = area.y + screen_line as u16;
+            let span = Span::styled(letter.to_string(), Style::default().fg(text_color));
+            let line = Line::from(span);
+            let rect = Rect::new(letter_x, y, 1, 1);
+            frame.render_widget(ratatui::widgets::Paragraph::new(line), rect);
+        }
     }
 }
