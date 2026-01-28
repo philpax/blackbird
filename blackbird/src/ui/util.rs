@@ -1,4 +1,4 @@
-use egui::{Align2, Pos2, Rect, Sense, TextStyle, Ui, pos2, vec2};
+use egui::{Align2, Context, Pos2, Rect, Sense, TextStyle, Ui, Vec2, ViewportBuilder, pos2, vec2};
 
 /// Calculate the total spacing between tracks (base egui spacing + extra spacing)
 pub fn track_spacing(ui: &Ui) -> f32 {

@@ -12,8 +12,7 @@ pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::Style;
 
 use egui::{
-    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText,
-    Visuals,
+    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Visuals,
 };
 
 use crate::{App, bc, config::Config};
@@ -173,7 +172,10 @@ impl App {
         // Process library population signal
         while let Ok(()) = self.library_populated_rx.try_recv() {
             self.ui_state.library_view.invalidate_alphabet_scroll();
-            self.ui_state.mini_library.library_view.invalidate_alphabet_scroll();
+            self.ui_state
+                .mini_library
+                .library_view
+                .invalidate_alphabet_scroll();
         }
 
         if self.ui_state.search.open {

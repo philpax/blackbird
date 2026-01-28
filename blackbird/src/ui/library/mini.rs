@@ -1,11 +1,13 @@
 //! Mini library view (popup window)
 
 use blackbird_core::blackbird_state::TrackId;
-use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportBuilder, ViewportId};
+use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportId, vec2};
 
-use crate::{bc, config::Config, cover_art_cache::CoverArtCache};
+use crate::{bc, config::Config, cover_art_cache::CoverArtCache, ui::util::global_window_builder};
 
-use super::shared::{LibraryViewConfig, LibraryViewState, render_library_view, render_player_controls};
+use super::shared::{
+    LibraryViewConfig, LibraryViewState, render_library_view, render_player_controls,
+};
 
 /// Height of the mini-library as a fraction of main window height
 const HEIGHT_FRACTION: f32 = 0.4;
