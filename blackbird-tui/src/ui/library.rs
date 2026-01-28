@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use blackbird_client_shared::alphabet_scroll;
 use blackbird_core::{blackbird_state::CoverArtId, util::seconds_to_hms_string};
 use ratatui::{
     Frame,
@@ -398,84 +399,52 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Renders alphabet letters as a global indicator on the right side of the library view.
 /// Letters are positioned as fractions of total content to show where each alphabetical
-/// section is in the overall library, similar to the egui implementation.
+/// section is in the overall library, using the shared alphabet_scroll logic.
 fn render_alphabet_scroll(
     frame: &mut Frame,
     entries: &[LibraryEntry],
     area: Rect,
     _scroll_offset: usize,
     visible_height: usize,
-    total_lines: usize,
+    _total_lines: usize,
     text_color: Color,
 ) {
-    if total_lines == 0 || visible_height == 0 {
+    if visible_height == 0 {
         return;
     }
 
-    // Compute letter positions as fractions of total content.
-    let mut letter_positions: Vec<(char, f32, usize)> = Vec::new(); // (letter, fraction, count)
-    let mut current_line = 0usize;
-    let mut last_letter: Option<char> = None;
+    // Aggregate entries into groups for the shared logic.
+    // Each group = (first_letter, total_line_count_for_group)
+    let mut groups: Vec<(char, usize)> = Vec::new();
 
     for entry in entries {
-        if let LibraryEntry::GroupHeader { artist, .. } = entry
-            && let Some(first_char) = artist.chars().next()
-        {
-            let letter = first_char.to_uppercase().next().unwrap_or(first_char);
-            // Only add first occurrence of each letter
-            if last_letter != Some(letter) {
-                let fraction = current_line as f32 / total_lines as f32;
-                letter_positions.push((letter, fraction, 1));
-                last_letter = Some(letter);
-            } else if let Some(last) = letter_positions.last_mut() {
-                // Increment count for clustering
-                last.2 += 1;
-            }
-        }
         match entry {
-            LibraryEntry::GroupHeader { .. } => current_line += 2,
-            LibraryEntry::Track { .. } => current_line += 1,
-        }
-    }
-
-    if letter_positions.is_empty() {
-        return;
-    }
-
-    // Cluster nearby letters to avoid overlap in terminal.
-    // Threshold: letters within ~3% of viewport height are considered overlapping
-    // (more aggressive than egui since terminal has fewer rows)
-    let cluster_threshold = 1.0 / visible_height as f32;
-
-    let mut clustered: Vec<(char, f32)> = Vec::new();
-    let mut i = 0;
-
-    while i < letter_positions.len() {
-        let mut cluster_end = i + 1;
-
-        // Find all letters in this cluster
-        while cluster_end < letter_positions.len() {
-            let distance = letter_positions[cluster_end].1 - letter_positions[i].1;
-            if distance >= cluster_threshold {
-                break;
+            LibraryEntry::GroupHeader { artist, .. } => {
+                // Start a new group with the artist's first letter
+                let first_char = artist.chars().next().unwrap_or('?');
+                groups.push((first_char, 2)); // GroupHeader is 2 lines
             }
-            cluster_end += 1;
+            LibraryEntry::Track { .. } => {
+                // Add track's line count to current group
+                if let Some(last) = groups.last_mut() {
+                    last.1 += 1; // Track is 1 line
+                }
+            }
         }
+    }
 
-        // Select the letter with the highest count in this cluster
-        let best = letter_positions[i..cluster_end]
-            .iter()
-            .max_by_key(|(_, _, count)| count)
-            .unwrap();
+    // Use more aggressive clustering for terminal (fewer rows than GUI)
+    let cluster_threshold = 1.0 / visible_height as f32;
+    let positions = alphabet_scroll::compute_positions(groups.into_iter(), cluster_threshold);
 
-        clustered.push((best.0, best.1));
-        i = cluster_end;
+    if positions.is_empty() {
+        return;
     }
 
     // Render letters at the rightmost column of the area (to the right of scrollbar)
     let letter_x = area.x + area.width.saturating_sub(1);
 
-    for (letter, fraction) in &clustered {
+    for (letter, fraction) in &positions {
         // Position based on fraction of viewport height
         let y = area.y + (fraction * visible_height as f32) as u16;
 
