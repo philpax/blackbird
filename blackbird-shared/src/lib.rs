@@ -1,7 +1,7 @@
 pub mod config {
     use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     #[serde(default)]
     pub struct Server {
         pub base_url: String,
