@@ -7,11 +7,11 @@ mod search;
 use std::hash::{Hash, Hasher};
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Gauge, Paragraph},
-    Frame,
 };
 
 use crate::{

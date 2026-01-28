@@ -2,11 +2,11 @@ use std::collections::HashMap;
 
 use blackbird_core::{blackbird_state::CoverArtId, util::seconds_to_hms_string};
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState},
-    Frame,
 };
 
 use crate::{

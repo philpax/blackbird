@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use blackbird_core as bc;
-use blackbird_core::{blackbird_state::TrackId, PlaybackMode, PlaybackToLogicMessage};
+use blackbird_core::{PlaybackMode, PlaybackToLogicMessage, blackbird_state::TrackId};
 
 use crate::config::Config;
 use crate::cover_art::CoverArtCache;

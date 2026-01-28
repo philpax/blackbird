@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use blackbird_core::{blackbird_state::CoverArtId, CoverArt, Logic};
+use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::style::Color;
 
 /// 4 columns × 2 rows of colours extracted from album art.
