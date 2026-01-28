@@ -14,9 +14,21 @@ use crate::{
     cover_art::QuadrantColors,
 };
 
-use super::string_to_color;
+use super::{StyleExt, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Extract style colors upfront to avoid borrow conflicts later.
+    let text_color = app.config.style.text_color();
+    let album_color = app.config.style.album_color();
+    let album_year_color = app.config.style.album_year_color();
+    let album_length_color = app.config.style.album_length_color();
+    let track_number_color = app.config.style.track_number_color();
+    let track_name_color = app.config.style.track_name_color();
+    let track_name_playing_color = app.config.style.track_name_playing_color();
+    let track_length_color = app.config.style.track_length_color();
+    let track_duration_color = app.config.style.track_duration_color();
+    let track_name_hovered_color = app.config.style.track_name_hovered_color();
+
     let has_loaded = app.logic.has_loaded_all_tracks();
 
     let block = Block::default()
@@ -26,14 +38,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             " Library (loading...) "
         })
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::White));
+        .border_style(Style::default().fg(text_color));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if !has_loaded {
         let loading = ratatui::widgets::Paragraph::new("Loading library...")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(track_duration_color));
         frame.render_widget(loading, inner);
         return;
     }
@@ -48,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No tracks found")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(track_duration_color));
         frame.render_widget(empty, inner);
         return;
     }
@@ -95,7 +107,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let heart_style = if *starred {
                         Style::default().fg(Color::Red)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(track_duration_color)
                     };
 
                     let colors = cover_art_id
@@ -138,14 +150,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::raw(" "),
                         Span::styled(artist, Style::default().fg(string_to_color(artist))),
                         Span::raw(" \u{2014} "),
-                        Span::styled(album, Style::default().fg(Color::Rgb(100, 180, 255))),
-                        Span::styled(year_str, Style::default().fg(Color::DarkGray)),
+                        Span::styled(album, Style::default().fg(album_color)),
+                        Span::styled(year_str, Style::default().fg(album_year_color)),
                         Span::raw(" "),
-                        Span::styled(dur_str, Style::default().fg(Color::DarkGray)),
+                        Span::styled(dur_str, Style::default().fg(album_length_color)),
                     ]);
 
                     let style = if is_selected {
-                        Style::default().bg(Color::Rgb(40, 40, 60))
+                        Style::default().bg(track_name_hovered_color)
                     } else {
                         Style::default()
                     };
@@ -168,7 +180,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let heart_style = if *starred {
                         Style::default().fg(Color::Red)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(track_duration_color)
                     };
 
                     let track_str = if let Some(disc) = disc_number {
@@ -183,10 +195,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     let title_style = if is_playing {
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(track_name_playing_color)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(track_name_color)
                     };
 
                     let mut spans = vec![
@@ -195,7 +207,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::raw(" "),
                         Span::styled(
                             format!("{:>5} ", track_str),
-                            Style::default().fg(Color::Rgb(100, 130, 200)),
+                            Style::default().fg(track_number_color),
                         ),
                     ];
 
@@ -203,7 +215,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         spans.push(Span::styled(
                             "\u{25B6} ",
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(track_name_playing_color)
                                 .add_modifier(Modifier::BOLD),
                         ));
                     }
@@ -224,19 +236,19 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     if let Some(pc) = play_count {
                         spans.push(Span::styled(
                             format!(" ({pc})"),
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(track_duration_color),
                         ));
                     }
 
                     spans.push(Span::styled(
                         format!("  {dur_str}"),
-                        Style::default().fg(Color::Rgb(100, 180, 150)),
+                        Style::default().fg(track_length_color),
                     ));
 
                     let line = Line::from(spans);
 
                     let style = if is_selected {
-                        Style::default().bg(Color::Rgb(40, 40, 60))
+                        Style::default().bg(track_name_hovered_color)
                     } else {
                         Style::default()
                     };
@@ -249,7 +261,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items).highlight_style(
         Style::default()
-            .bg(Color::Rgb(50, 50, 80))
+            .bg(track_name_hovered_color)
             .add_modifier(Modifier::BOLD),
     );
 

@@ -8,33 +8,42 @@ use ratatui::{
 
 use crate::app::App;
 
+use super::StyleExt;
+
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
+    let style = &app.config.style;
     let entries = app.log_buffer.get_entries();
 
     let block = Block::default()
         .title(format!(" Logs ({}) ", entries.len()))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta));
+        .border_style(Style::default().fg(style.album_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No log entries")
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(empty, inner);
         return;
     }
 
+    // Pre-compute style colors.
+    let text_color = style.text_color();
+    let track_duration_color = style.track_duration_color();
+    let track_name_hovered_color = style.track_name_hovered_color();
+
     let items: Vec<ListItem> = entries
         .iter()
         .map(|entry| {
+            // Keep semantic colors for log levels.
             let level_color = match entry.level {
                 tracing::Level::ERROR => Color::Red,
                 tracing::Level::WARN => Color::Yellow,
                 tracing::Level::INFO => Color::Cyan,
                 tracing::Level::DEBUG => Color::Green,
-                tracing::Level::TRACE => Color::DarkGray,
+                tracing::Level::TRACE => track_duration_color,
             };
 
             let level_str = match entry.level {
@@ -60,9 +69,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" "),
-                Span::styled(format!("{target:24}"), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{target:24}"),
+                    Style::default().fg(track_duration_color),
+                ),
                 Span::raw(" "),
-                Span::styled(&entry.message, Style::default().fg(Color::White)),
+                Span::styled(&entry.message, Style::default().fg(text_color)),
             ]);
 
             ListItem::new(line)
@@ -71,7 +83,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items).highlight_style(
         Style::default()
-            .bg(Color::Rgb(50, 50, 80))
+            .bg(track_name_hovered_color)
             .add_modifier(Modifier::BOLD),
     );
 

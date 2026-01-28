@@ -9,7 +9,7 @@ mod style;
 mod util;
 
 pub use library::GROUP_ALBUM_ART_SIZE;
-pub use style::Style;
+pub use style::{Style, StyleExt};
 
 use egui::{
     CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Visuals,
@@ -43,8 +43,8 @@ pub struct UiState {
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
     cc.egui_ctx.set_visuals(Visuals::dark());
     cc.egui_ctx.style_mut(|style| {
-        style.visuals.panel_fill = config.style.background();
-        style.visuals.override_text_color = Some(config.style.text());
+        style.visuals.panel_fill = config.style.background_color32();
+        style.visuals.override_text_color = Some(config.style.text_color32());
         style.scroll_animation = egui::style::ScrollAnimation::duration(0.2);
     });
     cc.egui_ctx.options_mut(|options| {
@@ -224,7 +224,7 @@ impl App {
                         top: margin,
                         bottom: margin,
                     })
-                    .fill(config.style.background()),
+                    .fill(config.style.background_color32()),
             )
             .show(ctx, |ui| {
                 if let Some(id) = library::shared::render_player_controls(

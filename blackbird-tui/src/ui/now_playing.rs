@@ -8,9 +8,15 @@ use ratatui::{
 
 use crate::app::App;
 
-use super::string_to_color;
+use super::{StyleExt, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
+    // Extract style colors upfront to avoid borrow conflicts.
+    let text_color = app.config.style.text_color();
+    let album_color = app.config.style.album_color();
+    let track_name_playing_color = app.config.style.track_name_playing_color();
+    let track_duration_color = app.config.style.track_duration_color();
+
     let details = app.logic.get_track_display_details();
 
     let Some(tdd) = details else {
@@ -61,7 +67,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .as_ref()
         .filter(|a| a.as_str() != tdd.album_artist.as_str())
         .map(|a| string_to_color(a))
-        .unwrap_or(Color::White);
+        .unwrap_or(text_color);
 
     // Line 1: [heart] [track artist -] track title
     let mut track_spans = Vec::new();
@@ -77,7 +83,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     track_spans.push(Span::styled(
         tdd.track_title.to_string(),
         Style::default()
-            .fg(Color::White)
+            .fg(track_name_playing_color)
             .add_modifier(Modifier::BOLD),
     ));
 
@@ -88,9 +94,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     album_spans.push(Span::styled(
         tdd.album_name.to_string(),
-        Style::default().fg(Color::Rgb(100, 180, 255)),
+        Style::default().fg(album_color),
     ));
-    album_spans.push(Span::styled(" by ", Style::default().fg(Color::DarkGray)));
+    album_spans.push(Span::styled(
+        " by ",
+        Style::default().fg(track_duration_color),
+    ));
     album_spans.push(Span::styled(
         tdd.album_artist.to_string(),
         Style::default().fg(string_to_color(&tdd.album_artist)),
@@ -110,6 +119,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
+    let style = &app.config.style;
     let track_count = app
         .logic
         .get_state()
@@ -133,12 +143,12 @@ fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(Span::styled(
             " blackbird",
             Style::default()
-                .fg(Color::Cyan)
+                .fg(style.track_name_playing_color())
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
             format!(" {status}"),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(style.track_duration_color()),
         )),
     ];
     let paragraph = Paragraph::new(lines);
@@ -190,34 +200,35 @@ fn draw_album_art(
 }
 
 fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
+    let style = &app.config.style;
     let is_playing = app.logic.get_playing_position().is_some();
     let mode = app.logic.get_playback_mode();
 
     let play_icon = if is_playing { "\u{25B6}" } else { "\u{23F8}" };
     let play_color = if is_playing {
-        Color::Cyan
+        style.track_name_playing_color()
     } else {
-        Color::Yellow
+        style.track_name_hovered_color()
     };
 
     // Transport row:  |<  []  >|
     let transport = Line::from(vec![
-        Span::styled(" \u{23EE}", Style::default().fg(Color::White)),
+        Span::styled(" \u{23EE}", Style::default().fg(style.text_color())),
         Span::raw("  "),
         Span::styled(
             play_icon,
             Style::default().fg(play_color).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled("\u{23F9}", Style::default().fg(Color::White)),
+        Span::styled("\u{23F9}", Style::default().fg(style.text_color())),
         Span::raw("  "),
-        Span::styled("\u{23ED}", Style::default().fg(Color::White)),
+        Span::styled("\u{23ED}", Style::default().fg(style.text_color())),
     ]);
 
     // Mode line
     let mode_line = Line::from(vec![Span::styled(
         format!(" [{mode}]"),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(style.track_duration_color()),
     )]);
 
     let lines = vec![Line::from(""), transport, mode_line];

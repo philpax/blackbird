@@ -2,19 +2,21 @@ use blackbird_core::{TrackDisplayDetails, util::seconds_to_hms_string};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use super::string_to_color;
+use super::{StyleExt, string_to_color};
 use crate::app::App;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
+    let style = &app.config.style;
+
     let block = Block::default()
         .title(" Search ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow));
+        .border_style(Style::default().fg(style.track_name_playing_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -26,9 +28,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Search input
     let input = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::Yellow)),
-        Span::styled(&app.search_query, Style::default().fg(Color::White)),
-        Span::styled("\u{2588}", Style::default().fg(Color::Yellow)),
+        Span::styled("> ", Style::default().fg(style.track_name_playing_color())),
+        Span::styled(&app.search_query, Style::default().fg(style.text_color())),
+        Span::styled(
+            "\u{2588}",
+            Style::default().fg(style.track_name_playing_color()),
+        ),
     ]));
     frame.render_widget(input, chunks[0]);
 
@@ -39,20 +44,27 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "Enter at least 3 characters..."
         };
-        let hint_widget = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
+        let hint_widget =
+            Paragraph::new(hint).style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(hint_widget, chunks[1]);
         return;
     }
 
     if app.search_results.is_empty() {
-        let no_results =
-            Paragraph::new("No results found.").style(Style::default().fg(Color::DarkGray));
+        let no_results = Paragraph::new("No results found.")
+            .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(no_results, chunks[1]);
         return;
     }
 
-    let state = app.logic.get_state();
-    let app_state = state.read().unwrap();
+    let state_arc = app.logic.get_state();
+    let app_state = state_arc.read().unwrap();
+
+    // Pre-compute style colors to avoid borrow conflicts in closure.
+    let track_name_color = style.track_name_color();
+    let track_length_color = style.track_length_color();
+    let track_duration_color = style.track_duration_color();
+    let track_name_hovered_color = style.track_name_hovered_color();
 
     let items: Vec<ListItem> = app
         .search_results
@@ -72,26 +84,29 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(string_to_color(artist)),
                     ),
                     Span::raw(" - "),
-                    Span::styled(d.track_title.to_string(), Style::default().fg(Color::White)),
+                    Span::styled(
+                        d.track_title.to_string(),
+                        Style::default().fg(track_name_color),
+                    ),
                     Span::styled(
                         format!(" [{dur_str}]"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(track_length_color),
                     ),
                 ])
             } else {
                 Line::from(Span::styled(
                     format!("[{track_id}]"),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(track_duration_color),
                 ))
             };
 
-            let style = if is_selected {
-                Style::default().bg(Color::Rgb(50, 50, 80))
+            let item_style = if is_selected {
+                Style::default().bg(track_name_hovered_color)
             } else {
                 Style::default()
             };
 
-            ListItem::new(line).style(style)
+            ListItem::new(line).style(item_style)
         })
         .collect();
 

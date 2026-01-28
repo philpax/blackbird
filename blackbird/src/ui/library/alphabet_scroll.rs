@@ -2,7 +2,7 @@ use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
 use crate::{
     bc::{self, blackbird_state::TrackId},
-    ui::style,
+    ui::{style, style::StyleExt},
 };
 
 use super::{group, shared::AlphabetScrollState};
@@ -133,7 +133,7 @@ pub fn render(
     }
 
     let font_id = TextStyle::Body.resolve(ui.style());
-    let letter_color = style.text();
+    let letter_color = style.text_color32();
 
     let viewport_height = viewport_rect.height();
 
@@ -162,7 +162,7 @@ pub fn render(
 
         ui.painter().line_segment(
             [pos2(line_start_x, y), pos2(line_end_x, y)],
-            Stroke::new(2.0, style.track_name_playing()),
+            Stroke::new(2.0, style.track_name_playing_color32()),
         );
     }
 }

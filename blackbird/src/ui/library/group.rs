@@ -7,7 +7,7 @@ use crate::{
         util,
     },
     cover_art_cache::{CachePriority, CoverArtCache},
-    ui::{style, util as ui_util},
+    ui::{style, style::StyleExt, util as ui_util},
 };
 
 use super::track;
@@ -57,7 +57,7 @@ pub fn ui<'a>(
                         group.album.as_str(),
                         0.0,
                         TextFormat {
-                            color: style.album(),
+                            color: style.album_color32(),
                             ..Default::default()
                         },
                     );
@@ -66,7 +66,7 @@ pub fn ui<'a>(
                             format!(" ({year})").as_str(),
                             0.0,
                             TextFormat {
-                                color: style.album_year(),
+                                color: style.album_year_color32(),
                                 ..Default::default()
                             },
                         );
@@ -90,7 +90,7 @@ pub fn ui<'a>(
                     ui.add(
                         Label::new(
                             RichText::new(util::seconds_to_hms_string(group.duration, false))
-                                .color(style.album_length()),
+                                .color(style.album_length_color32()),
                         )
                         .selectable(false),
                     );

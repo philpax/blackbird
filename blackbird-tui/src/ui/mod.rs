@@ -4,8 +4,7 @@ mod lyrics;
 mod now_playing;
 mod search;
 
-use std::hash::{Hash, Hasher};
-
+use blackbird_client_shared::style as shared_style;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -18,6 +17,62 @@ use crate::{
     app::{App, FocusedPanel},
     keys,
 };
+
+/// Converts a shared style Rgb color to ratatui's Color.
+fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
+}
+
+/// Extension trait for using shared style colors with ratatui.
+pub trait StyleExt {
+    fn background_color(&self) -> Color;
+    fn text_color(&self) -> Color;
+    fn album_color(&self) -> Color;
+    fn album_length_color(&self) -> Color;
+    fn album_year_color(&self) -> Color;
+    fn track_number_color(&self) -> Color;
+    fn track_length_color(&self) -> Color;
+    fn track_name_color(&self) -> Color;
+    fn track_name_hovered_color(&self) -> Color;
+    fn track_name_playing_color(&self) -> Color;
+    fn track_duration_color(&self) -> Color;
+}
+
+impl StyleExt for shared_style::Style {
+    fn background_color(&self) -> Color {
+        rgb_to_color(self.background())
+    }
+    fn text_color(&self) -> Color {
+        rgb_to_color(self.text())
+    }
+    fn album_color(&self) -> Color {
+        rgb_to_color(self.album())
+    }
+    fn album_length_color(&self) -> Color {
+        rgb_to_color(self.album_length())
+    }
+    fn album_year_color(&self) -> Color {
+        rgb_to_color(self.album_year())
+    }
+    fn track_number_color(&self) -> Color {
+        rgb_to_color(self.track_number())
+    }
+    fn track_length_color(&self) -> Color {
+        rgb_to_color(self.track_length())
+    }
+    fn track_name_color(&self) -> Color {
+        rgb_to_color(self.track_name())
+    }
+    fn track_name_hovered_color(&self) -> Color {
+        rgb_to_color(self.track_name_hovered())
+    }
+    fn track_name_playing_color(&self) -> Color {
+        rgb_to_color(self.track_name_playing())
+    }
+    fn track_duration_color(&self) -> Color {
+        rgb_to_color(self.track_duration())
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
@@ -46,46 +101,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_help_bar(frame, app, main_chunks[3]);
 }
 
-/// Hashes a string to produce a pleasing colour (matches the egui client behaviour).
+/// Hashes a string to produce a pleasing colour (uses shared implementation).
 pub fn string_to_color(s: &str) -> Color {
-    const DISTINCT_COLOURS: u64 = 36_000;
-
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    s.hash(&mut hasher);
-    let hash = hasher.finish();
-    let hue = (hash % DISTINCT_COLOURS) as f32 / DISTINCT_COLOURS as f32;
-
-    hsv_to_rgb(hue, 0.75, 0.75)
-}
-
-fn hsv_to_rgb(h: f32, s: f32, v: f32) -> Color {
-    let c = v * s;
-    let h_prime = h * 6.0;
-    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
-    let m = v - c;
-
-    let (r, g, b) = if h_prime < 1.0 {
-        (c, x, 0.0)
-    } else if h_prime < 2.0 {
-        (x, c, 0.0)
-    } else if h_prime < 3.0 {
-        (0.0, c, x)
-    } else if h_prime < 4.0 {
-        (0.0, x, c)
-    } else if h_prime < 5.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-
-    Color::Rgb(
-        ((r + m) * 255.0) as u8,
-        ((g + m) * 255.0) as u8,
-        ((b + m) * 255.0) as u8,
-    )
+    rgb_to_color(shared_style::string_to_rgb(s))
 }
 
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let style = &app.config.style;
     let details = app.logic.get_track_display_details();
 
     let (position_secs, duration_secs) = details
@@ -121,23 +143,28 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         .split(area);
 
     let gauge = Gauge::default()
-        .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Rgb(30, 30, 40)))
+        .gauge_style(
+            Style::default()
+                .fg(style.track_name_playing_color())
+                .bg(style.background_color()),
+        )
         .ratio(ratio as f64)
         .label(label);
     frame.render_widget(gauge, chunks[0]);
 
     let vol_style = if app.volume_editing {
         Style::default()
-            .fg(Color::Yellow)
+            .fg(style.track_name_playing_color())
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(style.track_duration_color())
     };
     let vol_widget = Paragraph::new(Span::styled(format!(" {vol_str}"), vol_style));
     frame.render_widget(vol_widget, chunks[1]);
 }
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let style = &app.config.style;
     let mode = app.logic.get_playback_mode();
 
     let help_actions: &[keys::Action] = match app.focused_panel {
@@ -152,18 +179,24 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     for action in help_actions {
         if let Some((key, label)) = action.help_label() {
-            spans.push(Span::styled(key, Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(
+                key,
+                Style::default().fg(style.track_name_playing_color()),
+            ));
             spans.push(Span::raw(format!(":{label} ")));
         }
     }
 
     // Append playback mode for library view.
     if app.focused_panel == FocusedPanel::Library {
-        spans.push(Span::styled("m", Style::default().fg(Color::Yellow)));
+        spans.push(Span::styled(
+            "m",
+            Style::default().fg(style.track_name_playing_color()),
+        ));
         spans.push(Span::raw(format!(":mode({mode}) ")));
     }
 
     let help_line = Line::from(spans);
-    let help = Paragraph::new(help_line).style(Style::default().bg(Color::Rgb(30, 30, 40)));
+    let help = Paragraph::new(help_line).style(Style::default().bg(style.background_color()));
     frame.render_widget(help, area);
 }

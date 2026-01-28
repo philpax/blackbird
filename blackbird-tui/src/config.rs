@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     #[serde(default)]
     pub general: General,
+    #[serde(default)]
+    pub style: blackbird_client_shared::style::Style,
     #[serde(flatten)]
     pub shared: blackbird_client_shared::config::Config,
 }
