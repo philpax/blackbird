@@ -23,7 +23,13 @@ fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
     Color::Rgb(rgb.r, rgb.g, rgb.b)
 }
 
+/// Converts HSV to gamma-corrected ratatui Color to match egui's rendering.
+fn hsv_to_color_gamma(hsv: shared_style::Hsv) -> Color {
+    rgb_to_color(shared_style::hsv_to_rgb_gamma(hsv))
+}
+
 /// Extension trait for using shared style colors with ratatui.
+/// Uses gamma-corrected colors to match egui's appearance.
 pub trait StyleExt {
     fn background_color(&self) -> Color;
     fn text_color(&self) -> Color;
@@ -40,37 +46,37 @@ pub trait StyleExt {
 
 impl StyleExt for shared_style::Style {
     fn background_color(&self) -> Color {
-        rgb_to_color(self.background())
+        hsv_to_color_gamma(self.background_hsv)
     }
     fn text_color(&self) -> Color {
-        rgb_to_color(self.text())
+        hsv_to_color_gamma(self.text_hsv)
     }
     fn album_color(&self) -> Color {
-        rgb_to_color(self.album())
+        hsv_to_color_gamma(self.album_hsv)
     }
     fn album_length_color(&self) -> Color {
-        rgb_to_color(self.album_length())
+        hsv_to_color_gamma(self.album_length_hsv)
     }
     fn album_year_color(&self) -> Color {
-        rgb_to_color(self.album_year())
+        hsv_to_color_gamma(self.album_year_hsv)
     }
     fn track_number_color(&self) -> Color {
-        rgb_to_color(self.track_number())
+        hsv_to_color_gamma(self.track_number_hsv)
     }
     fn track_length_color(&self) -> Color {
-        rgb_to_color(self.track_length())
+        hsv_to_color_gamma(self.track_length_hsv)
     }
     fn track_name_color(&self) -> Color {
-        rgb_to_color(self.track_name())
+        hsv_to_color_gamma(self.track_name_hsv)
     }
     fn track_name_hovered_color(&self) -> Color {
-        rgb_to_color(self.track_name_hovered())
+        hsv_to_color_gamma(self.track_name_hovered_hsv)
     }
     fn track_name_playing_color(&self) -> Color {
-        rgb_to_color(self.track_name_playing())
+        hsv_to_color_gamma(self.track_name_playing_hsv)
     }
     fn track_duration_color(&self) -> Color {
-        rgb_to_color(self.track_duration())
+        hsv_to_color_gamma(self.track_duration_hsv)
     }
 }
 
@@ -106,8 +112,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 /// Hashes a string to produce a pleasing colour (uses shared implementation).
+/// Uses gamma-corrected version to match egui's color rendering.
 pub fn string_to_color(s: &str) -> Color {
-    rgb_to_color(shared_style::string_to_rgb(s))
+    rgb_to_color(shared_style::string_to_rgb_gamma(s))
 }
 
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
