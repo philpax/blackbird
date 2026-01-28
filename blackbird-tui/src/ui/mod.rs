@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Gauge, Paragraph},
+    widgets::{Block, Gauge, Paragraph},
 };
 
 use crate::{
@@ -76,6 +76,10 @@ impl StyleExt for shared_style::Style {
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
+
+    // Fill entire terminal with background color.
+    let bg = Block::default().style(Style::default().bg(app.config.style.background_color()));
+    frame.render_widget(bg, size);
 
     // Main layout matches egui: [NowPlaying] | [Scrub+Volume] | [Library/Search/Lyrics] | [Help].
     let main_chunks = Layout::default()
