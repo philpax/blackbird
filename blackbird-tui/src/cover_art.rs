@@ -8,11 +8,6 @@ use std::{
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::style::Color;
 
-const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
-const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_CACHE_SIZE: usize = 50;
-const CACHE_DIR_NAME: &str = "album-art-cache";
-
 /// Four quadrant colours extracted from album art.
 #[derive(Debug, Clone, Copy)]
 pub struct QuadrantColors {
@@ -31,18 +26,6 @@ impl Default for QuadrantColors {
             bottom_right: Color::DarkGray,
         }
     }
-}
-
-struct CacheEntry {
-    first_requested: std::time::Instant,
-    last_requested: std::time::Instant,
-    state: CacheEntryState,
-}
-
-enum CacheEntryState {
-    Unloaded,
-    Loading,
-    Loaded(QuadrantColors),
 }
 
 pub struct CoverArtCache {
@@ -69,14 +52,14 @@ impl CoverArtCache {
     }
 
     pub fn update(&mut self) {
-        // Process incoming cover art
+        // Process incoming cover art.
         for incoming in self.cover_art_loaded_rx.try_iter() {
             if let Some(entry) = self.cache.get_mut(&incoming.cover_art_id) {
                 let colors = compute_quadrant_colors(&incoming.cover_art);
                 entry.state = CacheEntryState::Loaded(colors);
                 tracing::debug!("Loaded cover art colours for {}", incoming.cover_art_id);
 
-                // Also save to disk cache if not already present
+                // Also save to disk cache if not already present.
                 let safe_filename = incoming
                     .cover_art_id
                     .0
@@ -91,17 +74,16 @@ impl CoverArtCache {
             }
         }
 
-        // Evict timed-out entries
-        self.cache
-            .retain(|id, entry| {
-                let keep = entry.last_requested.elapsed() <= CACHE_ENTRY_TIMEOUT;
-                if !keep {
-                    tracing::debug!("Evicting cover art for {id} from TUI cache");
-                }
-                keep
-            });
+        // Evict timed-out entries.
+        self.cache.retain(|id, entry| {
+            let keep = entry.last_requested.elapsed() <= CACHE_ENTRY_TIMEOUT;
+            if !keep {
+                tracing::debug!("Evicting cover art for {id} from TUI cache");
+            }
+            keep
+        });
 
-        // Evict excess entries (oldest first)
+        // Evict excess entries (oldest first).
         if self.cache.len() > MAX_CACHE_SIZE {
             let overage = self.cache.len() - MAX_CACHE_SIZE;
             let mut entries: Vec<_> = self.cache.keys().cloned().collect();
@@ -117,11 +99,7 @@ impl CoverArtCache {
         }
     }
 
-    pub fn get(
-        &mut self,
-        logic: &Logic,
-        cover_art_id: Option<&CoverArtId>,
-    ) -> QuadrantColors {
+    pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
         let Some(cover_art_id) = cover_art_id else {
             return QuadrantColors::default();
         };
@@ -137,7 +115,7 @@ impl CoverArtCache {
 
         entry.last_requested = std::time::Instant::now();
 
-        // Try loading from disk cache first
+        // Try loading from disk cache first.
         if let CacheEntryState::Unloaded = entry.state {
             if let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id) {
                 let colors = compute_quadrant_colors(&data);
@@ -146,10 +124,10 @@ impl CoverArtCache {
             }
         }
 
-        // Request from network after delay
+        // Request from network after delay.
         if entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT {
             if let CacheEntryState::Unloaded = entry.state {
-                // Request a small size since we only need colours
+                // Request a small size since we only need colours.
                 logic.request_cover_art(cover_art_id, Some(64));
                 entry.state = CacheEntryState::Loading;
             }
@@ -162,7 +140,24 @@ impl CoverArtCache {
     }
 }
 
-/// Compute the average colour of each quadrant of an image.
+const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
+const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_CACHE_SIZE: usize = 50;
+const CACHE_DIR_NAME: &str = "album-art-cache";
+
+struct CacheEntry {
+    first_requested: std::time::Instant,
+    last_requested: std::time::Instant,
+    state: CacheEntryState,
+}
+
+enum CacheEntryState {
+    Unloaded,
+    Loading,
+    Loaded(QuadrantColors),
+}
+
+/// Computes the average colour of each quadrant of an image.
 fn compute_quadrant_colors(image_data: &[u8]) -> QuadrantColors {
     let Ok(img) = image::load_from_memory(image_data) else {
         return QuadrantColors::default();

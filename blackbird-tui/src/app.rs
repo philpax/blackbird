@@ -1,10 +1,7 @@
 use std::time::Duration;
 
 use blackbird_core as bc;
-use blackbird_core::{
-    PlaybackMode, PlaybackToLogicMessage,
-    blackbird_state::TrackId,
-};
+use blackbird_core::{PlaybackMode, PlaybackToLogicMessage, blackbird_state::TrackId};
 
 use crate::config::Config;
 use crate::cover_art::CoverArtCache;
@@ -15,6 +12,31 @@ pub enum FocusedPanel {
     Library,
     Search,
     Lyrics,
+}
+
+/// A single entry in the flat library list.
+#[derive(Debug, Clone)]
+pub enum LibraryEntry {
+    GroupHeader {
+        artist: String,
+        album: String,
+        year: Option<i32>,
+        duration: u32,
+        starred: bool,
+        album_id: blackbird_core::blackbird_state::AlbumId,
+        cover_art_id: Option<blackbird_core::blackbird_state::CoverArtId>,
+    },
+    Track {
+        id: TrackId,
+        title: String,
+        artist: Option<String>,
+        album_artist: String,
+        track_number: Option<u32>,
+        disc_number: Option<u32>,
+        duration: Option<u32>,
+        starred: bool,
+        play_count: Option<u64>,
+    },
 }
 
 pub struct App {
@@ -45,7 +67,7 @@ pub struct App {
     // Volume adjustment mode
     pub volume_editing: bool,
 
-    // Track that should be scrolled into view
+    // Track that should be scrolled into view.
     pub scroll_to_track: Option<TrackId>,
 
     pub should_quit: bool,
@@ -93,13 +115,13 @@ impl App {
         self.logic.update();
         self.cover_art_cache.update();
 
-        // Process playback events
+        // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let PlaybackToLogicMessage::TrackStarted(tap) = event {
                 self.scroll_to_track = Some(tap.track_id.clone());
                 self.library_needs_scroll_to_playing = false;
 
-                // Auto-request lyrics if lyrics panel is open
+                // Auto-request lyrics if the lyrics panel is open.
                 if self.focused_panel == FocusedPanel::Lyrics {
                     self.lyrics_track_id = Some(tap.track_id.clone());
                     self.lyrics_loading = true;
@@ -109,7 +131,7 @@ impl App {
             }
         }
 
-        // Process lyrics data
+        // Process lyrics data.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
             if Some(&lyrics_data.track_id) == self.lyrics_track_id.as_ref() {
                 self.lyrics_data = lyrics_data.lyrics;
@@ -117,9 +139,8 @@ impl App {
             }
         }
 
-        // Process library population
+        // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
-            // Library was populated - scroll to track if needed
             if self.library_needs_scroll_to_playing {
                 if let Some(track_id) = self.logic.get_playing_track_id() {
                     self.scroll_to_track = Some(track_id);
@@ -127,27 +148,25 @@ impl App {
             }
         }
 
-        // Handle scroll-to-track
+        // Handle scroll-to-track.
         if let Some(track_id) = self.scroll_to_track.take() {
             let state = self.logic.get_state();
             let state = state.read().unwrap();
             if let Some(index) = self.find_flat_index_for_track(&state, &track_id) {
                 self.library_selected_index = index;
-                // We'll adjust scroll offset in the UI render
             } else {
-                // Track not in library yet, re-queue
+                // Track not in library yet, re-queue.
                 self.scroll_to_track = Some(track_id);
             }
         }
 
-        // Check for shutdown
         if self.logic.should_shutdown() {
             self.should_quit = true;
         }
     }
 
-    /// Build a flat list of entries for the library view.
-    /// Each entry is either a GroupHeader or a Track.
+    /// Builds a flat list of entries for the library view.
+    /// Each entry is either a group header or a track.
     pub fn build_flat_library(&self) -> Vec<LibraryEntry> {
         let state = self.logic.get_state();
         let state = state.read().unwrap();
@@ -183,27 +202,6 @@ impl App {
         entries
     }
 
-    /// Find the flat index for a given track in the library.
-    fn find_flat_index_for_track(
-        &self,
-        state: &bc::AppState,
-        target_track_id: &TrackId,
-    ) -> Option<usize> {
-        let mut index = 0;
-        for group in &state.library.groups {
-            index += 1; // group header
-            for track_id in &group.tracks {
-                if track_id == target_track_id {
-                    return Some(index);
-                }
-                if state.library.track_map.contains_key(track_id) {
-                    index += 1;
-                }
-            }
-        }
-        None
-    }
-
     pub fn toggle_search(&mut self) {
         if self.focused_panel == FocusedPanel::Search {
             self.focused_panel = FocusedPanel::Library;
@@ -223,7 +221,7 @@ impl App {
         } else {
             self.focused_panel = FocusedPanel::Lyrics;
             self.lyrics_scroll_offset = 0;
-            // Request lyrics for currently playing track
+            // Request lyrics for the currently playing track.
             if let Some(track_id) = self.logic.get_playing_track_id() {
                 self.lyrics_track_id = Some(track_id.clone());
                 self.lyrics_loading = true;
@@ -286,28 +284,25 @@ impl App {
             self.logic.seek_current(new_pos);
         }
     }
-}
 
-#[derive(Debug, Clone)]
-pub enum LibraryEntry {
-    GroupHeader {
-        artist: String,
-        album: String,
-        year: Option<i32>,
-        duration: u32,
-        starred: bool,
-        album_id: blackbird_core::blackbird_state::AlbumId,
-        cover_art_id: Option<blackbird_core::blackbird_state::CoverArtId>,
-    },
-    Track {
-        id: TrackId,
-        title: String,
-        artist: Option<String>,
-        album_artist: String,
-        track_number: Option<u32>,
-        disc_number: Option<u32>,
-        duration: Option<u32>,
-        starred: bool,
-        play_count: Option<u64>,
-    },
+    /// Finds the flat index for a given track in the library.
+    fn find_flat_index_for_track(
+        &self,
+        state: &bc::AppState,
+        target_track_id: &TrackId,
+    ) -> Option<usize> {
+        let mut index = 0;
+        for group in &state.library.groups {
+            index += 1; // group header
+            for track_id in &group.tracks {
+                if track_id == target_track_id {
+                    return Some(index);
+                }
+                if state.library.track_map.contains_key(track_id) {
+                    index += 1;
+                }
+            }
+        }
+        None
+    }
 }

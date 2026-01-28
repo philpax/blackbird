@@ -1,4 +1,3 @@
-use blackbird_core::{PlaybackMode, blackbird_state::TrackId};
 use serde::{Deserialize, Serialize};
 
 /// Config is read from the same `config.toml` as the egui client.
@@ -11,7 +10,7 @@ pub struct Config {
     #[serde(default)]
     pub server: blackbird_shared::config::Server,
     #[serde(default)]
-    pub last_playback: LastPlayback,
+    pub last_playback: blackbird_shared::config::LastPlayback,
 }
 impl Config {
     pub const FILENAME: &str = "config.toml";
@@ -37,7 +36,9 @@ impl Config {
     pub fn save(&self) {
         // Read the existing file and merge our fields into it
         let mut doc: toml::Value = match std::fs::read_to_string(Self::FILENAME) {
-            Ok(contents) => toml::from_str(&contents).unwrap_or(toml::Value::Table(Default::default())),
+            Ok(contents) => {
+                toml::from_str(&contents).unwrap_or(toml::Value::Table(Default::default()))
+            }
             Err(_) => toml::Value::Table(Default::default()),
         };
 
@@ -49,7 +50,10 @@ impl Config {
                 .entry("general")
                 .or_insert_with(|| toml::Value::Table(Default::default()));
             if let Some(g) = general.as_table_mut() {
-                g.insert("volume".into(), toml::Value::Float(self.general.volume as f64));
+                g.insert(
+                    "volume".into(),
+                    toml::Value::Float(self.general.volume as f64),
+                );
             }
         }
 
@@ -59,10 +63,22 @@ impl Config {
                 .entry("server")
                 .or_insert_with(|| toml::Value::Table(Default::default()));
             if let Some(s) = server.as_table_mut() {
-                s.insert("base_url".into(), toml::Value::String(self.server.base_url.clone()));
-                s.insert("username".into(), toml::Value::String(self.server.username.clone()));
-                s.insert("password".into(), toml::Value::String(self.server.password.clone()));
-                s.insert("transcode".into(), toml::Value::Boolean(self.server.transcode));
+                s.insert(
+                    "base_url".into(),
+                    toml::Value::String(self.server.base_url.clone()),
+                );
+                s.insert(
+                    "username".into(),
+                    toml::Value::String(self.server.username.clone()),
+                );
+                s.insert(
+                    "password".into(),
+                    toml::Value::String(self.server.password.clone()),
+                );
+                s.insert(
+                    "transcode".into(),
+                    toml::Value::Boolean(self.server.transcode),
+                );
             }
         }
 
@@ -73,16 +89,26 @@ impl Config {
                 .or_insert_with(|| toml::Value::Table(Default::default()));
             if let Some(l) = lp.as_table_mut() {
                 match &self.last_playback.track_id {
-                    Some(id) => { l.insert("track_id".into(), toml::Value::String(id.0.to_string())); }
-                    None => { l.remove("track_id"); }
+                    Some(id) => {
+                        l.insert("track_id".into(), toml::Value::String(id.0.to_string()));
+                    }
+                    None => {
+                        l.remove("track_id");
+                    }
                 }
-                l.insert("track_position_secs".into(), toml::Value::Float(self.last_playback.track_position_secs));
-                l.insert("playback_mode".into(), toml::Value::String(
-                    toml::to_string(&self.last_playback.playback_mode)
-                        .unwrap()
-                        .trim_matches('"')
-                        .to_string()
-                ));
+                l.insert(
+                    "track_position_secs".into(),
+                    toml::Value::Float(self.last_playback.track_position_secs),
+                );
+                l.insert(
+                    "playback_mode".into(),
+                    toml::Value::String(
+                        toml::to_string(&self.last_playback.playback_mode)
+                            .unwrap()
+                            .trim_matches('"')
+                            .to_string(),
+                    ),
+                );
             }
         }
 
@@ -102,23 +128,6 @@ impl Default for General {
         Self {
             volume: 1.0,
             tick_rate_ms: 100,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct LastPlayback {
-    pub track_id: Option<TrackId>,
-    pub track_position_secs: f64,
-    pub playback_mode: PlaybackMode,
-}
-impl Default for LastPlayback {
-    fn default() -> Self {
-        Self {
-            track_id: None,
-            track_position_secs: 0.0,
-            playback_mode: PlaybackMode::default(),
         }
     }
 }

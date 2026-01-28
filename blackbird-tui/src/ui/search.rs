@@ -27,14 +27,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Search input
     let input = Paragraph::new(Line::from(vec![
         Span::styled("> ", Style::default().fg(Color::Yellow)),
-        Span::styled(
-            &app.search_query,
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            "\u{2588}",
-            Style::default().fg(Color::Yellow),
-        ),
+        Span::styled(&app.search_query, Style::default().fg(Color::White)),
+        Span::styled("\u{2588}", Style::default().fg(Color::Yellow)),
     ]));
     frame.render_widget(input, chunks[0]);
 
@@ -45,8 +39,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             "Enter at least 3 characters..."
         };
-        let hint_widget =
-            Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
+        let hint_widget = Paragraph::new(hint).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(hint_widget, chunks[1]);
         return;
     }
@@ -71,8 +64,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
             let line = if let Some(d) = details {
                 let artist = d.artist();
-                let dur_str =
-                    seconds_to_hms_string(d.track_duration.as_secs() as u32, false);
+                let dur_str = seconds_to_hms_string(d.track_duration.as_secs() as u32, false);
 
                 Line::from(vec![
                     Span::styled(
@@ -80,10 +72,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(string_to_color(artist)),
                     ),
                     Span::raw(" - "),
-                    Span::styled(
-                        d.track_title.to_string(),
-                        Style::default().fg(Color::White),
-                    ),
+                    Span::styled(d.track_title.to_string(), Style::default().fg(Color::White)),
                     Span::styled(
                         format!(" [{dur_str}]"),
                         Style::default().fg(Color::DarkGray),

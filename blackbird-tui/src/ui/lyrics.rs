@@ -95,9 +95,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             }
 
             let text_style = if is_current {
-                Style::default()
-                    .fg(text_color)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(text_color).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(text_color)
             };

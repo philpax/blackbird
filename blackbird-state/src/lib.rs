@@ -12,17 +12,20 @@ use smol_str::{SmolStr, format_smolstr};
 mod album;
 pub use album::{Album, AlbumId};
 
+mod artist;
+pub use artist::ArtistId;
+
 mod cover_art;
 pub use cover_art::CoverArtId;
 
 mod group;
 pub use group::Group;
 
+mod playback_mode;
+pub use playback_mode::PlaybackMode;
+
 mod track;
 pub use track::{Track, TrackId};
-
-mod artist;
-pub use artist::ArtistId;
 
 /// Creates a collator configured for sorting artist and album names.
 ///

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blackbird_state::{AlbumId, CoverArtId, TrackId};
+use blackbird_state::{AlbumId, CoverArtId, PlaybackMode, TrackId};
 use serde::{Deserialize, Serialize};
 
 use crate::{Library, TrackDisplayDetails, queue::QueueState};
@@ -138,36 +138,6 @@ impl AppStateError {
                 format!("Failed to unstar album `{}`: {error}", album_id,)
             }
         }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum PlaybackMode {
-    #[default]
-    Sequential,
-    RepeatOne,
-    GroupRepeat,
-    Shuffle,
-    LikedShuffle,
-    GroupShuffle,
-    LikedGroupShuffle,
-}
-impl PlaybackMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PlaybackMode::Sequential => "Sequential",
-            PlaybackMode::RepeatOne => "Repeat One",
-            PlaybackMode::GroupRepeat => "Group Repeat",
-            PlaybackMode::Shuffle => "Shuffle",
-            PlaybackMode::LikedShuffle => "Liked Shuffle",
-            PlaybackMode::GroupShuffle => "Group Shuffle",
-            PlaybackMode::LikedGroupShuffle => "Liked Group Shuffle",
-        }
-    }
-}
-impl std::fmt::Display for PlaybackMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
     }
 }
 

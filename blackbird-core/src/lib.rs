@@ -23,7 +23,8 @@ use tokio_thread::TokioThread;
 mod queue;
 
 mod app_state;
-pub use app_state::{AppState, AppStateError, PlaybackMode, ScrobbleState, TrackAndPosition};
+pub use app_state::{AppState, AppStateError, ScrobbleState, TrackAndPosition};
+pub use blackbird_state::PlaybackMode;
 
 mod library;
 pub use library::Library;

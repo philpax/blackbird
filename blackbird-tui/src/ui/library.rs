@@ -90,9 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .copied()
                         .unwrap_or_default();
 
-                    let year_str = year
-                        .map(|y| format!(" ({y})"))
-                        .unwrap_or_default();
+                    let year_str = year.map(|y| format!(" ({y})")).unwrap_or_default();
                     let dur_str = seconds_to_hms_string(*duration, false);
 
                     let line = Line::from(vec![
@@ -107,15 +105,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::styled(artist, Style::default().fg(string_to_color(artist))),
                         Span::raw(" \u{2014} "),
                         Span::styled(album, Style::default().fg(Color::Rgb(100, 180, 255))),
-                        Span::styled(
-                            year_str,
-                            Style::default().fg(Color::DarkGray),
-                        ),
+                        Span::styled(year_str, Style::default().fg(Color::DarkGray)),
                         Span::raw(" "),
-                        Span::styled(
-                            dur_str,
-                            Style::default().fg(Color::DarkGray),
-                        ),
+                        Span::styled(dur_str, Style::default().fg(Color::DarkGray)),
                     ]);
 
                     let style = if is_selected {

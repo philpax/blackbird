@@ -22,8 +22,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(9), // album art (4 cols x 2 rows of half-blocks)
-            Constraint::Min(20),   // track info
+            Constraint::Length(9),  // album art (4 cols x 2 rows of half-blocks)
+            Constraint::Min(20),    // track info
             Constraint::Length(24), // transport controls
         ])
         .split(area);
@@ -69,7 +69,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         track_spans.push(Span::styled(track_heart, Style::default().fg(Color::Red)));
     }
     if !artist_display.is_empty() {
-        track_spans.push(Span::styled(artist_display, Style::default().fg(artist_color)));
+        track_spans.push(Span::styled(
+            artist_display,
+            Style::default().fg(artist_color),
+        ));
     }
     track_spans.push(Span::styled(
         tdd.track_title.to_string(),
@@ -87,10 +90,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         tdd.album_name.to_string(),
         Style::default().fg(Color::Rgb(100, 180, 255)),
     ));
-    album_spans.push(Span::styled(
-        " by ",
-        Style::default().fg(Color::DarkGray),
-    ));
+    album_spans.push(Span::styled(" by ", Style::default().fg(Color::DarkGray)));
     album_spans.push(Span::styled(
         tdd.album_artist.to_string(),
         Style::default().fg(string_to_color(&tdd.album_artist)),
@@ -180,7 +180,9 @@ fn draw_album_art(
     for _ in 0..half_w {
         row0_spans.push(Span::styled(
             "\u{2580}",
-            Style::default().fg(colors.top_right).bg(colors.bottom_right),
+            Style::default()
+                .fg(colors.top_right)
+                .bg(colors.bottom_right),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(row0_spans)), row0);
@@ -197,7 +199,9 @@ fn draw_album_art(
     for _ in 0..half_w {
         row1_spans.push(Span::styled(
             "\u{2580}",
-            Style::default().fg(colors.top_right).bg(colors.bottom_right),
+            Style::default()
+                .fg(colors.top_right)
+                .bg(colors.bottom_right),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(row1_spans)), row1);
@@ -208,44 +212,33 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
     let mode = app.logic.get_playback_mode();
 
     let play_icon = if is_playing { "\u{25B6}" } else { "\u{23F8}" };
-    let play_color = if is_playing { Color::Cyan } else { Color::Yellow };
+    let play_color = if is_playing {
+        Color::Cyan
+    } else {
+        Color::Yellow
+    };
 
     // Transport row:  |<  []  >|
     let transport = Line::from(vec![
-        Span::styled(
-            " \u{23EE}",
-            Style::default().fg(Color::White),
-        ),
+        Span::styled(" \u{23EE}", Style::default().fg(Color::White)),
         Span::raw("  "),
         Span::styled(
             play_icon,
             Style::default().fg(play_color).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled(
-            "\u{23F9}",
-            Style::default().fg(Color::White),
-        ),
+        Span::styled("\u{23F9}", Style::default().fg(Color::White)),
         Span::raw("  "),
-        Span::styled(
-            "\u{23ED}",
-            Style::default().fg(Color::White),
-        ),
+        Span::styled("\u{23ED}", Style::default().fg(Color::White)),
     ]);
 
     // Mode line
-    let mode_line = Line::from(vec![
-        Span::styled(
-            format!(" [{mode}]"),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
+    let mode_line = Line::from(vec![Span::styled(
+        format!(" [{mode}]"),
+        Style::default().fg(Color::DarkGray),
+    )]);
 
-    let lines = vec![
-        Line::from(""),
-        transport,
-        mode_line,
-    ];
+    let lines = vec![Line::from(""), transport, mode_line];
 
     let widget = Paragraph::new(lines).alignment(Alignment::Left);
     frame.render_widget(widget, area);

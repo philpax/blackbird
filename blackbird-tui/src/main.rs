@@ -200,8 +200,7 @@ fn handle_library_action(app: &mut App, action: Action) {
         }
         Action::PageDown => {
             if entries_len > 0 {
-                app.library_selected_index =
-                    (app.library_selected_index + 20).min(entries_len - 1);
+                app.library_selected_index = (app.library_selected_index + 20).min(entries_len - 1);
             }
         }
         Action::Home => app.library_selected_index = 0,

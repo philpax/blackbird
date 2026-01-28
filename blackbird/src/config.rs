@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ui;
-use blackbird_core::{PlaybackMode, blackbird_state::TrackId};
 
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
@@ -13,7 +12,7 @@ pub struct Config {
     #[serde(default)]
     pub style: ui::Style,
     #[serde(default)]
-    pub last_playback: LastPlayback,
+    pub last_playback: blackbird_shared::config::LastPlayback,
     #[serde(default)]
     pub keybindings: Keybindings,
 }
@@ -68,23 +67,6 @@ impl Default for General {
             window_height: 1280,
             volume: 1.0,
             incremental_search_timeout_ms: 5000,
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct LastPlayback {
-    pub track_id: Option<TrackId>,
-    pub track_position_secs: f64,
-    pub playback_mode: PlaybackMode,
-}
-impl Default for LastPlayback {
-    fn default() -> Self {
-        Self {
-            track_id: None,
-            track_position_secs: 0.0,
-            playback_mode: PlaybackMode::default(),
         }
     }
 }
