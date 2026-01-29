@@ -127,19 +127,3 @@ fn seek_direction_to_sign(direction: SeekDirection) -> i64 {
         -1
     }
 }
-
-/// On Windows, retrieves the console window HWND for use with souvlaki.
-///
-/// Returns `None` if there is no console window (e.g. running as a Windows
-/// service or from a non-console context).
-#[cfg(target_os = "windows")]
-pub fn get_console_hwnd() -> Option<*mut std::ffi::c_void> {
-    use windows::Win32::System::Console::GetConsoleWindow;
-
-    let hwnd = unsafe { GetConsoleWindow() };
-    if hwnd.0 == 0 {
-        None
-    } else {
-        Some(hwnd.0 as *mut std::ffi::c_void)
-    }
-}

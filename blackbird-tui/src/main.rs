@@ -63,20 +63,28 @@ fn main() -> anyhow::Result<()> {
 
     // Initialize media controls (MPRIS on Linux, SMTC on Windows) for global playback keys.
     #[cfg(feature = "media-controls")]
-    let mut media_controls = {
-        #[cfg(target_os = "windows")]
-        let hwnd = blackbird_client_shared::controls::get_console_hwnd();
-        #[cfg(not(target_os = "windows"))]
-        let hwnd = None;
-
-        blackbird_client_shared::controls::Controls::new(
-            hwnd,
-            logic.subscribe_to_playback_events(),
-            logic.request_handle(),
-            logic.get_state(),
-        )
-        .expect("Failed to initialize media controls")
-    };
+    let mut media_controls = blackbird_client_shared::controls::Controls::new(
+        {
+            #[cfg(target_os = "windows")]
+            {
+                use windows::Win32::System::Console::GetConsoleWindow;
+                let hwnd = unsafe { GetConsoleWindow() };
+                if hwnd.is_invalid() {
+                    None
+                } else {
+                    Some(hwnd.0 as *mut std::ffi::c_void)
+                }
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None
+            }
+        },
+        logic.subscribe_to_playback_events(),
+        logic.request_handle(),
+        logic.get_state(),
+    )
+    .expect("Failed to initialize media controls");
 
     let playback_rx = logic.subscribe_to_playback_events();
     let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);

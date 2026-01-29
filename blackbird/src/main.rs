@@ -162,7 +162,16 @@ impl App {
 
         #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
-            controls::get_egui_hwnd(Some(cc)),
+            {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                cc.window_handle().ok().and_then(|handle| {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        Some(h.hwnd.get() as *mut std::ffi::c_void)
+                    } else {
+                        None
+                    }
+                })
+            },
             logic.subscribe_to_playback_events(),
             logic.request_handle(),
             logic.get_state(),

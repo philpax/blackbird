@@ -611,7 +611,6 @@ dependencies = [
  "serde",
  "souvlaki",
  "tracing",
- "windows 0.62.2",
 ]
 
 [[package]]
@@ -722,6 +721,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-width 0.2.0",
+ "windows 0.62.2",
 ]
 
 [[package]]

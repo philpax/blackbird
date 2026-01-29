@@ -28,3 +28,6 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
     "gif",
 ] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_System_Console"] }

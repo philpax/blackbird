@@ -13,6 +13,3 @@ blackbird-shared = { path = "../blackbird-shared" }
 serde = { workspace = true }
 tracing = { workspace = true }
 souvlaki = { version = "0.8.3", optional = true }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_System_Console"] }
