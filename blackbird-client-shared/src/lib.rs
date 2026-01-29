@@ -1,3 +1,6 @@
+/// Cover art cache shared between the egui and TUI clients.
+pub mod cover_art_cache;
+
 /// Media controls (MPRIS / Windows SMTC) shared between the egui and TUI clients.
 #[cfg(feature = "media-controls")]
 pub mod controls;

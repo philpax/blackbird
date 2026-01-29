@@ -19,6 +19,13 @@ pub enum FocusedPanel {
     Logs,
 }
 
+/// State for the album art overlay popup.
+#[derive(Debug, Clone)]
+pub struct AlbumArtOverlay {
+    pub cover_art_id: CoverArtId,
+    pub title: String,
+}
+
 /// A single entry in the flat library list.
 #[derive(Debug, Clone)]
 pub enum LibraryEntry {
@@ -94,7 +101,7 @@ pub struct App {
     pub scrollbar_dragging: bool,
 
     /// Album art overlay: shows a large quantised view of album art when clicked.
-    pub album_art_overlay: Option<CoverArtId>,
+    pub album_art_overlay: Option<AlbumArtOverlay>,
 
     pub should_quit: bool,
 }

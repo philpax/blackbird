@@ -405,7 +405,10 @@ fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
         && let Some(details) = app.logic.get_track_display_details()
         && let Some(cover_art_id) = details.cover_art_id
     {
-        app.album_art_overlay = Some(cover_art_id);
+        app.album_art_overlay = Some(crate::app::AlbumArtOverlay {
+            cover_art_id,
+            title: format!("{} \u{2013} {}", details.album_artist, details.album_name),
+        });
         return;
     }
 
@@ -591,6 +594,8 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             }
         }
         LibraryEntry::GroupHeader {
+            artist,
+            album,
             album_id,
             starred,
             cover_art_id,
@@ -601,7 +606,10 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             if x < art_end_col {
                 // Click on album art → open overlay
                 if let Some(id) = cover_art_id {
-                    app.album_art_overlay = Some(id.clone());
+                    app.album_art_overlay = Some(crate::app::AlbumArtOverlay {
+                        cover_art_id: id.clone(),
+                        title: format!("{artist} \u{2013} {album}"),
+                    });
                 }
             } else if is_heart_click && click_line_in_entry == 1 {
                 // Heart is on line 2 of group header

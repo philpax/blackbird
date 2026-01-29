@@ -608,6 +608,7 @@ version = "0.1.0"
 dependencies = [
  "blackbird-core",
  "blackbird-shared",
+ "image",
  "serde",
  "souvlaki",
  "tracing",

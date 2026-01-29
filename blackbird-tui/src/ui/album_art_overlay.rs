@@ -14,10 +14,11 @@ use super::StyleExt;
 /// The overlay is 90% of the window width and shows a large quantised
 /// view of the cover art using half-block characters.
 pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
-    let Some(ref cover_art_id) = app.album_art_overlay else {
+    let Some(ref overlay) = app.album_art_overlay else {
         return;
     };
-    let cover_art_id = cover_art_id.clone();
+    let cover_art_id = overlay.cover_art_id.clone();
+    let title_text = format!(" {} ", overlay.title);
 
     let background_color = app.config.style.background_color();
     let text_color = app.config.style.text_color();
@@ -59,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     let title_y = overlay_y;
     let title_area = Rect::new(overlay_x + 2, title_y, overlay_width - 4, 1);
     let title_line = Line::from(vec![Span::styled(
-        " Album Art ",
+        &title_text,
         Style::default().fg(text_color).add_modifier(Modifier::BOLD),
     )]);
     frame.render_widget(Paragraph::new(title_line), title_area);

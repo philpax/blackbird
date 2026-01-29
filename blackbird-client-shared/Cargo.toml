@@ -10,6 +10,7 @@ media-controls = ["dep:souvlaki"]
 blackbird-core = { path = "../blackbird-core", default-features = false }
 blackbird-shared = { path = "../blackbird-shared" }
 
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 serde = { workspace = true }
 tracing = { workspace = true }
 souvlaki = { version = "0.8.3", optional = true }

@@ -1,12 +1,41 @@
 use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Arc,
+    collections::{HashMap, HashSet},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender},
+    },
     time::Duration,
 };
 
+use blackbird_client_shared::cover_art_cache::{self, CachePriority, ClientData};
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::style::Color;
+
+const POOL_SIZE: usize = 4;
+
+struct ThreadPool {
+    tx: Sender<Box<dyn FnOnce() + Send>>,
+}
+
+impl ThreadPool {
+    fn new(num_threads: usize) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
+        let rx = Arc::new(Mutex::new(rx));
+        for _ in 0..num_threads {
+            let rx = rx.clone();
+            std::thread::spawn(move || {
+                while let Ok(job) = rx.lock().unwrap().recv() {
+                    job();
+                }
+            });
+        }
+        Self { tx }
+    }
+
+    fn spawn(&self, f: impl FnOnce() + Send + 'static) {
+        let _ = self.tx.send(Box::new(f));
+    }
+}
 
 /// 4 columns × 4 rows of colours extracted from album art.
 /// This allows 2 terminal lines of album art (each half-block shows 2 rows).
@@ -47,152 +76,169 @@ impl ArtColorGrid {
     }
 }
 
+#[derive(Clone)]
+pub struct TuiCoverArt {
+    raw_bytes: Arc<[u8]>,
+    /// 4x4 color grid for library thumbnails (computed in background).
+    pub colors: Option<QuadrantColors>,
+    /// Variable-size grid for the overlay (lazily computed via with_client_data_mut).
+    /// Reset to None when from_image_data is called (new image data arrived).
+    pub overlay_grid: Option<ArtColorGrid>,
+}
+
+impl ClientData for TuiCoverArt {
+    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, _is_high_res: bool) -> Self {
+        TuiCoverArt {
+            raw_bytes: data.clone(),
+            colors: None,
+            overlay_grid: None,
+        }
+    }
+}
+
+const MAX_CACHE_SIZE: usize = 50;
+const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct CoverArtCache {
-    cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
-    cache: HashMap<CoverArtId, CacheEntry>,
-    cache_dir: PathBuf,
+    inner: cover_art_cache::CoverArtCache<TuiCoverArt>,
+    pool: ThreadPool,
+    color_tx: Sender<(CoverArtId, QuadrantColors)>,
+    color_rx: Receiver<(CoverArtId, QuadrantColors)>,
+    computing: HashSet<CoverArtId>,
+    grid_tx: Sender<(CoverArtId, ArtColorGrid)>,
+    grid_rx: Receiver<(CoverArtId, ArtColorGrid)>,
+    grid_computing: HashSet<CoverArtId>,
+    /// Fallback overlay grids, persisted across image-data transitions so that
+    /// the low-res grid remains visible while the high-res grid is computing.
+    overlay_grids: HashMap<CoverArtId, ArtColorGrid>,
 }
 
 impl CoverArtCache {
     pub fn new(cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>) -> Self {
-        let cache_dir = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(CACHE_DIR_NAME);
-
-        if let Err(e) = std::fs::create_dir_all(&cache_dir) {
-            tracing::warn!("Failed to create cache directory: {e}");
-        }
-
+        let (color_tx, color_rx) = std::sync::mpsc::channel();
+        let (grid_tx, grid_rx) = std::sync::mpsc::channel();
         Self {
-            cover_art_loaded_rx,
-            cache: HashMap::new(),
-            cache_dir,
+            inner: cover_art_cache::CoverArtCache::new(
+                cover_art_loaded_rx,
+                None, // full resolution — overlay needs high-res data
+                MAX_CACHE_SIZE,
+                CACHE_ENTRY_TIMEOUT,
+            ),
+            pool: ThreadPool::new(POOL_SIZE),
+            color_tx,
+            color_rx,
+            computing: HashSet::new(),
+            grid_tx,
+            grid_rx,
+            grid_computing: HashSet::new(),
+            overlay_grids: HashMap::new(),
         }
     }
 
     pub fn update(&mut self) {
-        // Process incoming cover art.
-        for incoming in self.cover_art_loaded_rx.try_iter() {
-            if let Some(entry) = self.cache.get_mut(&incoming.cover_art_id) {
-                let colors = compute_quadrant_colors(&incoming.cover_art);
-                entry.state = CacheEntryState::Loaded(colors);
-                tracing::debug!("Loaded cover art colours for {}", incoming.cover_art_id);
-
-                // Also save to disk cache if not already present.
-                let safe_filename = incoming
-                    .cover_art_id
-                    .0
-                    .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-                let cache_path = self.cache_dir.join(format!("{safe_filename}.png"));
-                if !cache_path.exists() {
-                    let cover_art = incoming.cover_art.clone();
-                    std::thread::spawn(move || {
-                        save_to_disk_cache(&cache_path, &cover_art);
-                    });
-                }
-            }
+        let evicted = self.inner.update();
+        for id in &evicted {
+            self.computing.remove(id);
+            self.grid_computing.remove(id);
+            self.overlay_grids.remove(id);
         }
 
-        // Evict timed-out entries.
-        self.cache.retain(|id, entry| {
-            let keep = entry.last_requested.elapsed() <= CACHE_ENTRY_TIMEOUT;
-            if !keep {
-                tracing::debug!("Evicting cover art for {id} from TUI cache");
-            }
-            keep
-        });
-
-        // Evict excess entries (oldest first).
-        if self.cache.len() > MAX_CACHE_SIZE {
-            let overage = self.cache.len() - MAX_CACHE_SIZE;
-            let mut entries: Vec<_> = self.cache.keys().cloned().collect();
-            entries.sort_by_key(|id| {
-                self.cache
-                    .get(id)
-                    .map(|e| e.first_requested)
-                    .unwrap_or(std::time::Instant::now())
+        for (id, colors) in self.color_rx.try_iter() {
+            self.computing.remove(&id);
+            self.inner.with_client_data_mut(&id, |data, _raw| {
+                data.colors = Some(colors);
             });
-            for id in entries.into_iter().take(overage) {
-                self.cache.remove(&id);
-            }
+        }
+
+        for (id, grid) in self.grid_rx.try_iter() {
+            self.grid_computing.remove(&id);
+            self.overlay_grids.insert(id.clone(), grid.clone());
+            self.inner.with_client_data_mut(&id, |data, _raw| {
+                data.overlay_grid = Some(grid);
+            });
         }
     }
 
     pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
-        let Some(cover_art_id) = cover_art_id else {
+        let Some(tui_data) = self.inner.get(logic, cover_art_id, CachePriority::Visible) else {
             return QuadrantColors::default();
         };
 
-        let entry = self
-            .cache
-            .entry(cover_art_id.clone())
-            .or_insert(CacheEntry {
-                first_requested: std::time::Instant::now(),
-                last_requested: std::time::Instant::now(),
-                state: CacheEntryState::Unloaded,
-            });
-
-        entry.last_requested = std::time::Instant::now();
-
-        // Try loading from disk cache first.
-        if let CacheEntryState::Unloaded = entry.state
-            && let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id)
-        {
-            let colors = compute_quadrant_colors(&data);
-            entry.state = CacheEntryState::Loaded(colors);
+        if let Some(colors) = tui_data.colors {
             return colors;
         }
 
-        // Request from network after delay.
-        if entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT
-            && let CacheEntryState::Unloaded = entry.state
-        {
-            // Request a small size since we only need colours.
-            logic.request_cover_art(cover_art_id, Some(64));
-            entry.state = CacheEntryState::Loading;
+        // Colors not computed yet — spawn background thread if not already running
+        let id = cover_art_id.unwrap(); // safe: inner.get returned Some
+        if !self.computing.contains(id) {
+            self.computing.insert(id.clone());
+            let raw = tui_data.raw_bytes.clone();
+            let id_clone = id.clone();
+            let tx = self.color_tx.clone();
+            self.pool.spawn(move || {
+                let colors = compute_quadrant_colors(&raw);
+                let _ = tx.send((id_clone, colors));
+            });
         }
 
-        match &entry.state {
-            CacheEntryState::Loaded(colors) => *colors,
-            _ => QuadrantColors::default(),
-        }
+        QuadrantColors::default()
     }
 
     /// Returns a variable-size color grid for the overlay display.
-    /// Loads raw image data from disk cache and computes colors at the requested resolution.
+    /// Computes the grid in a background thread; returns the previous grid
+    /// (or empty) while the new one is being computed.
     pub fn get_art_grid(
-        &self,
+        &mut self,
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
     ) -> ArtColorGrid {
-        let Some(cover_art_id) = cover_art_id else {
+        let Some(id) = cover_art_id else {
             return ArtColorGrid::empty(cols, rows);
         };
 
-        if let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id) {
-            compute_art_grid(&data, cols, rows)
-        } else {
-            ArtColorGrid::empty(cols, rows)
+        // Check if client data already has a grid with matching dimensions.
+        let up_to_date = self
+            .inner
+            .with_client_data_mut(id, |data, _raw| {
+                data.overlay_grid
+                    .as_ref()
+                    .is_some_and(|g| g.cols == cols && g.rows == rows)
+            })
+            .unwrap_or(false);
+
+        if up_to_date {
+            let grid = self
+                .inner
+                .with_client_data_mut(id, |data, _raw| data.overlay_grid.clone().unwrap())
+                .unwrap();
+            self.overlay_grids.insert(id.clone(), grid.clone());
+            return grid;
         }
+
+        // Need to compute — spawn background thread if not already running.
+        if !self.grid_computing.contains(id) {
+            let raw_bytes = self
+                .inner
+                .with_client_data_mut(id, |data, _raw| data.raw_bytes.clone());
+            if let Some(raw_bytes) = raw_bytes {
+                self.grid_computing.insert(id.clone());
+                let id_clone = id.clone();
+                let tx = self.grid_tx.clone();
+                self.pool.spawn(move || {
+                    let grid = compute_art_grid(&raw_bytes, cols, rows);
+                    let _ = tx.send((id_clone, grid));
+                });
+            }
+        }
+
+        // Return the previous grid as fallback while computing.
+        self.overlay_grids
+            .get(id)
+            .filter(|g| g.cols == cols && g.rows == rows)
+            .cloned()
+            .unwrap_or_else(|| ArtColorGrid::empty(cols, rows))
     }
-}
-
-const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
-const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
-const MAX_CACHE_SIZE: usize = 50;
-const CACHE_DIR_NAME: &str = "album-art-cache";
-
-struct CacheEntry {
-    first_requested: std::time::Instant,
-    last_requested: std::time::Instant,
-    state: CacheEntryState,
-}
-
-enum CacheEntryState {
-    Unloaded,
-    Loading,
-    Loaded(QuadrantColors),
 }
 
 /// Computes the average colour of each region in a 4×4 grid (4 cols, 4 rows).
@@ -253,14 +299,6 @@ fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
     ArtColors { colors }
 }
 
-fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<Arc<[u8]>> {
-    let safe_filename = cover_art_id
-        .0
-        .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-    let path = cache_dir.join(format!("{safe_filename}.png"));
-    std::fs::read(&path).ok().map(|d| d.into())
-}
-
 /// Computes a variable-size grid of averaged colours from image data.
 fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> ArtColorGrid {
     if cols == 0 || rows == 0 {
@@ -317,23 +355,4 @@ fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> ArtColorGrid
         cols,
         rows,
     }
-}
-
-fn save_to_disk_cache(cache_path: &Path, image_data: &[u8]) {
-    let Ok(img) = image::load_from_memory(image_data) else {
-        return;
-    };
-
-    let resized = img.resize_exact(16, 16, image::imageops::FilterType::Triangle);
-    let blurred = image::imageops::fast_blur(&resized.into_rgb8(), 1.0);
-
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    if blurred
-        .write_to(&mut buffer, image::ImageFormat::Png)
-        .is_err()
-    {
-        return;
-    }
-
-    let _ = std::fs::write(cache_path, buffer.into_inner());
 }
