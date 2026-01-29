@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -375,52 +375,37 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Save the offset for use by keyboard navigation.
     app.library_scroll_offset = state.offset();
 
-    // Calculate scrollbar thumb position for alphabet scroll overlay.
-    let thumb_info = if has_scrollbar && total_lines > 0 {
-        // Thumb position and size as fractions of total content
-        let thumb_start = centered_offset as f32 / total_lines as f32;
-        let thumb_size = visible_height as f32 / total_lines as f32;
-        Some((thumb_start, thumb_size))
-    } else {
-        None
-    };
-
-    // Render scrollbar on the right edge if needed.
-    if has_scrollbar {
-        let mut scrollbar_state = ScrollbarState::new(total_lines).position(centered_offset);
-        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(None)
-            .end_symbol(None)
-            .track_symbol(Some("│"))
-            .thumb_symbol("█");
-        frame.render_stateful_widget(scrollbar, inner, &mut scrollbar_state);
-    }
-
-    // Render alphabet scroll indicator letters on the right side.
-    render_alphabet_scroll(
+    // Render combined scrollbar + alphabet indicator on the right column.
+    render_scrollbar_with_alphabet(
         frame,
         &entries,
         inner,
         visible_height,
+        total_lines,
+        centered_offset,
+        has_scrollbar,
         text_color,
-        thumb_info,
         background_color,
     );
 }
 
-/// Renders alphabet letters as a global indicator on the right side of the library view.
-/// Letters are positioned as fractions of total content to show where each alphabetical
-/// section is in the overall library, using the shared alphabet_scroll logic.
+/// Renders a combined scrollbar + alphabet indicator on the rightmost column.
 ///
-/// When a letter overlaps with the scrollbar thumb, it's rendered with inverted colors
-/// (text on background) so both the letter and scroll position are visible.
-fn render_alphabet_scroll(
+/// Each cell in the column shows one of:
+/// - Letter on thumb: inverted letter (background fg, text bg) — shows both thumb and letter
+/// - Letter off thumb: normal letter
+/// - Thumb without letter: "█" block
+/// - Empty track: "│" line (only when scrollbar visible)
+#[allow(clippy::too_many_arguments)]
+fn render_scrollbar_with_alphabet(
     frame: &mut Frame,
     entries: &[LibraryEntry],
     area: Rect,
     visible_height: usize,
+    total_lines: usize,
+    scroll_offset: usize,
+    has_scrollbar: bool,
     text_color: Color,
-    thumb_info: Option<(f32, f32)>, // (thumb_start_fraction, thumb_size_fraction)
     background_color: Color,
 ) {
     if visible_height == 0 {
@@ -428,68 +413,71 @@ fn render_alphabet_scroll(
     }
 
     // Aggregate entries into groups for the shared logic.
-    // Each group = (first_letter, total_line_count_for_group)
     let mut groups: Vec<(char, usize)> = Vec::new();
-
     for entry in entries {
         match entry {
             LibraryEntry::GroupHeader { artist, .. } => {
-                // Start a new group with the artist's first letter
                 let first_char = artist.chars().next().unwrap_or('?');
-                groups.push((first_char, 2)); // GroupHeader is 2 lines
+                groups.push((first_char, 2));
             }
             LibraryEntry::Track { .. } => {
-                // Add track's line count to current group
                 if let Some(last) = groups.last_mut() {
-                    last.1 += 1; // Track is 1 line
+                    last.1 += 1;
                 }
             }
         }
     }
 
-    // Use more aggressive clustering for terminal (fewer rows than GUI)
     let cluster_threshold = 1.0 / visible_height as f32;
     let positions = alphabet_scroll::compute_positions(groups.into_iter(), cluster_threshold);
 
-    if positions.is_empty() {
-        return;
+    // Build a map of screen row -> letter for quick lookup.
+    let mut letter_at_row: HashMap<u16, char> = HashMap::new();
+    for (letter, fraction) in &positions {
+        let row = (fraction * visible_height as f32) as u16;
+        if row < area.height {
+            letter_at_row.insert(row, *letter);
+        }
     }
 
-    // Calculate thumb screen position if scrollbar is shown
-    let thumb_screen_range = thumb_info.map(|(thumb_start, thumb_size)| {
+    // Calculate thumb row range.
+    let thumb_range = if has_scrollbar && total_lines > 0 {
         let vh = visible_height as f32;
-        let start_y = (thumb_start * vh) as u16;
-        let end_y = ((thumb_start + thumb_size) * vh).ceil() as u16;
-        (start_y, end_y)
-    });
+        let thumb_start_frac = scroll_offset as f32 / total_lines as f32;
+        let thumb_size_frac = visible_height as f32 / total_lines as f32;
+        let start = (thumb_start_frac * vh) as u16;
+        let end = ((thumb_start_frac + thumb_size_frac) * vh).ceil() as u16;
+        Some((start, end))
+    } else {
+        None
+    };
 
-    // Render letters at the rightmost column of the area (to the right of scrollbar)
-    let letter_x = area.x + area.width.saturating_sub(1);
+    let col_x = area.x + area.width.saturating_sub(1);
 
-    for (letter, fraction) in &positions {
-        // Position based on fraction of viewport height
-        let letter_y = (fraction * visible_height as f32) as u16;
-        let screen_y = area.y + letter_y;
+    for row in 0..area.height {
+        let is_thumb = thumb_range
+            .map(|(s, e)| row >= s && row < e)
+            .unwrap_or(false);
+        let letter = letter_at_row.get(&row);
 
-        if screen_y < area.y + area.height {
-            // Check if this letter's row overlaps with the scrollbar thumb
-            let overlaps_thumb = thumb_screen_range
-                .map(|(thumb_start_y, thumb_end_y)| {
-                    letter_y >= thumb_start_y && letter_y < thumb_end_y
-                })
-                .unwrap_or(false);
+        let (content, style) = match (letter, is_thumb, has_scrollbar) {
+            // Letter on thumb: inverted
+            (Some(ch), true, _) => (
+                ch.to_string(),
+                Style::default().fg(background_color).bg(text_color),
+            ),
+            // Letter off thumb
+            (Some(ch), false, _) => (ch.to_string(), Style::default().fg(text_color)),
+            // Thumb without letter
+            (None, true, _) => ("█".to_string(), Style::default().fg(text_color)),
+            // Scrollbar track (no thumb, no letter)
+            (None, false, true) => ("│".to_string(), Style::default().fg(text_color)),
+            // No scrollbar, no letter: skip
+            (None, false, false) => continue,
+        };
 
-            let style = if overlaps_thumb {
-                // Invert: show letter with background color on text color background
-                Style::default().fg(background_color).bg(text_color)
-            } else {
-                Style::default().fg(text_color)
-            };
-
-            let span = Span::styled(letter.to_string(), style);
-            let line = Line::from(span);
-            let rect = Rect::new(letter_x, screen_y, 1, 1);
-            frame.render_widget(ratatui::widgets::Paragraph::new(line), rect);
-        }
+        let span = Span::styled(content, style);
+        let rect = Rect::new(col_x, area.y + row, 1, 1);
+        frame.render_widget(Paragraph::new(Line::from(span)), rect);
     }
 }
