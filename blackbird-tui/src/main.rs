@@ -129,8 +129,9 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     tick_rate: Duration,
-    #[cfg(feature = "media-controls")]
-    media_controls: &mut Option<blackbird_client_shared::controls::Controls>,
+    #[cfg(feature = "media-controls")] media_controls: &mut Option<
+        blackbird_client_shared::controls::Controls,
+    >,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
 
@@ -898,10 +899,10 @@ fn handle_lyrics_action(app: &mut App, action: Action) {
 /// Console windows don't support SMTC, so we create our own invisible window.
 #[cfg(all(target_os = "windows", feature = "media-controls"))]
 fn create_hidden_media_window() -> Option<*mut std::ffi::c_void> {
-    use windows::Win32::Foundation::{HWND, HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW, WINDOW_EX_STYLE,
+        CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW,
         WS_OVERLAPPEDWINDOW,
     };
     use windows::core::w;
