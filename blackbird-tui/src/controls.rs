@@ -11,6 +11,18 @@ use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig, SeekDirection,
 };
 
+/// On Windows, retrieve the console window HWND so souvlaki can attach
+/// System Media Transport Controls to it.
+#[cfg(all(feature = "media-controls", target_os = "windows"))]
+fn get_console_hwnd() -> Option<*mut std::ffi::c_void> {
+    extern "system" {
+        fn GetConsoleWindow() -> *mut std::ffi::c_void;
+    }
+    // SAFETY: GetConsoleWindow is always safe to call; returns null if there is no console.
+    let hwnd = unsafe { GetConsoleWindow() };
+    if hwnd.is_null() { None } else { Some(hwnd) }
+}
+
 #[cfg(feature = "media-controls")]
 pub struct Controls {
     controls: MediaControls,
@@ -25,10 +37,15 @@ impl Controls {
         logic_request: LogicRequestHandle,
         state: Arc<RwLock<AppState>>,
     ) -> Result<Self, souvlaki::Error> {
+        #[cfg(target_os = "windows")]
+        let hwnd = get_console_hwnd();
+        #[cfg(not(target_os = "windows"))]
+        let hwnd: Option<*mut std::ffi::c_void> = None;
+
         let mut controls = MediaControls::new(PlatformConfig {
             dbus_name: "blackbird",
             display_name: "Blackbird Music Player",
-            hwnd: None,
+            hwnd,
         })?;
 
         controls.attach(move |event: MediaControlEvent| match event {
