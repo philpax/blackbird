@@ -455,18 +455,27 @@ fn render_alphabet_scroll(
         return;
     }
 
+    // Calculate thumb screen position if scrollbar is shown
+    let thumb_screen_range = thumb_info.map(|(thumb_start, thumb_size)| {
+        let vh = visible_height as f32;
+        let start_y = (thumb_start * vh) as u16;
+        let end_y = ((thumb_start + thumb_size) * vh).ceil() as u16;
+        (start_y, end_y)
+    });
+
     // Render letters at the rightmost column of the area (to the right of scrollbar)
     let letter_x = area.x + area.width.saturating_sub(1);
 
     for (letter, fraction) in &positions {
         // Position based on fraction of viewport height
-        let y = area.y + (fraction * visible_height as f32) as u16;
+        let letter_y = (fraction * visible_height as f32) as u16;
+        let screen_y = area.y + letter_y;
 
-        if y < area.y + area.height {
-            // Check if this letter overlaps with the scrollbar thumb
-            let overlaps_thumb = thumb_info
-                .map(|(thumb_start, thumb_size)| {
-                    *fraction >= thumb_start && *fraction < thumb_start + thumb_size
+        if screen_y < area.y + area.height {
+            // Check if this letter's row overlaps with the scrollbar thumb
+            let overlaps_thumb = thumb_screen_range
+                .map(|(thumb_start_y, thumb_end_y)| {
+                    letter_y >= thumb_start_y && letter_y < thumb_end_y
                 })
                 .unwrap_or(false);
 
@@ -479,7 +488,7 @@ fn render_alphabet_scroll(
 
             let span = Span::styled(letter.to_string(), style);
             let line = Line::from(span);
-            let rect = Rect::new(letter_x, y, 1, 1);
+            let rect = Rect::new(letter_x, screen_y, 1, 1);
             frame.render_widget(ratatui::widgets::Paragraph::new(line), rect);
         }
     }

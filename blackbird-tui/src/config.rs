@@ -102,12 +102,7 @@ impl Config {
                 );
                 l.insert(
                     "playback_mode".into(),
-                    toml::Value::String(
-                        toml::to_string(&self.shared.last_playback.playback_mode)
-                            .unwrap()
-                            .trim_matches('"')
-                            .to_string(),
-                    ),
+                    toml::Value::String(self.shared.last_playback.playback_mode.to_string()),
                 );
             }
         }
