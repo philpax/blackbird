@@ -716,6 +716,7 @@ dependencies = [
  "image",
  "ratatui",
  "serde",
+ "souvlaki",
  "toml",
  "tracing",
  "tracing-subscriber",

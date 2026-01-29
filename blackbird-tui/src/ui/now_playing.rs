@@ -52,17 +52,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Determine heart hover state based on mouse position.
     let info_area = chunks[1];
     let mouse_pos = app.mouse_position;
-    let track_heart_hovered = mouse_pos.map_or(false, |(mx, my)| {
-        mx == info_area.x && my == area.y
-    });
-    let album_heart_hovered = mouse_pos.map_or(false, |(mx, my)| {
-        mx == info_area.x && my == area.y + 1
-    });
+    let track_heart_hovered = mouse_pos.is_some_and(|(mx, my)| mx == info_area.x && my == area.y);
+    let album_heart_hovered =
+        mouse_pos.is_some_and(|(mx, my)| mx == info_area.x && my == area.y + 1);
 
-    let (track_heart, track_heart_style) =
-        heart_display(tdd.starred, track_heart_hovered);
-    let (album_heart, album_heart_style) =
-        heart_display(album_starred, album_heart_hovered);
+    let (track_heart, track_heart_style) = heart_display(tdd.starred, track_heart_hovered);
+    let (album_heart, album_heart_style) = heart_display(album_starred, album_heart_hovered);
 
     let artist_display = if let Some(ref track_artist) = tdd.track_artist {
         if track_artist.as_str() != tdd.album_artist.as_str() {
@@ -82,10 +77,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(text_color);
 
     // Line 1: heart [track artist -] track title
-    let mut track_spans = vec![
-        Span::styled(track_heart, track_heart_style),
-        Span::raw(" "),
-    ];
+    let mut track_spans = vec![Span::styled(track_heart, track_heart_style), Span::raw(" ")];
     if !artist_display.is_empty() {
         track_spans.push(Span::styled(
             artist_display,
@@ -103,14 +95,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let album_spans = vec![
         Span::styled(album_heart, album_heart_style),
         Span::raw(" "),
-        Span::styled(
-            tdd.album_name.to_string(),
-            Style::default().fg(album_color),
-        ),
-        Span::styled(
-            " by ",
-            Style::default().fg(track_duration_color),
-        ),
+        Span::styled(tdd.album_name.to_string(), Style::default().fg(album_color)),
+        Span::styled(" by ", Style::default().fg(track_duration_color)),
         Span::styled(
             tdd.album_artist.to_string(),
             Style::default().fg(string_to_color(&tdd.album_artist)),

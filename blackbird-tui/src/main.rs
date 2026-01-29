@@ -1,5 +1,7 @@
 mod app;
 mod config;
+#[cfg(feature = "media-controls")]
+mod controls;
 mod cover_art;
 mod keys;
 mod log_buffer;
@@ -61,6 +63,15 @@ fn main() -> anyhow::Result<()> {
         logic.set_scroll_target(track_id);
     }
 
+    // Initialize media controls (MPRIS on Linux, etc.) for global playback keys.
+    #[cfg(feature = "media-controls")]
+    let mut media_controls = controls::Controls::new(
+        logic.subscribe_to_playback_events(),
+        logic.request_handle(),
+        logic.get_state(),
+    )
+    .expect("Failed to initialize media controls");
+
     let playback_rx = logic.subscribe_to_playback_events();
     let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);
 
@@ -82,7 +93,13 @@ fn main() -> anyhow::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let tick_rate = Duration::from_millis(app.config.general.tick_rate_ms);
-    let result = run_app(&mut terminal, &mut app, tick_rate);
+    let result = run_app(
+        &mut terminal,
+        &mut app,
+        tick_rate,
+        #[cfg(feature = "media-controls")]
+        &mut media_controls,
+    );
 
     // Restore terminal
     disable_raw_mode()?;
@@ -103,6 +120,7 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     tick_rate: Duration,
+    #[cfg(feature = "media-controls")] media_controls: &mut controls::Controls,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
 
@@ -126,6 +144,8 @@ fn run_app(
 
         if last_tick.elapsed() >= tick_rate {
             app.tick();
+            #[cfg(feature = "media-controls")]
+            media_controls.update();
             last_tick = Instant::now();
         }
 
@@ -161,6 +181,25 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
         MouseEventKind::Down(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
 
+            // --- Album art overlay (handled first, on top of everything) ---
+            if app.album_art_overlay.is_some() {
+                if ui::album_art_overlay::is_x_button_click(app, size, x, y) {
+                    app.album_art_overlay = None;
+                } else if let Some(rect) = ui::album_art_overlay::overlay_rect(app, size) {
+                    // Click inside the overlay but not on X → ignore
+                    if x >= rect.x
+                        && x < rect.x + rect.width
+                        && y >= rect.y
+                        && y < rect.y + rect.height
+                    {
+                        return;
+                    }
+                    // Click outside overlay → close it
+                    app.album_art_overlay = None;
+                }
+                return;
+            }
+
             // --- Now Playing area ---
             if y >= now_playing_area.y && y < now_playing_area.y + now_playing_area.height {
                 handle_now_playing_click(app, now_playing_area, x, y);
@@ -187,20 +226,31 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             // If we had a pending click (mouse down without drag), select and play the track.
             if let Some((_cx, _cy, index)) = app.library_click_pending.take()
                 && !app.library_dragging
+                && let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index)
             {
-                if let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index) {
-                    app.library_selected_index = index;
-                    app.logic.request_play_track(&id);
-                }
+                app.library_selected_index = index;
+                app.logic.request_play_track(&id);
             }
             app.library_dragging = false;
             app.library_drag_last_y = None;
+            app.scrollbar_dragging = false;
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
 
-            // Scrollbar drag in library
+            // Scrollbar drag in library — once started, continues regardless of x position
             if app.focused_panel == FocusedPanel::Library {
+                if app.scrollbar_dragging
+                    && y >= library_area.y
+                    && y < library_area.y + library_area.height
+                {
+                    let entries = app.get_flat_library().to_vec();
+                    scroll_library_to_y(app, &entries, library_area, y);
+                    app.library_click_pending = None;
+                    app.library_dragging = true;
+                    return;
+                }
+
                 let scrollbar_x = library_area.x + library_area.width - 1;
 
                 if x == scrollbar_x
@@ -212,6 +262,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     // Cancel any pending click since we're dragging
                     app.library_click_pending = None;
                     app.library_dragging = true;
+                    app.scrollbar_dragging = true;
                     return;
                 }
 
@@ -329,10 +380,21 @@ fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
         ])
         .split(area);
 
+    let art_area = chunks[0];
     let info_area = chunks[1];
     let transport_area = chunks[2];
 
     let row = y.saturating_sub(area.y);
+
+    // Click on album art → open overlay
+    if x >= art_area.x
+        && x < art_area.x + art_area.width
+        && let Some(details) = app.logic.get_track_display_details()
+        && let Some(cover_art_id) = details.cover_art_id
+    {
+        app.album_art_overlay = Some(cover_art_id);
+        return;
+    }
 
     // Click on track info area
     if x >= info_area.x && x < info_area.x + info_area.width {
@@ -353,21 +415,21 @@ fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
                     app.logic.set_track_starred(&track_id, !starred);
                     app.mark_library_dirty();
                 }
-            } else if row == 1 {
-                if let Some(details) = app.logic.get_track_display_details() {
-                    let starred = app
-                        .logic
-                        .get_state()
-                        .read()
-                        .unwrap()
-                        .library
-                        .albums
-                        .get(&details.album_id)
-                        .map(|a| a.starred)
-                        .unwrap_or(false);
-                    app.logic.set_album_starred(&details.album_id, !starred);
-                    app.mark_library_dirty();
-                }
+            } else if row == 1
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                let starred = app
+                    .logic
+                    .get_state()
+                    .read()
+                    .unwrap()
+                    .library
+                    .albums
+                    .get(&details.album_id)
+                    .map(|a| a.starred)
+                    .unwrap_or(false);
+                app.logic.set_album_starred(&details.album_id, !starred);
+                app.mark_library_dirty();
             }
         } else {
             // Click on text → navigate to playing track/album
@@ -376,11 +438,11 @@ fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
                     app.scroll_to_track = Some(track_id);
                     app.focused_panel = FocusedPanel::Library;
                 }
-            } else if row == 1 {
-                if let Some(details) = app.logic.get_track_display_details() {
-                    app.scroll_to_album(&details.album_id);
-                    app.focused_panel = FocusedPanel::Library;
-                }
+            } else if row == 1
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                app.scroll_to_album(&details.album_id);
+                app.focused_panel = FocusedPanel::Library;
             }
         }
         return;
@@ -451,6 +513,7 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     // Click on scrollbar (rightmost column)
     if x == scrollbar_x {
         scroll_library_to_y(app, &entries, library_area, y);
+        app.scrollbar_dragging = true;
         return;
     }
 
@@ -515,9 +578,19 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             }
         }
         LibraryEntry::GroupHeader {
-            album_id, starred, ..
+            album_id,
+            starred,
+            cover_art_id,
+            ..
         } => {
-            if is_heart_click && click_line_in_entry == 1 {
+            // Album art occupies first 5 columns (1 margin + 4 art blocks)
+            let art_end_col = library_area.x + 5;
+            if x < art_end_col {
+                // Click on album art → open overlay
+                if let Some(id) = cover_art_id {
+                    app.album_art_overlay = Some(id.clone());
+                }
+            } else if is_heart_click && click_line_in_entry == 1 {
                 // Heart is on line 2 of group header
                 app.logic.set_album_starred(album_id, !starred);
                 app.mark_library_dirty();
@@ -572,6 +645,17 @@ fn scroll_library_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Re
 }
 
 fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
+    // Close album art overlay on Escape or any key.
+    if app.album_art_overlay.is_some() {
+        if matches!(
+            key.code,
+            event::KeyCode::Esc | event::KeyCode::Char('q') | event::KeyCode::Enter
+        ) {
+            app.album_art_overlay = None;
+        }
+        return;
+    }
+
     // Handle volume editing mode first
     if app.volume_editing {
         if let Some(action) = keys::volume_action(key) {

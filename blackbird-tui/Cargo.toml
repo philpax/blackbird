@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["audio"]
+default = ["audio", "media-controls"]
 audio = ["blackbird-core/audio"]
+media-controls = ["dep:souvlaki"]
 
 [dependencies]
 blackbird-client-shared = { path = "../blackbird-client-shared" }
@@ -17,6 +18,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 toml = { workspace = true }
+
+souvlaki = { version = "0.8.3", optional = true }
 
 ratatui = "0.29"
 crossterm = "0.28"

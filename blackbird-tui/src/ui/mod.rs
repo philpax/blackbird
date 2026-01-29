@@ -1,3 +1,4 @@
+pub mod album_art_overlay;
 mod library;
 mod logs;
 mod lyrics;
@@ -109,6 +110,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     draw_help_bar(frame, app, main_chunks[3]);
+
+    // Draw album art overlay on top of everything if active.
+    if app.album_art_overlay.is_some() {
+        album_art_overlay::draw(frame, app, size);
+    }
 }
 
 /// Hashes a string to produce a pleasing colour (uses shared implementation).

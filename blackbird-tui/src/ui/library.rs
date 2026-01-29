@@ -128,6 +128,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Line 1: Album art (rows 0-1) + artist name
                     let line1 = Line::from(vec![
+                        Span::raw(" "), // left margin, same as now playing
                         Span::styled(
                             "\u{2580}",
                             Style::default()
@@ -158,7 +159,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
                     // Calculate padding for right-alignment using unicode width
-                    let left_content_width = 4 + 1 + album.width() + year_str.width(); // art + space + album + year
+                    let left_content_width = 1 + 4 + 1 + album.width() + year_str.width(); // margin + art + space + album + year
                     let right_content = format!(" {dur_str} ");
                     let right_width = right_content.width() + 1; // duration + heart
                     let padding_needed = list_width
@@ -166,6 +167,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .saturating_sub(1);
 
                     let line2 = Line::from(vec![
+                        Span::raw(" "), // left margin, same as now playing
                         Span::styled(
                             "\u{2580}",
                             Style::default()

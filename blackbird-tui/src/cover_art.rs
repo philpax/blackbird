@@ -27,6 +27,26 @@ impl Default for ArtColors {
 // Keep the old name as an alias for compatibility during transition.
 pub type QuadrantColors = ArtColors;
 
+/// Variable-size grid of colours for the album art overlay.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct ArtColorGrid {
+    /// Colors arranged row-major: `colors[row][col]`.
+    pub colors: Vec<Vec<Color>>,
+    pub cols: usize,
+    pub rows: usize,
+}
+
+impl ArtColorGrid {
+    pub fn empty(cols: usize, rows: usize) -> Self {
+        Self {
+            colors: vec![vec![Color::DarkGray; cols]; rows],
+            cols,
+            rows,
+        }
+    }
+}
+
 pub struct CoverArtCache {
     cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
     cache: HashMap<CoverArtId, CacheEntry>,
@@ -137,6 +157,25 @@ impl CoverArtCache {
             _ => QuadrantColors::default(),
         }
     }
+
+    /// Returns a variable-size color grid for the overlay display.
+    /// Loads raw image data from disk cache and computes colors at the requested resolution.
+    pub fn get_art_grid(
+        &self,
+        cover_art_id: Option<&CoverArtId>,
+        cols: usize,
+        rows: usize,
+    ) -> ArtColorGrid {
+        let Some(cover_art_id) = cover_art_id else {
+            return ArtColorGrid::empty(cols, rows);
+        };
+
+        if let Some(data) = load_from_disk_cache(&self.cache_dir, cover_art_id) {
+            compute_art_grid(&data, cols, rows)
+        } else {
+            ArtColorGrid::empty(cols, rows)
+        }
+    }
 }
 
 const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
@@ -220,6 +259,64 @@ fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<A
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
     let path = cache_dir.join(format!("{safe_filename}.png"));
     std::fs::read(&path).ok().map(|d| d.into())
+}
+
+/// Computes a variable-size grid of averaged colours from image data.
+fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> ArtColorGrid {
+    if cols == 0 || rows == 0 {
+        return ArtColorGrid::empty(cols, rows);
+    }
+
+    let Ok(img) = image::load_from_memory(image_data) else {
+        return ArtColorGrid::empty(cols, rows);
+    };
+
+    let rgb = img.to_rgb8();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+
+    if w == 0 || h == 0 {
+        return ArtColorGrid::empty(cols, rows);
+    }
+
+    let mut grid = vec![vec![Color::DarkGray; cols]; rows];
+
+    for (row, row_colors) in grid.iter_mut().enumerate().take(rows) {
+        for (col, cell) in row_colors.iter_mut().enumerate().take(cols) {
+            let x0 = col * w / cols;
+            let y0 = row * h / rows;
+            let x1 = ((col + 1) * w / cols).max(x0 + 1);
+            let y1 = ((row + 1) * h / rows).max(y0 + 1);
+
+            let mut r_sum: u64 = 0;
+            let mut g_sum: u64 = 0;
+            let mut b_sum: u64 = 0;
+            let mut count: u64 = 0;
+
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    let pixel = rgb.get_pixel(x as u32, y as u32);
+                    r_sum += pixel[0] as u64;
+                    g_sum += pixel[1] as u64;
+                    b_sum += pixel[2] as u64;
+                    count += 1;
+                }
+            }
+
+            if count > 0 {
+                *cell = Color::Rgb(
+                    (r_sum / count) as u8,
+                    (g_sum / count) as u8,
+                    (b_sum / count) as u8,
+                );
+            }
+        }
+    }
+
+    ArtColorGrid {
+        colors: grid,
+        cols,
+        rows,
+    }
 }
 
 fn save_to_disk_cache(cache_path: &Path, image_data: &[u8]) {

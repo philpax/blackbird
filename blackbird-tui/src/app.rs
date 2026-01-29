@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use blackbird_core as bc;
-use blackbird_core::{PlaybackMode, PlaybackToLogicMessage, blackbird_state::TrackId};
+use blackbird_core::{
+    PlaybackMode, PlaybackToLogicMessage,
+    blackbird_state::{CoverArtId, TrackId},
+};
 
 use crate::config::Config;
 use crate::cover_art::CoverArtCache;
@@ -86,6 +89,12 @@ pub struct App {
     pub library_click_pending: Option<(u16, u16, usize)>,
     pub library_dragging: bool,
     pub library_drag_last_y: Option<u16>,
+    /// True when dragging the scrollbar thumb — continues scrolling even if cursor
+    /// moves off the scrollbar column horizontally, until mouse is released.
+    pub scrollbar_dragging: bool,
+
+    /// Album art overlay: shows a large quantised view of album art when clicked.
+    pub album_art_overlay: Option<CoverArtId>,
 
     pub should_quit: bool,
 }
@@ -136,6 +145,9 @@ impl App {
             library_click_pending: None,
             library_dragging: false,
             library_drag_last_y: None,
+            scrollbar_dragging: false,
+
+            album_art_overlay: None,
 
             should_quit: false,
         }
