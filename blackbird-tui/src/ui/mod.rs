@@ -8,7 +8,7 @@ use blackbird_client_shared::style as shared_style;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph},
 };
@@ -117,6 +117,9 @@ pub fn string_to_color(s: &str) -> Color {
     rgb_to_color(shared_style::string_to_rgb_gamma(s))
 }
 
+/// Width of the volume slider area (speaker icon + bar + percentage).
+pub const VOLUME_SLIDER_WIDTH: u16 = 16;
+
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
     let details = app.logic.get_track_display_details();
@@ -134,7 +137,6 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let position_str = blackbird_core::util::seconds_to_hms_string(position_secs as u32, true);
     let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
     let volume = app.logic.get_volume();
-    let vol_str = format!("Vol:{:3.0}%", volume * 100.0);
 
     let label = format!(" {position_str} / {duration_str} ");
 
@@ -144,13 +146,10 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         0.0
     };
 
-    // Split area: scrub bar | volume.
+    // Split area: scrub bar | volume slider.
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(20),
-            Constraint::Length(vol_str.len() as u16 + 2),
-        ])
+        .constraints([Constraint::Min(20), Constraint::Length(VOLUME_SLIDER_WIDTH)])
         .split(area);
 
     let gauge = Gauge::default()
@@ -163,15 +162,32 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         .label(label);
     frame.render_widget(gauge, chunks[0]);
 
-    let vol_style = if app.volume_editing {
-        Style::default()
-            .fg(style.track_name_playing_color())
-            .add_modifier(Modifier::BOLD)
+    // Draw volume as a visual slider: "♪ ████░░░░ nn%"
+    let vol_area = chunks[1];
+    let bar_width = (vol_area.width as usize).saturating_sub(6); // "♪ " (2) + " nn%" (4)
+    let filled = ((volume * bar_width as f32).round() as usize).min(bar_width);
+    let empty = bar_width.saturating_sub(filled);
+
+    let vol_pct = format!("{:3.0}%", volume * 100.0);
+    let vol_active_color = if app.volume_editing {
+        style.track_name_playing_color()
     } else {
-        Style::default().fg(style.track_duration_color())
+        style.track_duration_color()
     };
-    let vol_widget = Paragraph::new(Span::styled(format!(" {vol_str}"), vol_style));
-    frame.render_widget(vol_widget, chunks[1]);
+
+    let vol_line = Line::from(vec![
+        Span::styled("\u{266A} ", Style::default().fg(vol_active_color)),
+        Span::styled(
+            "\u{2588}".repeat(filled),
+            Style::default().fg(vol_active_color),
+        ),
+        Span::styled(
+            "\u{2591}".repeat(empty),
+            Style::default().fg(style.background_color()),
+        ),
+        Span::styled(format!(" {vol_pct}"), Style::default().fg(vol_active_color)),
+    ]);
+    frame.render_widget(Paragraph::new(vol_line), vol_area);
 }
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {

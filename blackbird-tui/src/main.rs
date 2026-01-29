@@ -15,7 +15,10 @@ use keys::Action;
 use log_buffer::{LogBuffer, LogBufferLayer};
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -102,7 +105,6 @@ fn run_app(
     tick_rate: Duration,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
-    let mut last_click: Option<(Instant, u16, u16)> = None;
 
     loop {
         terminal.draw(|frame| ui::draw(frame, app))?;
@@ -116,7 +118,7 @@ fn run_app(
                     handle_key_event(app, &key);
                 }
                 Event::Mouse(mouse) => {
-                    handle_mouse_event(app, &mouse, size, &mut last_click);
+                    handle_mouse_event(app, &mouse, size);
                 }
                 _ => {}
             }
@@ -133,12 +135,7 @@ fn run_app(
     }
 }
 
-fn handle_mouse_event(
-    app: &mut App,
-    mouse: &event::MouseEvent,
-    size: Rect,
-    last_click: &mut Option<(Instant, u16, u16)>,
-) {
+fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     // Compute layout areas matching ui::draw
     let main_chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -150,96 +147,128 @@ fn handle_mouse_event(
         ])
         .split(size);
 
-    let library_area = main_chunks[2];
+    let now_playing_area = main_chunks[0];
     let scrub_area = main_chunks[1];
+    let library_area = main_chunks[2];
+
+    let x = mouse.column;
+    let y = mouse.row;
 
     match mouse.kind {
+        MouseEventKind::Moved => {
+            app.mouse_position = Some((x, y));
+        }
         MouseEventKind::Down(MouseButton::Left) => {
-            let x = mouse.column;
-            let y = mouse.row;
+            app.mouse_position = Some((x, y));
 
-            // Check for double-click (within 500ms at same position)
-            let is_double_click = last_click
-                .map(|(time, lx, ly)| {
-                    time.elapsed() < Duration::from_millis(500) && lx == x && ly == y
-                })
-                .unwrap_or(false);
+            // --- Now Playing area ---
+            if y >= now_playing_area.y && y < now_playing_area.y + now_playing_area.height {
+                handle_now_playing_click(app, now_playing_area, x, y);
+                return;
+            }
 
-            *last_click = Some((Instant::now(), x, y));
+            // --- Scrub bar / Volume area ---
+            if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
+                handle_scrub_volume_click(app, scrub_area, x);
+                return;
+            }
 
-            // Click in library area
+            // --- Library area ---
             if y >= library_area.y
                 && y < library_area.y + library_area.height
                 && x >= library_area.x
                 && x < library_area.x + library_area.width
                 && app.focused_panel == FocusedPanel::Library
             {
-                let entries = app.get_flat_library().to_vec();
+                handle_library_click(app, library_area, x, y);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            // If we had a pending click (mouse down without drag), play the track.
+            if let Some((_cx, _cy, index)) = app.library_click_pending.take()
+                && !app.library_dragging
+                && let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index)
+            {
+                app.logic.request_play_track(&id);
+            }
+            app.library_dragging = false;
+            app.library_drag_last_y = None;
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            app.mouse_position = Some((x, y));
+
+            // Scrollbar drag in library
+            if app.focused_panel == FocusedPanel::Library {
                 let scrollbar_x = library_area.x + library_area.width - 1;
 
-                // Check if clicking on scrollbar (rightmost column)
-                if x == scrollbar_x {
-                    // Scroll to position based on click Y
+                if x == scrollbar_x
+                    && y >= library_area.y
+                    && y < library_area.y + library_area.height
+                {
+                    let entries = app.get_flat_library().to_vec();
                     scroll_library_to_y(app, &entries, library_area, y);
-                } else {
-                    // Calculate which entry was clicked (no border anymore)
-                    let inner_y = y.saturating_sub(library_area.y);
+                    // Cancel any pending click since we're dragging
+                    app.library_click_pending = None;
+                    app.library_dragging = true;
+                    return;
+                }
 
-                    // Convert click position to entry index
-                    // GroupHeaders take 2 lines, Tracks take 1 line
-                    let scroll_offset = app.library_scroll_offset;
+                // Content drag → pan library
+                if app.library_click_pending.is_some() || app.library_dragging {
+                    app.library_click_pending = None; // Cancel pending play
+                    app.library_dragging = true;
 
-                    let mut line = 0usize;
-                    let mut clicked_index = None;
-
-                    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
-                        let entry_height = match entry {
-                            LibraryEntry::GroupHeader { .. } => 2,
-                            LibraryEntry::Track { .. } => 1,
-                        };
-
-                        if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
-                            clicked_index = Some(i);
-                            break;
-                        }
-                        line += entry_height;
-                    }
-
-                    if let Some(index) = clicked_index {
-                        // Only select tracks, not group headers
-                        if let Some(LibraryEntry::Track { id, .. }) = entries.get(index) {
-                            app.library_selected_index = index;
-
-                            if is_double_click {
-                                // Double-click plays the track
-                                app.logic.request_play_track(id);
+                    if let Some(last_y) = app.library_drag_last_y {
+                        let delta = y as i32 - last_y as i32;
+                        if delta != 0 {
+                            // Negative delta (drag up) → scroll down, positive → scroll up
+                            let entries_len = app.flat_library_len();
+                            let steps = delta.unsigned_abs() as usize;
+                            for _ in 0..steps {
+                                let mut new_index = app.library_selected_index;
+                                if delta > 0 {
+                                    // Dragged down → scroll up (show earlier content)
+                                    while new_index > 0 {
+                                        new_index -= 1;
+                                        if let Some(LibraryEntry::Track { .. }) =
+                                            app.get_library_entry(new_index)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                } else {
+                                    // Dragged up → scroll down (show later content)
+                                    while new_index < entries_len.saturating_sub(1) {
+                                        new_index += 1;
+                                        if let Some(LibraryEntry::Track { .. }) =
+                                            app.get_library_entry(new_index)
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                                if let Some(LibraryEntry::Track { .. }) =
+                                    app.get_library_entry(new_index)
+                                {
+                                    app.library_selected_index = new_index;
+                                }
                             }
                         }
                     }
+                    app.library_drag_last_y = Some(y);
+                    return;
                 }
             }
 
-            // Click in scrub bar area
+            // Scrub bar drag → seek
             if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
-                // Calculate seek position based on click
-                let vol_width = 12u16; // approximate volume widget width
-                let scrub_width = scrub_area.width.saturating_sub(vol_width);
-
-                if x < scrub_area.x + scrub_width {
-                    // Clicked on scrub bar
-                    let ratio = (x - scrub_area.x) as f32 / scrub_width as f32;
-                    if let Some(details) = app.logic.get_track_display_details() {
-                        let seek_pos =
-                            Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
-                        app.logic.seek_current(seek_pos);
-                    }
-                }
+                handle_scrub_volume_click(app, scrub_area, x);
             }
         }
         MouseEventKind::ScrollUp => {
             if app.focused_panel == FocusedPanel::Library {
-                // Scroll up in library (move selection up by 3)
-                for _ in 0..3 {
+                // Scroll up in library (move selection up by 6 — 2x sensitivity)
+                for _ in 0..6 {
                     let mut new_index = app.library_selected_index;
                     while new_index > 0 {
                         new_index -= 1;
@@ -252,16 +281,16 @@ fn handle_mouse_event(
                     }
                 }
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(3);
+                app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(6);
             } else if app.focused_panel == FocusedPanel::Logs {
-                app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(3);
+                app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(6);
             }
         }
         MouseEventKind::ScrollDown => {
             if app.focused_panel == FocusedPanel::Library {
-                // Scroll down in library (move selection down by 3)
+                // Scroll down in library (move selection down by 6 — 2x sensitivity)
                 let entries_len = app.flat_library_len();
-                for _ in 0..3 {
+                for _ in 0..6 {
                     let mut new_index = app.library_selected_index;
                     while new_index < entries_len.saturating_sub(1) {
                         new_index += 1;
@@ -274,34 +303,189 @@ fn handle_mouse_event(
                     }
                 }
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                app.lyrics_scroll_offset += 3;
+                app.lyrics_scroll_offset += 6;
             } else if app.focused_panel == FocusedPanel::Logs {
                 let log_len = app.log_buffer.len();
                 if log_len > 0 {
-                    app.logs_scroll_offset = (app.logs_scroll_offset + 3).min(log_len - 1);
-                }
-            }
-        }
-        MouseEventKind::Drag(MouseButton::Left) => {
-            // Handle scrollbar dragging in library
-            if app.focused_panel == FocusedPanel::Library {
-                let x = mouse.column;
-                let y = mouse.row;
-
-                if y >= library_area.y
-                    && y < library_area.y + library_area.height
-                    && x >= library_area.x
-                    && x < library_area.x + library_area.width
-                {
-                    let scrollbar_x = library_area.x + library_area.width - 1;
-                    if x == scrollbar_x {
-                        let entries = app.get_flat_library().to_vec();
-                        scroll_library_to_y(app, &entries, library_area, y);
-                    }
+                    app.logs_scroll_offset = (app.logs_scroll_offset + 6).min(log_len - 1);
                 }
             }
         }
         _ => {}
+    }
+}
+
+/// Handle click in the now-playing area (track info, album info, transport, playback mode).
+fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
+    // Recompute the now-playing horizontal layout.
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(6),  // album art
+            Constraint::Min(20),    // track info
+            Constraint::Length(24), // transport controls
+        ])
+        .split(area);
+
+    let info_area = chunks[1];
+    let transport_area = chunks[2];
+
+    let row = y.saturating_sub(area.y);
+
+    // Click on track info area → navigate to playing track/album
+    if x >= info_area.x && x < info_area.x + info_area.width {
+        if row == 0 {
+            // Line 0: track title → navigate to playing track
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                app.scroll_to_track = Some(track_id);
+                app.focused_panel = FocusedPanel::Library;
+            }
+        } else if row == 1 {
+            // Line 1: album info → navigate to album
+            if let Some(details) = app.logic.get_track_display_details() {
+                app.scroll_to_album(&details.album_id);
+                app.focused_panel = FocusedPanel::Library;
+            }
+        }
+        return;
+    }
+
+    // Click on transport area
+    if x >= transport_area.x && x < transport_area.x + transport_area.width {
+        if row == 0 {
+            // Transport buttons row: "⏮  ▶  ⏹  ⏭" right-aligned in 24 chars
+            // Total button text = 10 chars, so starts at offset 14 from transport_area.x
+            let rel_x = x.saturating_sub(transport_area.x);
+            let btn_start = transport_area.width.saturating_sub(10);
+            if rel_x >= btn_start {
+                let btn_x = rel_x - btn_start;
+                match btn_x {
+                    0 => app.logic.previous(),       // ⏮
+                    3 => app.logic.toggle_current(), // ▶/⏸
+                    6 => app.logic.stop_current(),   // ⏹
+                    9 => app.logic.next(),           // ⏭
+                    _ => {}
+                }
+            }
+        } else if row == 1 {
+            // Mode text row: "[mode]" right-aligned → cycle playback mode
+            app.cycle_playback_mode();
+        }
+    }
+}
+
+/// Handle click on scrub bar or volume slider area.
+fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
+    // Recompute the scrub bar layout matching ui::draw_scrub_bar.
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(20),
+            Constraint::Length(ui::VOLUME_SLIDER_WIDTH),
+        ])
+        .split(scrub_area);
+
+    let scrub_bar = chunks[0];
+    let vol_area = chunks[1];
+
+    if x >= vol_area.x && x < vol_area.x + vol_area.width {
+        // Click on volume slider: "♪ ████░░░░ nn%"
+        // The slider bar starts at offset 2 ("♪ ") and ends 4 before the end (" nn%")
+        let bar_start = vol_area.x + 2;
+        let bar_width = vol_area.width.saturating_sub(6);
+        if bar_width > 0 && x >= bar_start && x < bar_start + bar_width {
+            let ratio = (x - bar_start) as f32 / bar_width as f32;
+            app.logic.set_volume(ratio.clamp(0.0, 1.0));
+        }
+    } else if x >= scrub_bar.x && x < scrub_bar.x + scrub_bar.width {
+        // Click on scrub bar → seek
+        let ratio = (x - scrub_bar.x) as f32 / scrub_bar.width as f32;
+        if let Some(details) = app.logic.get_track_display_details() {
+            let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
+            app.logic.seek_current(seek_pos);
+        }
+    }
+}
+
+/// Handle click in the library area.
+fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
+    let entries = app.get_flat_library().to_vec();
+    let scrollbar_x = library_area.x + library_area.width - 1;
+
+    // Click on scrollbar (rightmost column)
+    if x == scrollbar_x {
+        scroll_library_to_y(app, &entries, library_area, y);
+        return;
+    }
+
+    // Calculate which entry was clicked
+    let inner_y = y.saturating_sub(library_area.y);
+    let scroll_offset = app.library_scroll_offset;
+
+    let mut line = 0usize;
+    let mut clicked_index = None;
+    let mut click_line_in_entry = 0usize;
+
+    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+        let entry_height = match entry {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        };
+
+        if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
+            clicked_index = Some(i);
+            click_line_in_entry = inner_y as usize - line;
+            break;
+        }
+        line += entry_height;
+    }
+
+    let Some(index) = clicked_index else {
+        return;
+    };
+    let Some(entry) = entries.get(index).cloned() else {
+        return;
+    };
+
+    // Check if clicking on the heart (last content character before scrollbar).
+    // Content width = area.width - 1 (alphabet column) - 1 (scrollbar if present)
+    // The heart is the last character of the content line.
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+    let has_scrollbar = total_lines > library_area.height as usize;
+    let list_width = library_area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
+    // Heart is at column list_width - 2 from area.x (due to padding saturating_sub(1))
+    let heart_col = library_area.x as usize + list_width.saturating_sub(2);
+    let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
+
+    match &entry {
+        LibraryEntry::Track { id, starred, .. } => {
+            if is_heart_click {
+                // Toggle star
+                app.logic.set_track_starred(id, !starred);
+            } else {
+                // Set up deferred play (confirmed on MouseUp if no drag)
+                app.library_selected_index = index;
+                app.library_click_pending = Some((x, y, index));
+                app.library_dragging = false;
+                app.library_drag_last_y = Some(y);
+            }
+        }
+        LibraryEntry::GroupHeader {
+            album_id, starred, ..
+        } => {
+            if is_heart_click && click_line_in_entry == 1 {
+                // Heart is on line 2 of group header
+                app.logic.set_album_starred(album_id, !starred);
+            }
+            // Group headers don't play; start drag tracking
+            app.library_drag_last_y = Some(y);
+        }
     }
 }
 
@@ -311,7 +495,6 @@ fn scroll_library_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Re
     let inner_y = y.saturating_sub(library_area.y);
     let ratio = inner_y as f32 / visible_height as f32;
 
-    // Calculate total lines
     let total_lines: usize = entries
         .iter()
         .map(|e| match e {
@@ -320,7 +503,6 @@ fn scroll_library_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Re
         })
         .sum();
 
-    // Find the entry at this line position
     let target_line = ((total_lines as f32) * ratio) as usize;
 
     let mut current_line = 0usize;
@@ -331,7 +513,6 @@ fn scroll_library_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Re
         };
 
         if current_line + entry_height > target_line {
-            // Find nearest track at or after this position
             let mut track_index = i;
             while track_index < entries.len() {
                 if let LibraryEntry::Track { .. } = &entries[track_index] {

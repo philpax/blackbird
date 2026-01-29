@@ -32,6 +32,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let track_duration_color = app.config.style.track_duration_color();
     let track_name_hovered_color = app.config.style.track_name_hovered_color();
 
+    // Determine which entry's heart is being hovered (for hover color effect).
+    let hovered_heart_index = compute_hovered_heart_index(app, area);
+
     let has_loaded = app.logic.has_loaded_all_tracks();
 
     // Use the full area directly (no frame/border)
@@ -110,12 +113,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     cover_art_id,
                     ..
                 } => {
-                    let heart = if *starred { "\u{2665}" } else { " " };
-                    let heart_style = if *starred {
-                        Style::default().fg(Color::Red)
-                    } else {
-                        Style::default().fg(track_duration_color)
-                    };
+                    let is_heart_hovered = hovered_heart_index == Some(i);
+                    let (heart, heart_style) =
+                        heart_display(*starred, is_heart_hovered, track_duration_color);
 
                     let colors = cover_art_id
                         .as_ref()
@@ -218,12 +218,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     play_count,
                 } => {
                     let is_playing = playing_track_id.as_ref() == Some(id);
-                    let heart = if *starred { "\u{2665}" } else { " " };
-                    let heart_style = if *starred {
-                        Style::default().fg(Color::Red)
-                    } else {
-                        Style::default().fg(track_duration_color)
-                    };
+                    let is_heart_hovered = hovered_heart_index == Some(i);
+                    let (heart, heart_style) =
+                        heart_display(*starred, is_heart_hovered, track_duration_color);
 
                     let track_str = if let Some(disc) = disc_number {
                         format!("{disc}.{}", track_number.unwrap_or(0))
@@ -387,6 +384,77 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         text_color,
         background_color,
     );
+}
+
+/// Determines the heart display character and style based on starred/hovered state.
+/// Matches the egui behavior:
+/// - Unstarred + not hovered: space (invisible)
+/// - Unstarred + hovered: ♥ in Red (preview what it would look like)
+/// - Starred + not hovered: ♥ in Red
+/// - Starred + hovered: ♥ in White (indicate "click to unstar")
+fn heart_display(starred: bool, hovered: bool, dim_color: Color) -> (&'static str, Style) {
+    match (starred, hovered) {
+        (false, false) => (" ", Style::default().fg(dim_color)),
+        (false, true) => ("\u{2665}", Style::default().fg(Color::Red)),
+        (true, false) => ("\u{2665}", Style::default().fg(Color::Red)),
+        (true, true) => ("\u{2665}", Style::default().fg(Color::White)),
+    }
+}
+
+/// Computes which library entry's heart is being hovered by the mouse, if any.
+fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
+    let (mx, my) = app.mouse_position?;
+
+    // Must be within library area
+    if my < area.y || my >= area.y + area.height || mx < area.x || mx >= area.x + area.width {
+        return None;
+    }
+
+    // Capture scroll_offset before borrowing entries.
+    let scroll_offset = app.library_scroll_offset;
+    let entries = app.get_flat_library();
+
+    // Compute list_width and heart column
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+    let visible_height = area.height as usize;
+    let has_scrollbar = total_lines > visible_height;
+    let list_width = area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
+    let heart_col = area.x as usize + list_width.saturating_sub(2);
+
+    // Check if mouse is on the heart column
+    if (mx as usize) < heart_col || (mx as usize) > heart_col + 1 {
+        return None;
+    }
+
+    // Determine which entry is at this Y position
+    let inner_y = my.saturating_sub(area.y) as usize;
+
+    let mut line = 0usize;
+    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+        let entry_height = match entry {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        };
+
+        if inner_y >= line && inner_y < line + entry_height {
+            // For group headers, heart is only on line 2 (index 1)
+            if let LibraryEntry::GroupHeader { .. } = entry {
+                if inner_y - line == 1 {
+                    return Some(i);
+                }
+                return None;
+            }
+            return Some(i);
+        }
+        line += entry_height;
+    }
+    None
 }
 
 /// Renders a combined scrollbar + alphabet indicator on the rightmost column.

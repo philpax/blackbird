@@ -80,6 +80,13 @@ pub struct App {
     pub log_buffer: LogBuffer,
     pub logs_scroll_offset: usize,
 
+    // Mouse state
+    pub mouse_position: Option<(u16, u16)>,
+    /// Pending click in library: (x, y, entry_index) — confirmed on MouseUp if no drag.
+    pub library_click_pending: Option<(u16, u16, usize)>,
+    pub library_dragging: bool,
+    pub library_drag_last_y: Option<u16>,
+
     pub should_quit: bool,
 }
 
@@ -124,6 +131,11 @@ impl App {
 
             log_buffer,
             logs_scroll_offset: 0,
+
+            mouse_position: None,
+            library_click_pending: None,
+            library_dragging: false,
+            library_drag_last_y: None,
 
             should_quit: false,
         }
@@ -357,6 +369,27 @@ impl App {
             }
         }
         None
+    }
+
+    /// Navigates to the first track in the given album.
+    pub fn scroll_to_album(&mut self, album_id: &blackbird_core::blackbird_state::AlbumId) {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library();
+            self.flat_library_dirty = false;
+        }
+        let mut found_header = false;
+        for (i, entry) in self.cached_flat_library.iter().enumerate() {
+            match entry {
+                LibraryEntry::GroupHeader { album_id: aid, .. } => {
+                    found_header = aid == album_id;
+                }
+                LibraryEntry::Track { .. } if found_header => {
+                    self.library_selected_index = i;
+                    return;
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Ensures the current selection is on a track, not a group header.
