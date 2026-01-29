@@ -164,7 +164,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Draw volume as a visual slider: "♪ ████░░░░ nn%"
     let vol_area = chunks[1];
-    let bar_width = (vol_area.width as usize).saturating_sub(6); // "♪ " (2) + " nn%" (4)
+    let bar_width = (vol_area.width as usize).saturating_sub(7); // "♪ " (2) + " nnn%" (5)
     let filled = ((volume * bar_width as f32).round() as usize).min(bar_width);
     let empty = bar_width.saturating_sub(filled);
 

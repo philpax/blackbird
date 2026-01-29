@@ -332,6 +332,11 @@ impl App {
         config.save();
     }
 
+    /// Marks the flat library cache as dirty, forcing a rebuild on next access.
+    pub fn mark_library_dirty(&mut self) {
+        self.flat_library_dirty = true;
+    }
+
     pub fn adjust_volume(&mut self, delta: f32) {
         let vol = (self.logic.get_volume() + delta).clamp(0.0, 1.0);
         self.logic.set_volume(vol);

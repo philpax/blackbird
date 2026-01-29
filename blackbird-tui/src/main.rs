@@ -184,12 +184,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            // If we had a pending click (mouse down without drag), play the track.
+            // If we had a pending click (mouse down without drag), select and play the track.
             if let Some((_cx, _cy, index)) = app.library_click_pending.take()
                 && !app.library_dragging
-                && let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index)
             {
-                app.logic.request_play_track(&id);
+                if let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index) {
+                    app.library_selected_index = index;
+                    app.logic.request_play_track(&id);
+                }
             }
             app.library_dragging = false;
             app.library_drag_last_y = None;
@@ -332,19 +334,53 @@ fn handle_now_playing_click(app: &mut App, area: Rect, x: u16, y: u16) {
 
     let row = y.saturating_sub(area.y);
 
-    // Click on track info area → navigate to playing track/album
+    // Click on track info area
     if x >= info_area.x && x < info_area.x + info_area.width {
-        if row == 0 {
-            // Line 0: track title → navigate to playing track
-            if let Some(track_id) = app.logic.get_playing_track_id() {
-                app.scroll_to_track = Some(track_id);
-                app.focused_panel = FocusedPanel::Library;
+        if x == info_area.x {
+            // Click on heart column → toggle star
+            if row == 0 {
+                if let Some(track_id) = app.logic.get_playing_track_id() {
+                    let starred = app
+                        .logic
+                        .get_state()
+                        .read()
+                        .unwrap()
+                        .library
+                        .track_map
+                        .get(&track_id)
+                        .map(|t| t.starred)
+                        .unwrap_or(false);
+                    app.logic.set_track_starred(&track_id, !starred);
+                    app.mark_library_dirty();
+                }
+            } else if row == 1 {
+                if let Some(details) = app.logic.get_track_display_details() {
+                    let starred = app
+                        .logic
+                        .get_state()
+                        .read()
+                        .unwrap()
+                        .library
+                        .albums
+                        .get(&details.album_id)
+                        .map(|a| a.starred)
+                        .unwrap_or(false);
+                    app.logic.set_album_starred(&details.album_id, !starred);
+                    app.mark_library_dirty();
+                }
             }
-        } else if row == 1 {
-            // Line 1: album info → navigate to album
-            if let Some(details) = app.logic.get_track_display_details() {
-                app.scroll_to_album(&details.album_id);
-                app.focused_panel = FocusedPanel::Library;
+        } else {
+            // Click on text → navigate to playing track/album
+            if row == 0 {
+                if let Some(track_id) = app.logic.get_playing_track_id() {
+                    app.scroll_to_track = Some(track_id);
+                    app.focused_panel = FocusedPanel::Library;
+                }
+            } else if row == 1 {
+                if let Some(details) = app.logic.get_track_display_details() {
+                    app.scroll_to_album(&details.album_id);
+                    app.focused_panel = FocusedPanel::Library;
+                }
             }
         }
         return;
@@ -389,12 +425,12 @@ fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
     let vol_area = chunks[1];
 
     if x >= vol_area.x && x < vol_area.x + vol_area.width {
-        // Click on volume slider: "♪ ████░░░░ nn%"
-        // The slider bar starts at offset 2 ("♪ ") and ends 4 before the end (" nn%")
+        // Click on volume slider: "♪ ████░░░░ nnn%"
+        // The slider bar starts at offset 2 ("♪ ") and ends 5 before the end (" nnn%")
         let bar_start = vol_area.x + 2;
-        let bar_width = vol_area.width.saturating_sub(6);
-        if bar_width > 0 && x >= bar_start && x < bar_start + bar_width {
-            let ratio = (x - bar_start) as f32 / bar_width as f32;
+        let bar_width = vol_area.width.saturating_sub(7);
+        if bar_width > 1 && x >= bar_start && x < bar_start + bar_width {
+            let ratio = (x - bar_start) as f32 / (bar_width - 1) as f32;
             app.logic.set_volume(ratio.clamp(0.0, 1.0));
         }
     } else if x >= scrub_bar.x && x < scrub_bar.x + scrub_bar.width {
@@ -468,9 +504,11 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             if is_heart_click {
                 // Toggle star
                 app.logic.set_track_starred(id, !starred);
+                app.mark_library_dirty();
             } else {
-                // Set up deferred play (confirmed on MouseUp if no drag)
-                app.library_selected_index = index;
+                // Set up deferred play (confirmed on MouseUp if no drag).
+                // Don't set library_selected_index here — that would jump
+                // the view to the click position, breaking touch-style drag.
                 app.library_click_pending = Some((x, y, index));
                 app.library_dragging = false;
                 app.library_drag_last_y = Some(y);
@@ -482,9 +520,13 @@ fn handle_library_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             if is_heart_click && click_line_in_entry == 1 {
                 // Heart is on line 2 of group header
                 app.logic.set_album_starred(album_id, !starred);
+                app.mark_library_dirty();
+            } else {
+                // Allow drag initiation from group headers too
+                app.library_click_pending = Some((x, y, index));
+                app.library_dragging = false;
+                app.library_drag_last_y = Some(y);
             }
-            // Group headers don't play; start drag tracking
-            app.library_drag_last_y = Some(y);
         }
     }
 }
@@ -593,11 +635,13 @@ fn handle_library_action(app: &mut App, action: Action) {
                 match entry {
                     LibraryEntry::Track { id, starred, .. } => {
                         app.logic.set_track_starred(&id, !starred);
+                        app.mark_library_dirty();
                     }
                     LibraryEntry::GroupHeader {
                         album_id, starred, ..
                     } => {
                         app.logic.set_album_starred(&album_id, !starred);
+                        app.mark_library_dirty();
                     }
                 }
             }

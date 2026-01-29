@@ -49,8 +49,20 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|a| a.starred)
         .unwrap_or(false);
 
-    let track_heart = if tdd.starred { "\u{2665} " } else { "" };
-    let album_heart = if album_starred { "\u{2665} " } else { "" };
+    // Determine heart hover state based on mouse position.
+    let info_area = chunks[1];
+    let mouse_pos = app.mouse_position;
+    let track_heart_hovered = mouse_pos.map_or(false, |(mx, my)| {
+        mx == info_area.x && my == area.y
+    });
+    let album_heart_hovered = mouse_pos.map_or(false, |(mx, my)| {
+        mx == info_area.x && my == area.y + 1
+    });
+
+    let (track_heart, track_heart_style) =
+        heart_display(tdd.starred, track_heart_hovered);
+    let (album_heart, album_heart_style) =
+        heart_display(album_starred, album_heart_hovered);
 
     let artist_display = if let Some(ref track_artist) = tdd.track_artist {
         if track_artist.as_str() != tdd.album_artist.as_str() {
@@ -69,11 +81,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|a| string_to_color(a))
         .unwrap_or(text_color);
 
-    // Line 1: [heart] [track artist -] track title
-    let mut track_spans = Vec::new();
-    if !track_heart.is_empty() {
-        track_spans.push(Span::styled(track_heart, Style::default().fg(Color::Red)));
-    }
+    // Line 1: heart [track artist -] track title
+    let mut track_spans = vec![
+        Span::styled(track_heart, track_heart_style),
+        Span::raw(" "),
+    ];
     if !artist_display.is_empty() {
         track_spans.push(Span::styled(
             artist_display,
@@ -87,23 +99,23 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     ));
 
-    // Line 2: [heart] album by artist
-    let mut album_spans = Vec::new();
-    if !album_heart.is_empty() {
-        album_spans.push(Span::styled(album_heart, Style::default().fg(Color::Red)));
-    }
-    album_spans.push(Span::styled(
-        tdd.album_name.to_string(),
-        Style::default().fg(album_color),
-    ));
-    album_spans.push(Span::styled(
-        " by ",
-        Style::default().fg(track_duration_color),
-    ));
-    album_spans.push(Span::styled(
-        tdd.album_artist.to_string(),
-        Style::default().fg(string_to_color(&tdd.album_artist)),
-    ));
+    // Line 2: heart album by artist
+    let album_spans = vec![
+        Span::styled(album_heart, album_heart_style),
+        Span::raw(" "),
+        Span::styled(
+            tdd.album_name.to_string(),
+            Style::default().fg(album_color),
+        ),
+        Span::styled(
+            " by ",
+            Style::default().fg(track_duration_color),
+        ),
+        Span::styled(
+            tdd.album_artist.to_string(),
+            Style::default().fg(string_to_color(&tdd.album_artist)),
+        ),
+    ];
 
     let info_lines = vec![Line::from(track_spans), Line::from(album_spans)];
 
@@ -191,6 +203,20 @@ fn draw_album_art(
         }
 
         frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
+    }
+}
+
+/// Heart display for the now-playing area, matching the library heart behavior.
+/// - Unstarred + not hovered: space (invisible, preserves alignment)
+/// - Unstarred + hovered: ♥ in Red (preview)
+/// - Starred + not hovered: ♥ in Red
+/// - Starred + hovered: ♥ in White (indicate "click to unstar")
+fn heart_display(starred: bool, hovered: bool) -> (&'static str, Style) {
+    match (starred, hovered) {
+        (false, false) => (" ", Style::default()),
+        (false, true) => ("\u{2665}", Style::default().fg(Color::Red)),
+        (true, false) => ("\u{2665}", Style::default().fg(Color::Red)),
+        (true, true) => ("\u{2665}", Style::default().fg(Color::White)),
     }
 }
 

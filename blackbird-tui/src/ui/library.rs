@@ -198,13 +198,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Span::styled(heart, heart_style),
                     ]);
 
-                    let style = if is_selected {
-                        Style::default().bg(track_name_hovered_color)
-                    } else {
-                        Style::default()
-                    };
-
-                    ListItem::new(vec![line1, line2]).style(style)
+                    ListItem::new(vec![line1, line2])
                 }
                 LibraryEntry::Track {
                     id,
@@ -236,6 +230,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default()
                             .fg(track_name_playing_color)
                             .add_modifier(Modifier::BOLD)
+                    } else if is_selected {
+                        Style::default().fg(track_name_hovered_color)
                     } else {
                         Style::default().fg(track_name_color)
                     };
@@ -310,23 +306,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     let line = Line::from(spans);
 
-                    let style = if is_selected {
-                        Style::default().bg(track_name_hovered_color)
-                    } else {
-                        Style::default()
-                    };
-
-                    ListItem::new(line).style(style)
+                    ListItem::new(line)
                 }
             }
         })
         .collect();
 
-    let list = List::new(items).highlight_style(
-        Style::default()
-            .bg(track_name_hovered_color)
-            .add_modifier(Modifier::BOLD),
-    );
+    let list = List::new(items);
 
     // Use a ListState to manage selection/scrolling with center-scroll behavior.
     let mut state = ListState::default();
