@@ -67,13 +67,7 @@ fn main() -> anyhow::Result<()> {
         {
             #[cfg(target_os = "windows")]
             {
-                use windows::Win32::System::Console::GetConsoleWindow;
-                let hwnd = unsafe { GetConsoleWindow() };
-                if hwnd.is_invalid() {
-                    None
-                } else {
-                    Some(hwnd.0 as *mut std::ffi::c_void)
-                }
+                create_hidden_media_window()
             }
             #[cfg(not(target_os = "windows"))]
             {
@@ -84,7 +78,8 @@ fn main() -> anyhow::Result<()> {
         logic.request_handle(),
         logic.get_state(),
     )
-    .expect("Failed to initialize media controls");
+    .map_err(|e| tracing::warn!("Failed to initialize media controls: {e}"))
+    .ok();
 
     let playback_rx = logic.subscribe_to_playback_events();
     let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);
@@ -135,7 +130,7 @@ fn run_app(
     app: &mut App,
     tick_rate: Duration,
     #[cfg(feature = "media-controls")]
-    media_controls: &mut blackbird_client_shared::controls::Controls,
+    media_controls: &mut Option<blackbird_client_shared::controls::Controls>,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
 
@@ -160,7 +155,9 @@ fn run_app(
         if last_tick.elapsed() >= tick_rate {
             app.tick();
             #[cfg(feature = "media-controls")]
-            media_controls.update();
+            if let Some(mc) = media_controls.as_mut() {
+                mc.update();
+            }
             last_tick = Instant::now();
         }
 
@@ -894,6 +891,60 @@ fn handle_lyrics_action(app: &mut App, action: Action) {
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
         _ => {}
+    }
+}
+
+/// Create a hidden Win32 window to act as a proxy for SMTC media controls.
+/// Console windows don't support SMTC, so we create our own invisible window.
+#[cfg(all(target_os = "windows", feature = "media-controls"))]
+fn create_hidden_media_window() -> Option<*mut std::ffi::c_void> {
+    use windows::Win32::Foundation::{HWND, HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, RegisterClassW, WNDCLASSW, WINDOW_EX_STYLE,
+        WS_OVERLAPPEDWINDOW,
+    };
+    use windows::core::w;
+
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+        let hinstance = HINSTANCE(instance.0);
+        let class_name = w!("BlackbirdMediaHidden");
+
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(wnd_proc),
+            hInstance: hinstance,
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            class_name,
+            w!("Blackbird"),
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .ok()?;
+
+        Some(hwnd.0 as *mut std::ffi::c_void)
     }
 }
 
