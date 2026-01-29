@@ -20,6 +20,7 @@ use super::{StyleExt, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
+    let background_color = app.config.style.background_color();
     let text_color = app.config.style.text_color();
     let album_color = app.config.style.album_color();
     let album_year_color = app.config.style.album_year_color();
@@ -374,6 +375,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Save the offset for use by keyboard navigation.
     app.library_scroll_offset = state.offset();
 
+    // Calculate scrollbar thumb position for alphabet scroll overlay.
+    let thumb_info = if has_scrollbar && total_lines > 0 {
+        // Thumb position and size as fractions of total content
+        let thumb_start = centered_offset as f32 / total_lines as f32;
+        let thumb_size = visible_height as f32 / total_lines as f32;
+        Some((thumb_start, thumb_size))
+    } else {
+        None
+    };
+
     // Render scrollbar on the right edge if needed.
     if has_scrollbar {
         let mut scrollbar_state = ScrollbarState::new(total_lines).position(centered_offset);
@@ -390,24 +401,27 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         &entries,
         inner,
-        centered_offset,
         visible_height,
-        total_lines,
         text_color,
+        thumb_info,
+        background_color,
     );
 }
 
 /// Renders alphabet letters as a global indicator on the right side of the library view.
 /// Letters are positioned as fractions of total content to show where each alphabetical
 /// section is in the overall library, using the shared alphabet_scroll logic.
+///
+/// When a letter overlaps with the scrollbar thumb, it's rendered with inverted colors
+/// (text on background) so both the letter and scroll position are visible.
 fn render_alphabet_scroll(
     frame: &mut Frame,
     entries: &[LibraryEntry],
     area: Rect,
-    _scroll_offset: usize,
     visible_height: usize,
-    _total_lines: usize,
     text_color: Color,
+    thumb_info: Option<(f32, f32)>, // (thumb_start_fraction, thumb_size_fraction)
+    background_color: Color,
 ) {
     if visible_height == 0 {
         return;
@@ -449,7 +463,21 @@ fn render_alphabet_scroll(
         let y = area.y + (fraction * visible_height as f32) as u16;
 
         if y < area.y + area.height {
-            let span = Span::styled(letter.to_string(), Style::default().fg(text_color));
+            // Check if this letter overlaps with the scrollbar thumb
+            let overlaps_thumb = thumb_info
+                .map(|(thumb_start, thumb_size)| {
+                    *fraction >= thumb_start && *fraction < thumb_start + thumb_size
+                })
+                .unwrap_or(false);
+
+            let style = if overlaps_thumb {
+                // Invert: show letter with background color on text color background
+                Style::default().fg(background_color).bg(text_color)
+            } else {
+                Style::default().fg(text_color)
+            };
+
+            let span = Span::styled(letter.to_string(), style);
             let line = Line::from(span);
             let rect = Rect::new(letter_x, y, 1, 1);
             frame.render_widget(ratatui::widgets::Paragraph::new(line), rect);
