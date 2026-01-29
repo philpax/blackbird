@@ -1,3 +1,7 @@
+/// Media controls (MPRIS / Windows SMTC) shared between the egui and TUI clients.
+#[cfg(feature = "media-controls")]
+pub mod controls;
+
 /// Configuration types shared between the egui and TUI clients.
 pub mod config {
     use blackbird_core::{PlaybackMode, blackbird_state::TrackId};

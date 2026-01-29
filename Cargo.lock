@@ -596,7 +596,6 @@ dependencies = [
  "image",
  "raw-window-handle",
  "serde",
- "souvlaki",
  "toml",
  "tracing",
  "tracing-subscriber",
@@ -610,6 +609,9 @@ dependencies = [
  "blackbird-core",
  "blackbird-shared",
  "serde",
+ "souvlaki",
+ "tracing",
+ "windows 0.62.2",
 ]
 
 [[package]]
@@ -716,7 +718,6 @@ dependencies = [
  "image",
  "ratatui",
  "serde",
- "souvlaki",
  "toml",
  "tracing",
  "tracing-subscriber",

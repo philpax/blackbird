@@ -1,7 +1,5 @@
 mod app;
 mod config;
-#[cfg(feature = "media-controls")]
-mod controls;
 mod cover_art;
 mod keys;
 mod log_buffer;
@@ -63,14 +61,22 @@ fn main() -> anyhow::Result<()> {
         logic.set_scroll_target(track_id);
     }
 
-    // Initialize media controls (MPRIS on Linux, etc.) for global playback keys.
+    // Initialize media controls (MPRIS on Linux, SMTC on Windows) for global playback keys.
     #[cfg(feature = "media-controls")]
-    let mut media_controls = controls::Controls::new(
-        logic.subscribe_to_playback_events(),
-        logic.request_handle(),
-        logic.get_state(),
-    )
-    .expect("Failed to initialize media controls");
+    let mut media_controls = {
+        #[cfg(target_os = "windows")]
+        let hwnd = blackbird_client_shared::controls::get_console_hwnd();
+        #[cfg(not(target_os = "windows"))]
+        let hwnd = None;
+
+        blackbird_client_shared::controls::Controls::new(
+            hwnd,
+            logic.subscribe_to_playback_events(),
+            logic.request_handle(),
+            logic.get_state(),
+        )
+        .expect("Failed to initialize media controls")
+    };
 
     let playback_rx = logic.subscribe_to_playback_events();
     let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);
@@ -120,7 +126,8 @@ fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
     tick_rate: Duration,
-    #[cfg(feature = "media-controls")] media_controls: &mut controls::Controls,
+    #[cfg(feature = "media-controls")]
+    media_controls: &mut blackbird_client_shared::controls::Controls,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
 

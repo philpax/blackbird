@@ -7,7 +7,7 @@ edition = "2024"
 default = ["tray-icon", "audio", "media-controls"]
 tray-icon = ["dep:tray-icon", "dep:gtk"]
 audio = ["blackbird-core/audio"]
-media-controls = ["dep:souvlaki"]
+media-controls = ["blackbird-client-shared/media-controls"]
 
 [dependencies]
 blackbird-client-shared = { path = "../blackbird-client-shared" }
@@ -30,7 +30,6 @@ image = { version = "0.25", default-features = false, features = [
     "gif",
 ] }
 egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
-souvlaki = { version = "0.8.3", optional = true }
 raw-window-handle = "0.6"
 tray-icon = { version = "0.21.2", optional = true }
 global-hotkey = "0.6"

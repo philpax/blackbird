@@ -1,47 +1,26 @@
-#[cfg(feature = "media-controls")]
 use std::sync::{Arc, RwLock};
 
-#[cfg(feature = "media-controls")]
 use blackbird_core::{
     AppState, LogicRequestHandle, LogicRequestMessage, PlaybackState, PlaybackToLogicMessage,
     PlaybackToLogicRx, TrackDisplayDetails,
 };
-#[cfg(feature = "media-controls")]
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, PlatformConfig, SeekDirection,
 };
 
-/// On Windows, retrieve the console window HWND so souvlaki can attach
-/// System Media Transport Controls to it.
-#[cfg(all(feature = "media-controls", target_os = "windows"))]
-fn get_console_hwnd() -> Option<*mut std::ffi::c_void> {
-    extern "system" {
-        fn GetConsoleWindow() -> *mut std::ffi::c_void;
-    }
-    // SAFETY: GetConsoleWindow is always safe to call; returns null if there is no console.
-    let hwnd = unsafe { GetConsoleWindow() };
-    if hwnd.is_null() { None } else { Some(hwnd) }
-}
-
-#[cfg(feature = "media-controls")]
 pub struct Controls {
     controls: MediaControls,
     playback_to_logic_rx: PlaybackToLogicRx,
     state: Arc<RwLock<AppState>>,
 }
 
-#[cfg(feature = "media-controls")]
 impl Controls {
     pub fn new(
+        hwnd: Option<*mut std::ffi::c_void>,
         playback_to_logic_rx: PlaybackToLogicRx,
         logic_request: LogicRequestHandle,
         state: Arc<RwLock<AppState>>,
     ) -> Result<Self, souvlaki::Error> {
-        #[cfg(target_os = "windows")]
-        let hwnd = get_console_hwnd();
-        #[cfg(not(target_os = "windows"))]
-        let hwnd: Option<*mut std::ffi::c_void> = None;
-
         let mut controls = MediaControls::new(PlatformConfig {
             dbus_name: "blackbird",
             display_name: "Blackbird Music Player",
@@ -129,7 +108,10 @@ impl Controls {
                     })
                 }
                 PlaybackToLogicMessage::TrackEnded
-                | PlaybackToLogicMessage::FailedToPlayTrack(..) => Ok(()),
+                | PlaybackToLogicMessage::FailedToPlayTrack(..) => {
+                    // PlaybackStateChanged will take care of this
+                    Ok(())
+                }
             };
             if let Err(e) = result {
                 tracing::warn!("Failed to update media controls: {:?}", e);
@@ -138,11 +120,26 @@ impl Controls {
     }
 }
 
-#[cfg(feature = "media-controls")]
 fn seek_direction_to_sign(direction: SeekDirection) -> i64 {
     if direction == SeekDirection::Forward {
         1
     } else {
         -1
+    }
+}
+
+/// On Windows, retrieves the console window HWND for use with souvlaki.
+///
+/// Returns `None` if there is no console window (e.g. running as a Windows
+/// service or from a non-console context).
+#[cfg(target_os = "windows")]
+pub fn get_console_hwnd() -> Option<*mut std::ffi::c_void> {
+    use windows::Win32::System::Console::GetConsoleWindow;
+
+    let hwnd = unsafe { GetConsoleWindow() };
+    if hwnd.0 == 0 {
+        None
+    } else {
+        Some(hwnd.0 as *mut std::ffi::c_void)
     }
 }

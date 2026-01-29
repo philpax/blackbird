@@ -162,7 +162,7 @@ impl App {
 
         #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
-            Some(cc),
+            controls::get_egui_hwnd(Some(cc)),
             logic.subscribe_to_playback_events(),
             logic.request_handle(),
             logic.get_state(),
