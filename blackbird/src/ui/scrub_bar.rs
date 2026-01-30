@@ -3,7 +3,7 @@ use std::time::Duration;
 use blackbird_core::util::seconds_to_hms_string;
 use egui::{Align, Label, Layout, RichText, Slider, Ui, style::HandleShape};
 
-use crate::{bc, config::Config};
+use crate::{bc, config::Config, ui::style::StyleExt};
 
 pub fn ui(ui: &mut Ui, logic: &mut bc::Logic, config: &Config) {
     ui.horizontal(|ui| {
@@ -23,7 +23,7 @@ pub fn ui(ui: &mut Ui, logic: &mut bc::Logic, config: &Config) {
         ui.add(
             Label::new(
                 RichText::new(format!("{position_hms} / {duration_hms}"))
-                    .color(config.style.track_duration()),
+                    .color(config.style.track_duration_color32()),
             )
             .selectable(false),
         );

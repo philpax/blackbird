@@ -8,7 +8,7 @@ use egui::{
     ViewportId, vec2,
 };
 
-use crate::{bc, ui::style, ui::util::global_window_builder};
+use crate::{bc, ui::style, ui::style::StyleExt, ui::util::global_window_builder};
 
 /// Main search window UI
 pub fn ui(
@@ -143,8 +143,8 @@ fn render_search_results(
         let artist = details.artist();
         let [artist_color, track_color, length_color] = [
             style::string_to_colour(artist).into(),
-            style.track_name(),
-            style.track_length(),
+            style.track_name_color32(),
+            style.track_length_color32(),
         ]
         .map(|color| if is_hovered { color } else { darken(color) });
         let layout_job = {

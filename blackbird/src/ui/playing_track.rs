@@ -7,7 +7,7 @@ use crate::{
     bc,
     config::Config,
     cover_art_cache::{CachePriority, CoverArtCache},
-    ui::{style, util},
+    ui::{style, style::StyleExt, util},
 };
 
 const CONTROL_BUTTON_SIZE: f32 = 28.0;
@@ -101,7 +101,7 @@ pub fn ui(
                                 ui.add(
                                     Label::new(
                                         RichText::new(tdd.track_title.as_str())
-                                            .color(config.style.track_name_playing()),
+                                            .color(config.style.track_name_playing_color32()),
                                     )
                                     .selectable(false),
                                 );
@@ -123,7 +123,7 @@ pub fn ui(
                                 ui.add(
                                     Label::new(
                                         RichText::new(tdd.album_name.as_str())
-                                            .color(config.style.album()),
+                                            .color(config.style.album_color32()),
                                     )
                                     .selectable(false),
                                 );
@@ -169,8 +169,8 @@ pub fn ui(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.style_mut().visuals.override_text_color = None;
 
-                let default = config.style.text();
-                let active = config.style.track_name_playing();
+                let default = config.style.text_color32();
+                let active = config.style.track_name_playing_color32();
 
                 if control_button(
                     ui,

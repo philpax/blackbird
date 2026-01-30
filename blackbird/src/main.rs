@@ -46,21 +46,21 @@ fn main() {
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
-        base_url: config.server.base_url.clone(),
-        username: config.server.username.clone(),
-        password: config.server.password.clone(),
-        transcode: config.server.transcode,
+        base_url: config.shared.server.base_url.clone(),
+        username: config.shared.server.username.clone(),
+        password: config.shared.server.password.clone(),
+        transcode: config.shared.server.transcode,
         volume: config.general.volume,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
     });
 
-    // Restore last playback mode
-    logic.set_playback_mode(config.last_playback.playback_mode);
+    // Restore last playback mode.
+    logic.set_playback_mode(config.shared.last_playback.playback_mode);
 
-    // Set the scroll target to the last played track
-    if let Some(track_id) = &config.last_playback.track_id {
+    // Set the scroll target to the last played track.
+    if let Some(track_id) = &config.shared.last_playback.track_id {
         logic.set_scroll_target(track_id);
     }
 
@@ -162,7 +162,16 @@ impl App {
 
         #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
-            Some(cc),
+            {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                cc.window_handle().ok().and_then(|handle| {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        Some(h.hwnd.get() as *mut std::ffi::c_void)
+                    } else {
+                        None
+                    }
+                })
+            },
             logic.subscribe_to_playback_events(),
             logic.request_handle(),
             logic.get_state(),
@@ -324,10 +333,11 @@ impl eframe::App for App {
         }
         config.general.volume = self.logic.get_volume();
         if let Some(track_and_position) = self.logic.get_playing_track_and_position() {
-            config.last_playback.track_id = Some(track_and_position.track_id);
-            config.last_playback.track_position_secs = track_and_position.position.as_secs_f64();
+            config.shared.last_playback.track_id = Some(track_and_position.track_id);
+            config.shared.last_playback.track_position_secs =
+                track_and_position.position.as_secs_f64();
         }
-        config.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
         config.save();
     }
 }

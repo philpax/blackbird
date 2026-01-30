@@ -6,7 +6,10 @@ use egui::{
     Vec2b, Window,
 };
 
-use crate::{bc, ui::style};
+use crate::{
+    bc,
+    ui::{style, style::StyleExt},
+};
 
 const INFO_PADDING: f32 = 10.0;
 
@@ -101,10 +104,10 @@ pub fn ui(
                         let is_past = lyrics.synced && idx < current_line_idx;
 
                         let text_color = if is_current {
-                            style.text()
+                            style.text_color32()
                         } else if is_past {
                             // Dim past lyrics
-                            let [r, g, b, a] = style.text().to_array();
+                            let [r, g, b, a] = style.text_color32().to_array();
                             Color32::from_rgba_unmultiplied(
                                 (r as f32 * 0.5) as u8,
                                 (g as f32 * 0.5) as u8,
@@ -113,7 +116,7 @@ pub fn ui(
                             )
                         } else {
                             // Dim future lyrics
-                            let [r, g, b, a] = style.text().to_array();
+                            let [r, g, b, a] = style.text_color32().to_array();
                             Color32::from_rgba_unmultiplied(
                                 (r as f32 * 0.7) as u8,
                                 (g as f32 * 0.7) as u8,
@@ -131,10 +134,10 @@ pub fn ui(
                                 let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
 
                                 let timestamp_color = if is_current {
-                                    style.text()
+                                    style.text_color32()
                                 } else {
                                     // Dim timestamps for non-current lines
-                                    let [r, g, b, a] = style.text().to_array();
+                                    let [r, g, b, a] = style.text_color32().to_array();
                                     Color32::from_rgba_unmultiplied(
                                         (r as f32 * 0.4) as u8,
                                         (g as f32 * 0.4) as u8,

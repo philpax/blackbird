@@ -3,7 +3,7 @@ use egui::{Align2, Rect, Sense, TextStyle, Ui, WidgetText, epaint::PathStroke, p
 
 use crate::{
     bc::{blackbird_state::Track, util},
-    ui::{style, util as ui_util},
+    ui::{style, style::StyleExt, util as ui_util},
 };
 
 pub fn track_length_str_width(track: &Track, ui: &Ui) -> f32 {
@@ -84,17 +84,17 @@ pub fn ui(
         Align2::RIGHT_TOP,
         &track_str,
         default_font.clone(),
-        style.track_number(),
+        style.track_number_color32(),
     );
 
     // Draw track title
     let title_x = track_x + 8.0; // Small gap after track number
     let title_color = if track_response.hovered() {
-        style.track_name_hovered()
+        style.track_name_hovered_color32()
     } else if params.playing {
-        style.track_name_playing()
+        style.track_name_playing_color32()
     } else {
-        style.track_name()
+        style.track_name_color32()
     };
 
     let title_rect = ui.painter().text(
@@ -111,7 +111,7 @@ pub fn ui(
             Align2::LEFT_TOP,
             play_count.to_string(),
             default_font.clone(),
-            style.track_number(),
+            style.track_number_color32(),
         );
     }
 
@@ -123,7 +123,7 @@ pub fn ui(
         Align2::RIGHT_TOP,
         &duration_str,
         default_font.clone(),
-        style.track_length(),
+        style.track_length_color32(),
     );
     right_x -= params.max_track_length_width + 6.0;
 
@@ -152,7 +152,7 @@ pub fn ui(
 
         ui.painter().line(
             vec![line_start, line_end],
-            PathStroke::new(1.0, style.track_name_hovered()),
+            PathStroke::new(1.0, style.track_name_hovered_color32()),
         );
     }
 
@@ -164,7 +164,7 @@ pub fn ui(
 
         ui.painter().line(
             vec![line_start, line_end],
-            PathStroke::new(1.0, style.track_name_hovered()),
+            PathStroke::new(1.0, style.track_name_hovered_color32()),
         );
     }
 

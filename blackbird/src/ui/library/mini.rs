@@ -3,7 +3,12 @@
 use blackbird_core::blackbird_state::TrackId;
 use egui::{CentralPanel, Context, Frame, Key, Margin, ViewportId, vec2};
 
-use crate::{bc, config::Config, cover_art_cache::CoverArtCache, ui::util::global_window_builder};
+use crate::{
+    bc,
+    config::Config,
+    cover_art_cache::CoverArtCache,
+    ui::{style::StyleExt, util::global_window_builder},
+};
 
 use super::shared::{
     LibraryViewConfig, LibraryViewState, render_library_view, render_player_controls,
@@ -67,7 +72,7 @@ pub fn ui(
                         top: margin,
                         bottom: margin,
                     })
-                    .fill(config.style.background()),
+                    .fill(config.style.background_color32()),
             )
             .show(ctx, |ui| {
                 if ui.input(|i| i.key_pressed(Key::Escape))

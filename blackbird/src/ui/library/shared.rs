@@ -3,7 +3,12 @@ use std::time::Instant;
 use blackbird_core::blackbird_state::TrackId;
 use egui::{Align, Pos2, Rect, ScrollArea, Spinner, Ui, pos2, style::ScrollStyle, vec2};
 
-use crate::{bc, config::Config, cover_art_cache::CoverArtCache, ui::util};
+use crate::{
+    bc,
+    config::Config,
+    cover_art_cache::CoverArtCache,
+    ui::{style::StyleExt, util},
+};
 
 use super::{alphabet_scroll, group, incremental_search};
 
@@ -140,7 +145,7 @@ pub(crate) fn render_library_view(
             handle_min_length: 36.0,
             ..ScrollStyle::solid()
         };
-        ui.style_mut().visuals.extreme_bg_color = config.style.background();
+        ui.style_mut().visuals.extreme_bg_color = config.style.background_color32();
 
         let spaced_row_height = util::spaced_row_height(ui);
         let total_rows =
