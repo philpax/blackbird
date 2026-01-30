@@ -74,7 +74,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     frame.render_widget(Paragraph::new(x_button), x_button_area);
 
     // Compute art color grid.
-    let grid =
+    let (grid, loading) =
         app.cover_art_cache
             .get_art_grid(Some(&cover_art_id), art_cols, actual_art_pixel_rows);
 
@@ -104,6 +104,25 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
 
         let row_rect = Rect::new(art_x, art_y + term_row as u16, art_cols as u16, 1);
         frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
+    }
+
+    // Show loading indicator centered over the art while high-res is computing.
+    if loading {
+        let label = " Loading\u{2026} ";
+        let label_len = label.len() as u16;
+        if label_len < overlay_width - 2 {
+            let label_x = overlay_x + (overlay_width - label_len) / 2;
+            let label_y = overlay_y + overlay_height / 2;
+            let label_rect = Rect::new(label_x, label_y, label_len, 1);
+            let label_widget = Paragraph::new(Line::from(Span::styled(
+                label,
+                Style::default()
+                    .fg(text_color)
+                    .bg(background_color)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            frame.render_widget(label_widget, label_rect);
+        }
     }
 }
 

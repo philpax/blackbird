@@ -17,6 +17,10 @@ pub trait ClientData: Clone {
     /// `is_high_res` is false for data loaded from the 16×16 disk cache,
     /// true for data loaded from the network.
     fn from_image_data(data: &Arc<[u8]>, cover_art_id: &CoverArtId, is_high_res: bool) -> Self;
+
+    /// Called during resolution upgrades (e.g. low-res → high-res) to carry
+    /// relevant state from the previous client data into the new one.
+    fn carry_over(&mut self, _previous: &Self) {}
 }
 
 pub struct CoverArtCache<T: ClientData> {
@@ -47,6 +51,17 @@ struct CacheEntry<T> {
     last_requested: std::time::Instant,
     state: CacheEntryState<T>,
     priority: CachePriority,
+}
+
+impl<T> CacheEntry<T> {
+    fn client_data(&self) -> Option<&T> {
+        match &self.state {
+            CacheEntryState::LoadedLowRes { client_data, .. }
+            | CacheEntryState::LoadingWithLowRes { client_data, .. }
+            | CacheEntryState::Loaded { client_data, .. } => Some(client_data),
+            _ => None,
+        }
+    }
 }
 
 enum CacheEntryState<T> {
@@ -103,7 +118,12 @@ impl<T: ClientData> CoverArtCache<T> {
         for incoming_cover_art in self.cover_art_loaded_rx.try_iter() {
             if let Some(cache_entry) = self.cache.get_mut(&incoming_cover_art.cover_art_id) {
                 let data: Arc<[u8]> = incoming_cover_art.cover_art.clone().into();
-                let client_data = T::from_image_data(&data, &incoming_cover_art.cover_art_id, true);
+                let mut client_data =
+                    T::from_image_data(&data, &incoming_cover_art.cover_art_id, true);
+                // Carry over relevant state from the previous resolution.
+                if let Some(previous) = cache_entry.client_data() {
+                    client_data.carry_over(previous);
+                }
                 // Save the high-res version to memory cache
                 cache_entry.state = CacheEntryState::Loaded {
                     data: data.clone(),

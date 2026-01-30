@@ -79,6 +79,9 @@ impl ArtColorGrid {
 #[derive(Clone)]
 pub struct TuiCoverArt {
     raw_bytes: Arc<[u8]>,
+    /// Kept across low→high-res transitions so the overlay can show a quick
+    /// fallback grid while the high-res grid is computing.
+    low_res_bytes: Option<Arc<[u8]>>,
     /// 4x4 color grid for library thumbnails (computed in background).
     pub colors: Option<QuadrantColors>,
     /// Variable-size grid for the overlay (lazily computed via with_client_data_mut).
@@ -87,11 +90,28 @@ pub struct TuiCoverArt {
 }
 
 impl ClientData for TuiCoverArt {
-    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, _is_high_res: bool) -> Self {
+    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, is_high_res: bool) -> Self {
+        // Low-res images (16×16 disk cache) are trivially cheap to process —
+        // compute colors synchronously to avoid a frame of gray.
+        let (colors, low_res_bytes) = if is_high_res {
+            (None, None)
+        } else {
+            (Some(compute_quadrant_colors(data)), Some(data.clone()))
+        };
         TuiCoverArt {
             raw_bytes: data.clone(),
-            colors: None,
+            low_res_bytes,
+            colors,
             overlay_grid: None,
+        }
+    }
+
+    fn carry_over(&mut self, previous: &Self) {
+        if self.colors.is_none() {
+            self.colors = previous.colors;
+        }
+        if self.low_res_bytes.is_none() {
+            self.low_res_bytes = previous.low_res_bytes.clone();
         }
     }
 }
@@ -184,7 +204,8 @@ impl CoverArtCache {
         QuadrantColors::default()
     }
 
-    /// Returns a variable-size color grid for the overlay display.
+    /// Returns a variable-size color grid for the overlay display and whether
+    /// a higher-resolution version is still being computed.
     /// Computes the grid in a background thread; returns the previous grid
     /// (or empty) while the new one is being computed.
     pub fn get_art_grid(
@@ -192,9 +213,9 @@ impl CoverArtCache {
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
-    ) -> ArtColorGrid {
+    ) -> (ArtColorGrid, bool) {
         let Some(id) = cover_art_id else {
-            return ArtColorGrid::empty(cols, rows);
+            return (ArtColorGrid::empty(cols, rows), false);
         };
 
         // Check if client data already has a grid with matching dimensions.
@@ -213,7 +234,7 @@ impl CoverArtCache {
                 .with_client_data_mut(id, |data, _raw| data.overlay_grid.clone().unwrap())
                 .unwrap();
             self.overlay_grids.insert(id.clone(), grid.clone());
-            return grid;
+            return (grid, false);
         }
 
         // Need to compute — spawn background thread if not already running.
@@ -233,11 +254,27 @@ impl CoverArtCache {
         }
 
         // Return the previous grid as fallback while computing.
-        self.overlay_grids
+        if let Some(grid) = self
+            .overlay_grids
             .get(id)
             .filter(|g| g.cols == cols && g.rows == rows)
-            .cloned()
-            .unwrap_or_else(|| ArtColorGrid::empty(cols, rows))
+        {
+            return (grid.clone(), true);
+        }
+
+        // No cached fallback — compute one from the low-res image synchronously
+        // (16×16 pixels, sub-millisecond).
+        let low_res = self
+            .inner
+            .with_client_data_mut(id, |data, _raw| data.low_res_bytes.clone())
+            .flatten();
+        if let Some(low_res) = low_res {
+            let grid = compute_art_grid(&low_res, cols, rows);
+            self.overlay_grids.insert(id.clone(), grid.clone());
+            return (grid, true);
+        }
+
+        (ArtColorGrid::empty(cols, rows), true)
     }
 }
 
