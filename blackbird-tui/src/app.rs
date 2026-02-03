@@ -98,6 +98,9 @@ pub struct App {
     // Volume adjustment mode
     pub volume_editing: bool,
 
+    // Quit confirmation dialog
+    pub quit_confirming: bool,
+
     // Track that should be scrolled into view.
     pub scroll_to_track: Option<TrackId>,
 
@@ -158,6 +161,7 @@ impl App {
             lyrics_selected_index: None,
 
             volume_editing: false,
+            quit_confirming: false,
 
             scroll_to_track: None,
 

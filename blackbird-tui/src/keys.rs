@@ -62,6 +62,8 @@ pub const KEY_PAGE_DOWN: KeyCode = KeyCode::PageDown;
 pub const KEY_GOTO_TOP: KeyCode = KeyCode::Home;
 pub const KEY_GOTO_BOTTOM: KeyCode = KeyCode::End;
 pub const KEY_DELETE_CHAR: KeyCode = KeyCode::Backspace;
+pub const KEY_CONFIRM_YES: KeyCode = KeyCode::Char('y');
+pub const KEY_CONFIRM_NO: KeyCode = KeyCode::Char('n');
 
 impl Action {
     /// Label shown in the help bar. Returns `None` for actions that
@@ -162,6 +164,15 @@ pub fn volume_action(key: &KeyEvent) -> Option<Action> {
         KEY_DOWN | KEY_LEFT => Some(Action::VolumeDown),
         KEY_BACK | KEY_VOLUME | KEY_SELECT => Some(Action::Back),
         _ => None,
+    }
+}
+
+/// Resolve a key event into an action in quit-confirmation context.
+/// `y` / Enter confirms; any other key cancels.
+pub fn quit_confirm_action(key: &KeyEvent) -> Action {
+    match key.code {
+        KEY_CONFIRM_YES | KEY_SELECT => Action::Select,
+        _ => Action::Back,
     }
 }
 

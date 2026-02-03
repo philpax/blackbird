@@ -180,6 +180,15 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
         return;
     }
 
+    // Handle quit confirmation dialog
+    if app.quit_confirming {
+        match keys::quit_confirm_action(key) {
+            Action::Select => app.should_quit = true,
+            _ => app.quit_confirming = false,
+        }
+        return;
+    }
+
     // Handle volume editing mode first
     if app.volume_editing {
         if let Some(action) = keys::volume_action(key) {

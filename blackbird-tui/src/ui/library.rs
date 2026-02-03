@@ -534,7 +534,7 @@ pub fn handle_key(app: &mut App, action: Action) {
     let entries_len = app.flat_library_len();
 
     match action {
-        Action::Quit => app.should_quit = true,
+        Action::Quit => app.quit_confirming = true,
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),

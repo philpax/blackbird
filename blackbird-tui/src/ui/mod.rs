@@ -17,6 +17,8 @@ use ratatui::{
 
 use std::time::Duration;
 
+use smol_str::ToSmolStr as _;
+
 use crate::{
     app::{App, FocusedPanel},
     keys,
@@ -150,6 +152,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Draw album art overlay on top of everything if active.
     if app.album_art_overlay.is_some() {
         album_art_overlay::draw(frame, app, size);
+    }
+
+    // Draw quit confirmation dialog on top of everything.
+    if app.quit_confirming {
+        let yes = keys::KEY_CONFIRM_YES.to_smolstr();
+        let no = keys::KEY_CONFIRM_NO.to_smolstr();
+        let prompt = format!("Quit? {yes}/{no}");
+        let popup_width = prompt.len() as u16 + 4; // border (2) + padding (2)
+        let popup_height = 3_u16;
+        let x = size.x + (size.width.saturating_sub(popup_width)) / 2;
+        let y = size.y + (size.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+        // Clear the area behind the popup.
+        let clear = Block::default().style(Style::default().bg(app.config.style.background_color()));
+        frame.render_widget(clear, popup_area);
+
+        let popup = Paragraph::new(format!(" {prompt}"))
+            .block(
+                Block::bordered()
+                    .style(Style::default().fg(app.config.style.text_color())),
+            )
+            .style(Style::default().fg(app.config.style.text_color()));
+        frame.render_widget(popup, popup_area);
     }
 }
 
