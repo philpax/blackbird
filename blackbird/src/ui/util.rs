@@ -35,14 +35,10 @@ pub fn draw_heart(
 
     let hovered = response.hovered();
 
-    // If:
-    // - unstarred, unhovered: invisible (or white outline if show_outline_when_inactive)
-    // - unstarred, hovered: unfilled, red
-    // - starred, unhovered: filled, red
-    // - starred, hovered: unfilled, white
-    let visible = active || hovered || show_outline_when_inactive;
-    let filled = active && !hovered;
-    let is_red = (!active && hovered) || (active && !hovered);
+    let state = blackbird_client_shared::style::HeartState::from_interaction(active, hovered);
+    let visible = state.visible() || show_outline_when_inactive;
+    let filled = state.filled();
+    let is_red = state.is_red();
 
     // For some reason, the heart is slightly lower than the text when filled
     let y_offset = if filled { -2.0 } else { 0.0 };

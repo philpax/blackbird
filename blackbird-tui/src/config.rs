@@ -16,19 +16,7 @@ impl Config {
     pub const FILENAME: &str = "config.toml";
 
     pub fn load() -> Self {
-        match std::fs::read_to_string(Self::FILENAME) {
-            Ok(contents) => match toml::from_str(&contents) {
-                Ok(config) => config,
-                Err(e) => panic!("Failed to parse {}: {e}", Self::FILENAME),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tracing::info!("no config file found, creating default config");
-                Config::default()
-            }
-            Err(e) => {
-                panic!("Failed to read {}: {e}", Self::FILENAME)
-            }
-        }
+        blackbird_client_shared::config::load_config(Self::FILENAME)
     }
 
     /// Saves config back to disk, preserving any fields the TUI doesn't know about

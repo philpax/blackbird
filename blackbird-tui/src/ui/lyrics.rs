@@ -43,26 +43,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let current_position_ms = app
-        .logic
-        .get_playing_position()
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-
-    let adjusted_position_ms = current_position_ms + lyrics.offset.unwrap_or(0);
-
-    let current_line_idx = if lyrics.synced {
-        lyrics
-            .line
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|(_, line)| line.start.unwrap_or(0) <= adjusted_position_ms)
-            .map(|(idx, _)| idx)
-            .unwrap_or(0)
-    } else {
-        0
-    };
+    let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
+        lyrics,
+        app.logic.get_playing_position(),
+    );
 
     // Pre-compute style colors to avoid borrow conflicts in closure.
     let text_color = style.text_color();

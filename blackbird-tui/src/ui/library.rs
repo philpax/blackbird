@@ -114,8 +114,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     ..
                 } => {
                     let is_heart_hovered = hovered_heart_index == Some(i);
-                    let (heart, heart_style) =
-                        heart_display(*starred, is_heart_hovered, track_duration_color);
+                    let (heart, heart_style) = heart_to_tui(
+                        blackbird_client_shared::style::HeartState::from_interaction(
+                            *starred,
+                            is_heart_hovered,
+                        ),
+                        track_duration_color,
+                    );
 
                     let colors = cover_art_id
                         .as_ref()
@@ -215,8 +220,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 } => {
                     let is_playing = playing_track_id.as_ref() == Some(id);
                     let is_heart_hovered = hovered_heart_index == Some(i);
-                    let (heart, heart_style) =
-                        heart_display(*starred, is_heart_hovered, track_duration_color);
+                    let (heart, heart_style) = heart_to_tui(
+                        blackbird_client_shared::style::HeartState::from_interaction(
+                            *starred,
+                            is_heart_hovered,
+                        ),
+                        track_duration_color,
+                    );
 
                     let track_str = if let Some(disc) = disc_number {
                         format!("{disc}.{}", track_number.unwrap_or(0))
@@ -374,18 +384,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
-/// Determines the heart display character and style based on starred/hovered state.
-/// Matches the egui behavior:
-/// - Unstarred + not hovered: space (invisible)
-/// - Unstarred + hovered: ♥ in Red (preview what it would look like)
-/// - Starred + not hovered: ♥ in Red
-/// - Starred + hovered: ♥ in White (indicate "click to unstar")
-fn heart_display(starred: bool, hovered: bool, dim_color: Color) -> (&'static str, Style) {
-    match (starred, hovered) {
-        (false, false) => (" ", Style::default().fg(dim_color)),
-        (false, true) => ("\u{2665}", Style::default().fg(Color::Red)),
-        (true, false) => ("\u{2665}", Style::default().fg(Color::Red)),
-        (true, true) => ("\u{2665}", Style::default().fg(Color::White)),
+/// Map a [`HeartState`] to a TUI string and style.
+/// The `dim_color` is used for the hidden state so that the space character
+/// inherits the surrounding dim style.
+fn heart_to_tui(
+    state: blackbird_client_shared::style::HeartState,
+    dim_color: Color,
+) -> (&'static str, Style) {
+    use blackbird_client_shared::style::HeartState;
+    match state {
+        HeartState::Hidden => (" ", Style::default().fg(dim_color)),
+        HeartState::Preview | HeartState::Active => ("\u{2665}", Style::default().fg(Color::Red)),
+        HeartState::HoveredActive => ("\u{2665}", Style::default().fg(Color::White)),
     }
 }
 

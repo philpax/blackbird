@@ -2,6 +2,22 @@
 use blackbird_core::{PlaybackMode, blackbird_state::TrackId};
 use serde::{Deserialize, Serialize};
 
+/// Load a TOML config file, returning `T::default()` if the file doesn't exist.
+/// Panics on parse errors or unexpected I/O errors.
+pub fn load_config<T: Default + serde::de::DeserializeOwned>(filename: &str) -> T {
+    match std::fs::read_to_string(filename) {
+        Ok(contents) => match toml::from_str(&contents) {
+            Ok(config) => config,
+            Err(e) => panic!("Failed to parse {filename}: {e}"),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!("no config file found, creating default config");
+            T::default()
+        }
+        Err(e) => panic!("Failed to read {filename}: {e}"),
+    }
+}
+
 /// Shared configuration fields used by both the egui and TUI clients.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]

@@ -55,6 +55,42 @@ macro_rules! style_fields {
     }
 }
 
+/// Describes how a heart/star indicator should be displayed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeartState {
+    /// Unstarred + not hovered: invisible.
+    Hidden,
+    /// Unstarred + hovered: show red outline (preview what starring looks like).
+    Preview,
+    /// Starred + not hovered: show red filled.
+    Active,
+    /// Starred + hovered: show white outline (indicate "click to unstar").
+    HoveredActive,
+}
+
+impl HeartState {
+    pub fn from_interaction(starred: bool, hovered: bool) -> Self {
+        match (starred, hovered) {
+            (false, false) => Self::Hidden,
+            (false, true) => Self::Preview,
+            (true, false) => Self::Active,
+            (true, true) => Self::HoveredActive,
+        }
+    }
+
+    pub fn visible(&self) -> bool {
+        !matches!(self, Self::Hidden)
+    }
+
+    pub fn is_red(&self) -> bool {
+        matches!(self, Self::Preview | Self::Active)
+    }
+
+    pub fn filled(&self) -> bool {
+        matches!(self, Self::Active)
+    }
+}
+
 style_fields![
     (background_hsv, background, [0.65, 0.40, 0.01]),
     (text_hsv, text, [0.0, 0.0, 1.0]),

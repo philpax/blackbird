@@ -56,8 +56,18 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let album_heart_hovered =
         mouse_pos.is_some_and(|(mx, my)| mx == info_area.x && my == area.y + 1);
 
-    let (track_heart, track_heart_style) = heart_display(tdd.starred, track_heart_hovered);
-    let (album_heart, album_heart_style) = heart_display(album_starred, album_heart_hovered);
+    let (track_heart, track_heart_style) = heart_to_tui(
+        blackbird_client_shared::style::HeartState::from_interaction(
+            tdd.starred,
+            track_heart_hovered,
+        ),
+    );
+    let (album_heart, album_heart_style) = heart_to_tui(
+        blackbird_client_shared::style::HeartState::from_interaction(
+            album_starred,
+            album_heart_hovered,
+        ),
+    );
 
     let artist_display = if let Some(ref track_artist) = tdd.track_artist {
         if track_artist.as_str() != tdd.album_artist.as_str() {
@@ -192,17 +202,13 @@ fn draw_album_art(
     }
 }
 
-/// Heart display for the now-playing area, matching the library heart behavior.
-/// - Unstarred + not hovered: space (invisible, preserves alignment)
-/// - Unstarred + hovered: ♥ in Red (preview)
-/// - Starred + not hovered: ♥ in Red
-/// - Starred + hovered: ♥ in White (indicate "click to unstar")
-fn heart_display(starred: bool, hovered: bool) -> (&'static str, Style) {
-    match (starred, hovered) {
-        (false, false) => (" ", Style::default()),
-        (false, true) => ("\u{2665}", Style::default().fg(Color::Red)),
-        (true, false) => ("\u{2665}", Style::default().fg(Color::Red)),
-        (true, true) => ("\u{2665}", Style::default().fg(Color::White)),
+/// Map a [`HeartState`] to a TUI string and style.
+fn heart_to_tui(state: blackbird_client_shared::style::HeartState) -> (&'static str, Style) {
+    use blackbird_client_shared::style::HeartState;
+    match state {
+        HeartState::Hidden => (" ", Style::default()),
+        HeartState::Preview | HeartState::Active => ("\u{2665}", Style::default().fg(Color::Red)),
+        HeartState::HoveredActive => ("\u{2665}", Style::default().fg(Color::White)),
     }
 }
 

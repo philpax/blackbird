@@ -18,24 +18,7 @@ impl Config {
     pub const FILENAME: &str = "config.toml";
 
     pub fn load() -> Self {
-        match std::fs::read_to_string(Self::FILENAME) {
-            Ok(contents) => {
-                // Config exists, try to parse it.
-                match toml::from_str(&contents) {
-                    Ok(config) => config,
-                    Err(e) => panic!("Failed to parse {}: {e}", Self::FILENAME),
-                }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                // No config exists, create default.
-                tracing::info!("no config file found, creating default config");
-                Config::default()
-            }
-            Err(e) => {
-                // Some other IO error occurred while reading.
-                panic!("Failed to read {}: {e}", Self::FILENAME)
-            }
-        }
+        blackbird_client_shared::config::load_config(Self::FILENAME)
     }
 
     pub fn save(&self) {

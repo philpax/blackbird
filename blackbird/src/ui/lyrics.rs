@@ -71,28 +71,11 @@ pub fn ui(
                 return;
             }
 
-            // Get current playback position in milliseconds
-            let current_position_ms = logic
-                .get_playing_position()
-                .map(|d| d.as_millis() as i64)
-                .unwrap_or(0);
-
-            // Apply offset if present
-            let adjusted_position_ms = current_position_ms + lyrics.offset.unwrap_or(0);
-
             // Find the current line index based on playback position
-            let current_line_idx = if lyrics.synced {
-                lyrics
-                    .line
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, line)| line.start.unwrap_or(0) <= adjusted_position_ms)
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(0)
-            } else {
-                0 // For unsynced lyrics, don't highlight any line
-            };
+            let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
+                lyrics,
+                logic.get_playing_position(),
+            );
 
             ScrollArea::vertical()
                 .auto_shrink(Vec2b::FALSE)
