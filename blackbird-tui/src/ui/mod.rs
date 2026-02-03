@@ -252,7 +252,6 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     let style = &app.config.style;
-    let mode = app.logic.get_playback_mode();
 
     let help_actions: &[keys::Action] = match app.focused_panel {
         FocusedPanel::Library => keys::LIBRARY_HELP,
@@ -272,15 +271,6 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
             ));
             spans.push(Span::raw(format!(":{label} ")));
         }
-    }
-
-    // Append playback mode for library view.
-    if app.focused_panel == FocusedPanel::Library {
-        spans.push(Span::styled(
-            "m",
-            Style::default().fg(style.track_name_playing_color()),
-        ));
-        spans.push(Span::raw(format!(":mode({mode}) ")));
     }
 
     let help_line = Line::from(spans);

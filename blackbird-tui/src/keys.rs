@@ -38,11 +38,10 @@ impl Action {
     pub fn help_label(&self) -> Option<(&str, &str)> {
         match self {
             Action::Quit => Some(("q", "quit")),
-            Action::PlayPause => Some(("Space", "play/pause")),
+            Action::PlayPause => Some(("Space", "play")),
             Action::Stop => Some(("s", "stop")),
             Action::Next => Some(("n", "next")),
             Action::Previous => Some(("p", "prev")),
-            Action::CyclePlaybackMode => None, // rendered separately with current mode
             Action::Search => Some(("/", "search")),
             Action::Lyrics => Some(("l", "lyrics")),
             Action::Logs => Some(("L", "logs")),
@@ -53,6 +52,7 @@ impl Action {
             Action::GotoPlaying => Some(("g", "goto")),
             Action::Select => Some(("Enter", "play")),
             Action::Back => Some(("Esc", "close")),
+            Action::CyclePlaybackMode => Some(("m", "mode")),
             _ => None,
         }
     }
@@ -164,6 +164,7 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::Lyrics,
     Action::VolumeMode,
     Action::Select,
+    Action::CyclePlaybackMode,
 ];
 
 /// Ordered list of actions to show in the search help bar.
