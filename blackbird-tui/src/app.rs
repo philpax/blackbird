@@ -1,14 +1,16 @@
 use std::time::Duration;
 
-use blackbird_core as bc;
-use blackbird_core::{
-    PlaybackMode, PlaybackToLogicMessage,
-    blackbird_state::{CoverArtId, TrackId},
-};
+use blackbird_core::{self as bc, PlaybackMode, PlaybackToLogicMessage};
 
-use crate::config::Config;
-use crate::cover_art::CoverArtCache;
-use crate::log_buffer::LogBuffer;
+use crate::{
+    config::Config,
+    cover_art::CoverArtCache,
+    log_buffer::LogBuffer,
+    ui::{
+        album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
+        lyrics::LyricsState, search::SearchState,
+    },
+};
 
 /// Which panel/mode the UI is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,52 +21,8 @@ pub enum FocusedPanel {
     Logs,
 }
 
-/// State for the album art overlay popup.
-#[derive(Debug, Clone)]
-pub struct AlbumArtOverlay {
-    pub cover_art_id: CoverArtId,
-    pub title: String,
-}
-
-/// A single entry in the flat library list.
-#[derive(Debug, Clone)]
-pub enum LibraryEntry {
-    GroupHeader {
-        artist: String,
-        album: String,
-        year: Option<i32>,
-        duration: u32,
-        starred: bool,
-        album_id: blackbird_core::blackbird_state::AlbumId,
-        cover_art_id: Option<blackbird_core::blackbird_state::CoverArtId>,
-    },
-    Track {
-        id: TrackId,
-        title: String,
-        artist: Option<String>,
-        album_artist: String,
-        track_number: Option<u32>,
-        disc_number: Option<u32>,
-        duration: Option<u32>,
-        starred: bool,
-        play_count: Option<u64>,
-    },
-}
-
-impl LibraryEntry {
-    pub fn height(&self) -> usize {
-        match self {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        }
-    }
-}
-
-pub fn total_entry_lines(entries: &[LibraryEntry]) -> usize {
-    entries.iter().map(LibraryEntry::height).sum()
-}
-
 pub struct App {
+    // Core infrastructure (shared across views)
     pub logic: bc::Logic,
     pub config: Config,
     pub cover_art_cache: CoverArtCache,
@@ -72,56 +30,19 @@ pub struct App {
     pub lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
     pub library_populated_rx: std::sync::mpsc::Receiver<()>,
 
-    // UI state
+    // Global UI orchestration
     pub focused_panel: FocusedPanel,
-    pub library_scroll_offset: usize,
-    pub library_selected_index: usize,
-    pub library_needs_scroll_to_playing: bool,
-
-    // Cached flat library for performance.
-    cached_flat_library: Vec<LibraryEntry>,
-    flat_library_dirty: bool,
-
-    // Search state
-    pub search_query: String,
-    pub search_results: Vec<TrackId>,
-    pub search_selected_index: usize,
-
-    // Lyrics state
-    pub lyrics_track_id: Option<TrackId>,
-    pub lyrics_data: Option<bc::bs::StructuredLyrics>,
-    pub lyrics_loading: bool,
-    pub lyrics_scroll_offset: usize,
-    /// Keyboard-selected line index for scrubbing. `None` = auto-follow playback.
-    pub lyrics_selected_index: Option<usize>,
-
-    // Volume adjustment mode
     pub volume_editing: bool,
-
-    // Quit confirmation dialog
     pub quit_confirming: bool,
-
-    // Track that should be scrolled into view.
-    pub scroll_to_track: Option<TrackId>,
-
-    // Logs state
-    pub log_buffer: LogBuffer,
-    pub logs_scroll_offset: usize,
-
-    // Mouse state
+    pub should_quit: bool,
     pub mouse_position: Option<(u16, u16)>,
-    /// Pending click in library: (x, y, entry_index) — confirmed on MouseUp if no drag.
-    pub library_click_pending: Option<(u16, u16, usize)>,
-    pub library_dragging: bool,
-    pub library_drag_last_y: Option<u16>,
-    /// True when dragging the scrollbar thumb — continues scrolling even if cursor
-    /// moves off the scrollbar column horizontally, until mouse is released.
-    pub scrollbar_dragging: bool,
-
-    /// Album art overlay: shows a large quantised view of album art when clicked.
     pub album_art_overlay: Option<AlbumArtOverlay>,
 
-    pub should_quit: bool,
+    // Per-view state (owned by their respective modules)
+    pub library: LibraryState,
+    pub search: SearchState,
+    pub lyrics: LyricsState,
+    pub logs: LogsState,
 }
 
 impl App {
@@ -143,40 +64,16 @@ impl App {
             library_populated_rx,
 
             focused_panel: FocusedPanel::Library,
-            library_scroll_offset: 0,
-            library_selected_index: 0,
-            library_needs_scroll_to_playing: true,
-
-            cached_flat_library: Vec::new(),
-            flat_library_dirty: true,
-
-            search_query: String::new(),
-            search_results: Vec::new(),
-            search_selected_index: 0,
-
-            lyrics_track_id: None,
-            lyrics_data: None,
-            lyrics_loading: false,
-            lyrics_scroll_offset: 0,
-            lyrics_selected_index: None,
-
             volume_editing: false,
             quit_confirming: false,
-
-            scroll_to_track: None,
-
-            log_buffer,
-            logs_scroll_offset: 0,
-
+            should_quit: false,
             mouse_position: None,
-            library_click_pending: None,
-            library_dragging: false,
-            library_drag_last_y: None,
-            scrollbar_dragging: false,
-
             album_art_overlay: None,
 
-            should_quit: false,
+            library: LibraryState::new(),
+            search: SearchState::new(),
+            lyrics: LyricsState::new(),
+            logs: LogsState::new(log_buffer),
         }
     }
 
@@ -187,14 +84,12 @@ impl App {
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let PlaybackToLogicMessage::TrackStarted(tap) = event {
-                self.scroll_to_track = Some(tap.track_id.clone());
-                self.library_needs_scroll_to_playing = false;
+                self.library.scroll_to_track = Some(tap.track_id.clone());
+                self.library.needs_scroll_to_playing = false;
 
                 // Auto-request lyrics if the lyrics panel is open.
                 if self.focused_panel == FocusedPanel::Lyrics {
-                    self.lyrics_track_id = Some(tap.track_id.clone());
-                    self.lyrics_loading = true;
-                    self.lyrics_data = None;
+                    self.lyrics.start_loading(tap.track_id.clone());
                     self.logic.request_lyrics(&tap.track_id);
                 }
             }
@@ -202,33 +97,33 @@ impl App {
 
         // Process lyrics data.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
-            if Some(&lyrics_data.track_id) == self.lyrics_track_id.as_ref() {
-                self.lyrics_data = lyrics_data.lyrics;
-                self.lyrics_loading = false;
+            if Some(&lyrics_data.track_id) == self.lyrics.track_id.as_ref() {
+                self.lyrics.data = lyrics_data.lyrics;
+                self.lyrics.loading = false;
             }
         }
 
         // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
-            self.flat_library_dirty = true;
-            if self.library_needs_scroll_to_playing
+            self.library.mark_dirty();
+            if self.library.needs_scroll_to_playing
                 && let Some(track_id) = self.logic.get_playing_track_id()
             {
-                self.scroll_to_track = Some(track_id);
+                self.library.scroll_to_track = Some(track_id);
             }
             // Ensure selection is on a track, not a group header.
-            self.ensure_selection_on_track();
+            self.library.ensure_selection_on_track(&self.logic);
         }
 
         // Handle scroll-to-track.
-        if let Some(track_id) = self.scroll_to_track.take() {
+        if let Some(track_id) = self.library.scroll_to_track.take() {
             let state = self.logic.get_state();
             let state = state.read().unwrap();
-            if let Some(index) = self.find_flat_index_for_track(&state, &track_id) {
-                self.library_selected_index = index;
+            if let Some(index) = self.library.find_flat_index_for_track(&state, &track_id) {
+                self.library.selected_index = index;
             } else {
                 // Track not in library yet, re-queue.
-                self.scroll_to_track = Some(track_id);
+                self.library.scroll_to_track = Some(track_id);
             }
         }
 
@@ -237,75 +132,13 @@ impl App {
         }
     }
 
-    /// Returns the cached flat library, rebuilding if needed.
-    pub fn get_flat_library(&mut self) -> &[LibraryEntry] {
-        if self.flat_library_dirty {
-            self.rebuild_flat_library();
-            self.flat_library_dirty = false;
-        }
-        &self.cached_flat_library
-    }
-
-    /// Returns the length of the flat library without requiring mutable access.
-    pub fn flat_library_len(&self) -> usize {
-        self.cached_flat_library.len()
-    }
-
-    /// Returns a clone of the entry at the given index, if it exists.
-    pub fn get_library_entry(&mut self, index: usize) -> Option<LibraryEntry> {
-        if self.flat_library_dirty {
-            self.rebuild_flat_library();
-            self.flat_library_dirty = false;
-        }
-        self.cached_flat_library.get(index).cloned()
-    }
-
-    /// Rebuilds the cached flat library from the current state.
-    fn rebuild_flat_library(&mut self) {
-        let state = self.logic.get_state();
-        let state = state.read().unwrap();
-
-        self.cached_flat_library.clear();
-        for group in &state.library.groups {
-            self.cached_flat_library.push(LibraryEntry::GroupHeader {
-                artist: group.artist.to_string(),
-                album: group.album.to_string(),
-                year: group.year,
-                duration: group.duration,
-                starred: group.starred,
-                album_id: group.album_id.clone(),
-                cover_art_id: group.cover_art_id.clone(),
-            });
-
-            for track_id in &group.tracks {
-                if let Some(track) = state.library.track_map.get(track_id) {
-                    self.cached_flat_library.push(LibraryEntry::Track {
-                        id: track.id.clone(),
-                        title: track.title.to_string(),
-                        artist: track.artist.as_ref().map(|a| a.to_string()),
-                        album_artist: group.artist.to_string(),
-                        track_number: track.track,
-                        disc_number: track.disc_number,
-                        duration: track.duration,
-                        starred: track.starred,
-                        play_count: track.play_count,
-                    });
-                }
-            }
-        }
-    }
-
     pub fn toggle_search(&mut self) {
         if self.focused_panel == FocusedPanel::Search {
             self.focused_panel = FocusedPanel::Library;
-            self.search_query.clear();
-            self.search_results.clear();
         } else {
             self.focused_panel = FocusedPanel::Search;
-            self.search_query.clear();
-            self.search_results.clear();
-            self.search_selected_index = 0;
         }
+        self.search.reset();
     }
 
     pub fn toggle_lyrics(&mut self) {
@@ -313,13 +146,10 @@ impl App {
             self.focused_panel = FocusedPanel::Library;
         } else {
             self.focused_panel = FocusedPanel::Lyrics;
-            self.lyrics_scroll_offset = 0;
-            self.lyrics_selected_index = None;
+            self.lyrics.reset();
             // Request lyrics for the currently playing track.
             if let Some(track_id) = self.logic.get_playing_track_id() {
-                self.lyrics_track_id = Some(track_id.clone());
-                self.lyrics_loading = true;
-                self.lyrics_data = None;
+                self.lyrics.start_loading(track_id.clone());
                 self.logic.request_lyrics(&track_id);
             }
         }
@@ -330,20 +160,7 @@ impl App {
             self.focused_panel = FocusedPanel::Library;
         } else {
             self.focused_panel = FocusedPanel::Logs;
-            // Scroll to the end of the log buffer.
-            let len = self.log_buffer.len();
-            self.logs_scroll_offset = len.saturating_sub(1);
-        }
-    }
-
-    pub fn update_search(&mut self) {
-        if self.search_query.len() >= 3 {
-            let state = self.logic.get_state();
-            let mut state = state.write().unwrap();
-            self.search_results = state.library.search(&self.search_query);
-            self.search_selected_index = 0;
-        } else {
-            self.search_results.clear();
+            self.logs.scroll_to_end();
         }
     }
 
@@ -372,11 +189,6 @@ impl App {
         config.save();
     }
 
-    /// Marks the flat library cache as dirty, forcing a rebuild on next access.
-    pub fn mark_library_dirty(&mut self) {
-        self.flat_library_dirty = true;
-    }
-
     pub fn adjust_volume(&mut self, delta: f32) {
         let vol = (self.logic.get_volume() + delta).clamp(0.0, 1.0);
         self.logic.set_volume(vol);
@@ -392,72 +204,6 @@ impl App {
                 current.saturating_sub(delta)
             };
             self.logic.seek_current(new_pos);
-        }
-    }
-
-    /// Finds the flat index for a given track in the library.
-    fn find_flat_index_for_track(
-        &self,
-        state: &bc::AppState,
-        target_track_id: &TrackId,
-    ) -> Option<usize> {
-        let mut index = 0;
-        for group in &state.library.groups {
-            index += 1; // group header
-            for track_id in &group.tracks {
-                if track_id == target_track_id {
-                    return Some(index);
-                }
-                if state.library.track_map.contains_key(track_id) {
-                    index += 1;
-                }
-            }
-        }
-        None
-    }
-
-    /// Navigates to the first track in the given album.
-    pub fn scroll_to_album(&mut self, album_id: &blackbird_core::blackbird_state::AlbumId) {
-        if self.flat_library_dirty {
-            self.rebuild_flat_library();
-            self.flat_library_dirty = false;
-        }
-        let mut found_header = false;
-        for (i, entry) in self.cached_flat_library.iter().enumerate() {
-            match entry {
-                LibraryEntry::GroupHeader { album_id: aid, .. } => {
-                    found_header = aid == album_id;
-                }
-                LibraryEntry::Track { .. } if found_header => {
-                    self.library_selected_index = i;
-                    return;
-                }
-                _ => {}
-            }
-        }
-    }
-
-    /// Ensures the current selection is on a track, not a group header.
-    /// If currently on a header, moves to the first track in the library.
-    pub fn ensure_selection_on_track(&mut self) {
-        if self.flat_library_dirty {
-            self.rebuild_flat_library();
-            self.flat_library_dirty = false;
-        }
-
-        // Check if current selection is already a track.
-        if let Some(LibraryEntry::Track { .. }) =
-            self.cached_flat_library.get(self.library_selected_index)
-        {
-            return;
-        }
-
-        // Find the first track in the library.
-        for (i, entry) in self.cached_flat_library.iter().enumerate() {
-            if let LibraryEntry::Track { .. } = entry {
-                self.library_selected_index = i;
-                return;
-            }
         }
     }
 }

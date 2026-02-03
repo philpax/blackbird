@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blackbird_core::util::seconds_to_hms_string;
+use blackbird_core::{self as bc, blackbird_state::TrackId, util::seconds_to_hms_string};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -9,10 +9,41 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use crate::app::App;
-use crate::keys::Action;
+use crate::{app::App, keys::Action};
 
 use super::StyleExt;
+
+pub struct LyricsState {
+    pub track_id: Option<TrackId>,
+    pub data: Option<bc::bs::StructuredLyrics>,
+    pub loading: bool,
+    pub scroll_offset: usize,
+    /// Keyboard-selected line index for scrubbing. `None` = auto-follow playback.
+    pub selected_index: Option<usize>,
+}
+
+impl LyricsState {
+    pub fn new() -> Self {
+        Self {
+            track_id: None,
+            data: None,
+            loading: false,
+            scroll_offset: 0,
+            selected_index: None,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.scroll_offset = 0;
+        self.selected_index = None;
+    }
+
+    pub fn start_loading(&mut self, track_id: TrackId) {
+        self.track_id = Some(track_id);
+        self.loading = true;
+        self.data = None;
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
@@ -25,14 +56,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if app.lyrics_loading {
+    if app.lyrics.loading {
         let loading = Paragraph::new("Loading lyrics...")
             .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(loading, inner);
         return;
     }
 
-    let Some(lyrics) = &app.lyrics_data else {
+    let Some(lyrics) = &app.lyrics.data else {
         let msg = Paragraph::new("No lyrics available for this track.")
             .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(msg, inner);
@@ -51,7 +82,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         app.logic.get_playing_position(),
     );
 
-    let selected_index = app.lyrics_selected_index;
+    let selected_index = app.lyrics.selected_index;
     let track_name_hovered_color = style.track_name_hovered_color();
 
     // Pre-compute style colors to avoid borrow conflicts in closure.
@@ -134,7 +165,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         *list_state.offset_mut() = offset;
     } else {
         list_state.select(selected_index);
-        *list_state.offset_mut() = app.lyrics_scroll_offset;
+        *list_state.offset_mut() = app.lyrics.scroll_offset;
     }
 
     frame.render_stateful_widget(list, inner, &mut list_state);
@@ -160,7 +191,7 @@ pub fn handle_key(app: &mut App, action: Action) {
 
 /// Handle click in the lyrics area — seek to the clicked line.
 pub fn handle_mouse_click(app: &mut App, area: Rect, _x: u16, y: u16) {
-    let Some(lyrics) = &app.lyrics_data else {
+    let Some(lyrics) = &app.lyrics.data else {
         return;
     };
     if lyrics.line.is_empty() {
@@ -182,13 +213,13 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, _x: u16, y: u16) {
         app.logic.get_playing_position(),
     );
     let scroll_offset = if lyrics.synced {
-        if let Some(selected) = app.lyrics_selected_index {
+        if let Some(selected) = app.lyrics.selected_index {
             selected.saturating_sub(inner_height as usize / 2)
         } else {
             current_line_idx.saturating_sub(inner_height as usize / 2)
         }
     } else {
-        app.lyrics_scroll_offset
+        app.lyrics.scroll_offset
     };
 
     let clicked_index = scroll_offset + row_in_list;
@@ -200,13 +231,14 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, _x: u16, y: u16) {
 /// Move the lyrics selection cursor by `delta` lines.
 /// If no selection exists, starts from the current playing line.
 pub fn move_selection(app: &mut App, delta: i32) {
-    let line_count = app.lyrics_data.as_ref().map(|l| l.line.len()).unwrap_or(0);
+    let line_count = app.lyrics.data.as_ref().map(|l| l.line.len()).unwrap_or(0);
     if line_count == 0 {
         return;
     }
 
-    let current = app.lyrics_selected_index.unwrap_or_else(|| {
-        app.lyrics_data
+    let current = app.lyrics.selected_index.unwrap_or_else(|| {
+        app.lyrics
+            .data
             .as_ref()
             .map(|lyrics| {
                 blackbird_client_shared::lyrics::find_current_lyrics_line(
@@ -218,15 +250,15 @@ pub fn move_selection(app: &mut App, delta: i32) {
     });
 
     let new_index = (current as i32 + delta).clamp(0, line_count as i32 - 1) as usize;
-    app.lyrics_selected_index = Some(new_index);
+    app.lyrics.selected_index = Some(new_index);
 }
 
 /// Seek playback to the timestamp of the currently selected lyrics line.
 pub fn seek_to_selected(app: &mut App) {
-    let Some(selected) = app.lyrics_selected_index else {
+    let Some(selected) = app.lyrics.selected_index else {
         return;
     };
-    let Some(lyrics) = &app.lyrics_data else {
+    let Some(lyrics) = &app.lyrics.data else {
         return;
     };
     if let Some(line) = lyrics.line.get(selected)
@@ -235,13 +267,13 @@ pub fn seek_to_selected(app: &mut App) {
         app.logic
             .seek_current(Duration::from_millis(start_ms as u64));
         // Clear selection so the view returns to auto-follow.
-        app.lyrics_selected_index = None;
+        app.lyrics.selected_index = None;
     }
 }
 
 /// Seek playback to the timestamp of a lyrics line at the given index.
 pub fn seek_to_line(app: &mut App, line_index: usize) {
-    let Some(lyrics) = &app.lyrics_data else {
+    let Some(lyrics) = &app.lyrics.data else {
         return;
     };
     if let Some(line) = lyrics.line.get(line_index)
@@ -249,6 +281,6 @@ pub fn seek_to_line(app: &mut App, line_index: usize) {
     {
         app.logic
             .seek_current(Duration::from_millis(start_ms as u64));
-        app.lyrics_selected_index = None;
+        app.lyrics.selected_index = None;
     }
 }

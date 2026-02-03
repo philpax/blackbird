@@ -6,7 +6,10 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::{AlbumArtOverlay, App, FocusedPanel};
+use crate::{
+    app::{App, FocusedPanel},
+    ui::album_art_overlay::AlbumArtOverlay,
+};
 
 use super::{StyleExt, string_to_color};
 
@@ -284,7 +287,7 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
                         .map(|t| t.starred)
                         .unwrap_or(false);
                     app.logic.set_track_starred(&track_id, !starred);
-                    app.mark_library_dirty();
+                    app.library.mark_dirty();
                 }
             } else if row == 1
                 && let Some(details) = app.logic.get_track_display_details()
@@ -300,19 +303,19 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
                     .map(|a| a.starred)
                     .unwrap_or(false);
                 app.logic.set_album_starred(&details.album_id, !starred);
-                app.mark_library_dirty();
+                app.library.mark_dirty();
             }
         } else {
             // Click on text → navigate to playing track/album
             if row == 0 {
                 if let Some(track_id) = app.logic.get_playing_track_id() {
-                    app.scroll_to_track = Some(track_id);
+                    app.library.scroll_to_track = Some(track_id);
                     app.focused_panel = FocusedPanel::Library;
                 }
             } else if row == 1
                 && let Some(details) = app.logic.get_track_display_details()
             {
-                app.scroll_to_album(&details.album_id);
+                app.library.scroll_to_album(&app.logic, &details.album_id);
                 app.focused_panel = FocusedPanel::Library;
             }
         }

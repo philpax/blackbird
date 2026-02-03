@@ -311,8 +311,9 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             } else if app.focused_panel == FocusedPanel::Lyrics {
                 ui::lyrics::move_selection(app, -(ui::layout::SCROLL_WHEEL_STEPS as i32));
             } else if app.focused_panel == FocusedPanel::Logs {
-                app.logs_scroll_offset = app
-                    .logs_scroll_offset
+                app.logs.scroll_offset = app
+                    .logs
+                    .scroll_offset
                     .saturating_sub(ui::layout::SCROLL_WHEEL_STEPS);
             }
         }
@@ -322,10 +323,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             } else if app.focused_panel == FocusedPanel::Lyrics {
                 ui::lyrics::move_selection(app, ui::layout::SCROLL_WHEEL_STEPS as i32);
             } else if app.focused_panel == FocusedPanel::Logs {
-                let log_len = app.log_buffer.len();
+                let log_len = app.logs.log_buffer.len();
                 if log_len > 0 {
-                    app.logs_scroll_offset =
-                        (app.logs_scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
+                    app.logs.scroll_offset =
+                        (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS)
+                            .min(log_len - 1);
                 }
             }
         }

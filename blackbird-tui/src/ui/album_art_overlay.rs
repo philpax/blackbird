@@ -1,3 +1,4 @@
+use blackbird_core::blackbird_state::CoverArtId;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -9,6 +10,13 @@ use ratatui::{
 use crate::app::App;
 
 use super::StyleExt;
+
+/// State for the album art overlay popup.
+#[derive(Debug, Clone)]
+pub struct AlbumArtOverlay {
+    pub cover_art_id: CoverArtId,
+    pub title: String,
+}
 
 /// Draws the album art overlay centered on the screen.
 /// The overlay is 90% of the window width and shows a large quantised

@@ -1,7 +1,11 @@
 use std::collections::HashMap;
 
 use blackbird_client_shared::alphabet_scroll;
-use blackbird_core::{blackbird_state::CoverArtId, util::seconds_to_hms_string};
+use blackbird_core::{
+    self as bc,
+    blackbird_state::{CoverArtId, TrackId},
+    util::seconds_to_hms_string,
+};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -12,12 +16,224 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{AlbumArtOverlay, App, LibraryEntry, total_entry_lines},
+    app::App,
     cover_art::QuadrantColors,
     keys::Action,
+    ui::album_art_overlay::AlbumArtOverlay,
 };
 
 use super::{StyleExt, string_to_color};
+
+/// A single entry in the flat library list.
+#[derive(Debug, Clone)]
+pub enum LibraryEntry {
+    GroupHeader {
+        artist: String,
+        album: String,
+        year: Option<i32>,
+        duration: u32,
+        starred: bool,
+        album_id: blackbird_core::blackbird_state::AlbumId,
+        cover_art_id: Option<blackbird_core::blackbird_state::CoverArtId>,
+    },
+    Track {
+        id: TrackId,
+        title: String,
+        artist: Option<String>,
+        album_artist: String,
+        track_number: Option<u32>,
+        disc_number: Option<u32>,
+        duration: Option<u32>,
+        starred: bool,
+        play_count: Option<u64>,
+    },
+}
+
+impl LibraryEntry {
+    pub fn height(&self) -> usize {
+        match self {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        }
+    }
+}
+
+pub fn total_entry_lines(entries: &[LibraryEntry]) -> usize {
+    entries.iter().map(LibraryEntry::height).sum()
+}
+
+pub struct LibraryState {
+    pub scroll_offset: usize,
+    pub selected_index: usize,
+    pub needs_scroll_to_playing: bool,
+    pub scroll_to_track: Option<TrackId>,
+
+    // Mouse interaction
+    pub click_pending: Option<(u16, u16, usize)>,
+    pub dragging: bool,
+    pub drag_last_y: Option<u16>,
+    pub scrollbar_dragging: bool,
+
+    // Private cache
+    cached_flat_library: Vec<LibraryEntry>,
+    flat_library_dirty: bool,
+}
+
+impl LibraryState {
+    pub fn new() -> Self {
+        Self {
+            scroll_offset: 0,
+            selected_index: 0,
+            needs_scroll_to_playing: true,
+            scroll_to_track: None,
+
+            click_pending: None,
+            dragging: false,
+            drag_last_y: None,
+            scrollbar_dragging: false,
+
+            cached_flat_library: Vec::new(),
+            flat_library_dirty: true,
+        }
+    }
+
+    /// Marks the flat library cache as dirty, forcing a rebuild on next access.
+    pub fn mark_dirty(&mut self) {
+        self.flat_library_dirty = true;
+    }
+
+    /// Returns the cached flat library, rebuilding if needed.
+    pub fn get_flat_library(&mut self, logic: &bc::Logic) -> &[LibraryEntry] {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library(logic);
+            self.flat_library_dirty = false;
+        }
+        &self.cached_flat_library
+    }
+
+    /// Returns the length of the flat library without requiring mutable access.
+    pub fn flat_library_len(&self) -> usize {
+        self.cached_flat_library.len()
+    }
+
+    /// Returns a clone of the entry at the given index, if it exists.
+    pub fn get_library_entry(
+        &mut self,
+        logic: &bc::Logic,
+        index: usize,
+    ) -> Option<LibraryEntry> {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library(logic);
+            self.flat_library_dirty = false;
+        }
+        self.cached_flat_library.get(index).cloned()
+    }
+
+    /// Rebuilds the cached flat library from the current state.
+    fn rebuild_flat_library(&mut self, logic: &bc::Logic) {
+        let state = logic.get_state();
+        let state = state.read().unwrap();
+
+        self.cached_flat_library.clear();
+        for group in &state.library.groups {
+            self.cached_flat_library.push(LibraryEntry::GroupHeader {
+                artist: group.artist.to_string(),
+                album: group.album.to_string(),
+                year: group.year,
+                duration: group.duration,
+                starred: group.starred,
+                album_id: group.album_id.clone(),
+                cover_art_id: group.cover_art_id.clone(),
+            });
+
+            for track_id in &group.tracks {
+                if let Some(track) = state.library.track_map.get(track_id) {
+                    self.cached_flat_library.push(LibraryEntry::Track {
+                        id: track.id.clone(),
+                        title: track.title.to_string(),
+                        artist: track.artist.as_ref().map(|a| a.to_string()),
+                        album_artist: group.artist.to_string(),
+                        track_number: track.track,
+                        disc_number: track.disc_number,
+                        duration: track.duration,
+                        starred: track.starred,
+                        play_count: track.play_count,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Finds the flat index for a given track in the library.
+    pub fn find_flat_index_for_track(
+        &self,
+        state: &bc::AppState,
+        target_track_id: &TrackId,
+    ) -> Option<usize> {
+        let mut index = 0;
+        for group in &state.library.groups {
+            index += 1; // group header
+            for track_id in &group.tracks {
+                if track_id == target_track_id {
+                    return Some(index);
+                }
+                if state.library.track_map.contains_key(track_id) {
+                    index += 1;
+                }
+            }
+        }
+        None
+    }
+
+    /// Navigates to the first track in the given album.
+    pub fn scroll_to_album(
+        &mut self,
+        logic: &bc::Logic,
+        album_id: &blackbird_core::blackbird_state::AlbumId,
+    ) {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library(logic);
+            self.flat_library_dirty = false;
+        }
+        let mut found_header = false;
+        for (i, entry) in self.cached_flat_library.iter().enumerate() {
+            match entry {
+                LibraryEntry::GroupHeader { album_id: aid, .. } => {
+                    found_header = aid == album_id;
+                }
+                LibraryEntry::Track { .. } if found_header => {
+                    self.selected_index = i;
+                    return;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Ensures the current selection is on a track, not a group header.
+    /// If currently on a header, moves to the first track in the library.
+    pub fn ensure_selection_on_track(&mut self, logic: &bc::Logic) {
+        if self.flat_library_dirty {
+            self.rebuild_flat_library(logic);
+            self.flat_library_dirty = false;
+        }
+
+        // Check if current selection is already a track.
+        if let Some(LibraryEntry::Track { .. }) =
+            self.cached_flat_library.get(self.selected_index)
+        {
+            return;
+        }
+
+        // Find the first track in the library.
+        for (i, entry) in self.cached_flat_library.iter().enumerate() {
+            if let LibraryEntry::Track { .. } = entry {
+                self.selected_index = i;
+                return;
+            }
+        }
+    }
+}
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
@@ -49,12 +265,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Copy values we need before borrowing entries.
-    let scroll_offset = app.library_scroll_offset;
-    let selected_index = app.library_selected_index;
+    let scroll_offset = app.library.scroll_offset;
+    let selected_index = app.library.selected_index;
     let playing_track_id = app.logic.get_playing_track_id();
 
     // Clone entries to avoid borrow conflicts when accessing cover_art_cache later.
-    let entries: Vec<LibraryEntry> = app.get_flat_library().to_vec();
+    let entries: Vec<LibraryEntry> = app.library.get_flat_library(&app.logic).to_vec();
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No tracks found")
@@ -361,7 +577,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(list, inner, &mut state);
 
     // Save the offset for use by keyboard navigation.
-    app.library_scroll_offset = state.offset();
+    app.library.scroll_offset = state.offset();
 
     // Render combined scrollbar + alphabet indicator on the right column.
     render_scrollbar_with_alphabet(
@@ -402,8 +618,8 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
     }
 
     // Capture scroll_offset before borrowing entries.
-    let scroll_offset = app.library_scroll_offset;
-    let entries = app.get_flat_library();
+    let scroll_offset = app.library.scroll_offset;
+    let entries = app.library.get_flat_library(&app.logic);
 
     // Compute list_width and heart column
     let total_lines = total_entry_lines(entries);
@@ -531,7 +747,7 @@ fn render_scrollbar_with_alphabet(
 }
 
 pub fn handle_key(app: &mut App, action: Action) {
-    let entries_len = app.flat_library_len();
+    let entries_len = app.library.flat_library_len();
 
     match action {
         Action::Quit => app.quit_confirming = true,
@@ -546,73 +762,87 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::VolumeMode => app.volume_editing = true,
         Action::GotoPlaying => {
             if let Some(track_id) = app.logic.get_playing_track_id() {
-                app.scroll_to_track = Some(track_id);
+                app.library.scroll_to_track = Some(track_id);
             }
         }
         Action::SeekBackward => app.seek_relative(-super::layout::SEEK_STEP_SECS),
         Action::SeekForward => app.seek_relative(super::layout::SEEK_STEP_SECS),
         Action::Star => {
-            if let Some(entry) = app.get_library_entry(app.library_selected_index) {
+            let selected = app.library.selected_index;
+            if let Some(entry) = app.library.get_library_entry(&app.logic, selected) {
                 match entry {
                     LibraryEntry::Track { id, starred, .. } => {
                         app.logic.set_track_starred(&id, !starred);
-                        app.mark_library_dirty();
+                        app.library.mark_dirty();
                     }
                     LibraryEntry::GroupHeader {
                         album_id, starred, ..
                     } => {
                         app.logic.set_album_starred(&album_id, !starred);
-                        app.mark_library_dirty();
+                        app.library.mark_dirty();
                     }
                 }
             }
         }
         Action::MoveUp => {
-            let mut new_index = app.library_selected_index;
+            let mut new_index = app.library.selected_index;
             while new_index > 0 {
                 new_index -= 1;
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
                     break;
                 }
             }
-            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
-                app.library_selected_index = new_index;
+            if let Some(LibraryEntry::Track { .. }) =
+                app.library.get_library_entry(&app.logic, new_index)
+            {
+                app.library.selected_index = new_index;
             }
         }
         Action::MoveDown => {
-            let mut new_index = app.library_selected_index;
+            let mut new_index = app.library.selected_index;
             while new_index < entries_len.saturating_sub(1) {
                 new_index += 1;
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
                     break;
                 }
             }
-            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
-                app.library_selected_index = new_index;
+            if let Some(LibraryEntry::Track { .. }) =
+                app.library.get_library_entry(&app.logic, new_index)
+            {
+                app.library.selected_index = new_index;
             }
         }
         Action::PageUp => {
             let target = app
-                .library_selected_index
+                .library
+                .selected_index
                 .saturating_sub(super::layout::PAGE_SCROLL_SIZE);
             let mut new_index = target;
             while new_index < entries_len {
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
                     break;
                 }
                 new_index += 1;
             }
             if new_index < entries_len {
-                app.library_selected_index = new_index;
+                app.library.selected_index = new_index;
             }
         }
         Action::PageDown => {
             if entries_len > 0 {
-                let target = (app.library_selected_index + super::layout::PAGE_SCROLL_SIZE)
+                let target = (app.library.selected_index + super::layout::PAGE_SCROLL_SIZE)
                     .min(entries_len - 1);
                 let mut new_index = target;
                 loop {
-                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    if let Some(LibraryEntry::Track { .. }) =
+                        app.library.get_library_entry(&app.logic, new_index)
+                    {
                         break;
                     }
                     if new_index == 0 {
@@ -620,15 +850,19 @@ pub fn handle_key(app: &mut App, action: Action) {
                     }
                     new_index -= 1;
                 }
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
-                    app.library_selected_index = new_index;
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
+                    app.library.selected_index = new_index;
                 }
             }
         }
         Action::GotoTop => {
             for i in 0..entries_len {
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
-                    app.library_selected_index = i;
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, i)
+                {
+                    app.library.selected_index = i;
                     break;
                 }
             }
@@ -636,16 +870,19 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::GotoBottom => {
             if entries_len > 0 {
                 for i in (0..entries_len).rev() {
-                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
-                        app.library_selected_index = i;
+                    if let Some(LibraryEntry::Track { .. }) =
+                        app.library.get_library_entry(&app.logic, i)
+                    {
+                        app.library.selected_index = i;
                         break;
                     }
                 }
             }
         }
         Action::Select => {
+            let selected = app.library.selected_index;
             if let Some(LibraryEntry::Track { id, .. }) =
-                app.get_library_entry(app.library_selected_index)
+                app.library.get_library_entry(&app.logic, selected)
             {
                 app.logic.request_play_track(&id);
             }
@@ -656,19 +893,19 @@ pub fn handle_key(app: &mut App, action: Action) {
 
 /// Handle click in the library area.
 pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
-    let entries = app.get_flat_library().to_vec();
+    let entries = app.library.get_flat_library(&app.logic).to_vec();
     let scrollbar_x = library_area.x + library_area.width - 1;
 
     // Click on scrollbar (rightmost column)
     if x == scrollbar_x {
         scroll_to_y(app, &entries, library_area, y);
-        app.scrollbar_dragging = true;
+        app.library.scrollbar_dragging = true;
         return;
     }
 
     // Calculate which entry was clicked
     let inner_y = y.saturating_sub(library_area.y);
-    let scroll_offset = app.library_scroll_offset;
+    let scroll_offset = app.library.scroll_offset;
 
     let mut line = 0usize;
     let mut clicked_index = None;
@@ -702,11 +939,11 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
         LibraryEntry::Track { id, starred, .. } => {
             if is_heart_click {
                 app.logic.set_track_starred(id, !starred);
-                app.mark_library_dirty();
+                app.library.mark_dirty();
             } else {
-                app.library_click_pending = Some((x, y, index));
-                app.library_dragging = false;
-                app.library_drag_last_y = Some(y);
+                app.library.click_pending = Some((x, y, index));
+                app.library.dragging = false;
+                app.library.drag_last_y = Some(y);
             }
         }
         LibraryEntry::GroupHeader {
@@ -727,11 +964,11 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                 }
             } else if is_heart_click && click_line_in_entry == 1 {
                 app.logic.set_album_starred(album_id, !starred);
-                app.mark_library_dirty();
+                app.library.mark_dirty();
             } else {
-                app.library_click_pending = Some((x, y, index));
-                app.library_dragging = false;
-                app.library_drag_last_y = Some(y);
+                app.library.click_pending = Some((x, y, index));
+                app.library.dragging = false;
+                app.library.drag_last_y = Some(y);
             }
         }
     }
@@ -740,42 +977,45 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
 /// Handle mouse drag in the library area. Returns `true` if the drag was handled.
 pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> bool {
     // Scrollbar drag — once started, continues regardless of x position
-    if app.scrollbar_dragging && y >= library_area.y && y < library_area.y + library_area.height {
-        let entries = app.get_flat_library().to_vec();
+    if app.library.scrollbar_dragging
+        && y >= library_area.y
+        && y < library_area.y + library_area.height
+    {
+        let entries = app.library.get_flat_library(&app.logic).to_vec();
         scroll_to_y(app, &entries, library_area, y);
-        app.library_click_pending = None;
-        app.library_dragging = true;
+        app.library.click_pending = None;
+        app.library.dragging = true;
         return true;
     }
 
     let scrollbar_x = library_area.x + library_area.width - 1;
 
     if x == scrollbar_x && y >= library_area.y && y < library_area.y + library_area.height {
-        let entries = app.get_flat_library().to_vec();
+        let entries = app.library.get_flat_library(&app.logic).to_vec();
         scroll_to_y(app, &entries, library_area, y);
-        app.library_click_pending = None;
-        app.library_dragging = true;
-        app.scrollbar_dragging = true;
+        app.library.click_pending = None;
+        app.library.dragging = true;
+        app.library.scrollbar_dragging = true;
         return true;
     }
 
     // Content drag → pan library
-    if app.library_click_pending.is_some() || app.library_dragging {
-        app.library_click_pending = None;
-        app.library_dragging = true;
+    if app.library.click_pending.is_some() || app.library.dragging {
+        app.library.click_pending = None;
+        app.library.dragging = true;
 
-        if let Some(last_y) = app.library_drag_last_y {
+        if let Some(last_y) = app.library.drag_last_y {
             let delta = y as i32 - last_y as i32;
             if delta != 0 {
-                let entries_len = app.flat_library_len();
+                let entries_len = app.library.flat_library_len();
                 let steps = delta.unsigned_abs() as usize;
                 for _ in 0..steps {
-                    let mut new_index = app.library_selected_index;
+                    let mut new_index = app.library.selected_index;
                     if delta > 0 {
                         while new_index > 0 {
                             new_index -= 1;
                             if let Some(LibraryEntry::Track { .. }) =
-                                app.get_library_entry(new_index)
+                                app.library.get_library_entry(&app.logic, new_index)
                             {
                                 break;
                             }
@@ -784,19 +1024,21 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
                         while new_index < entries_len.saturating_sub(1) {
                             new_index += 1;
                             if let Some(LibraryEntry::Track { .. }) =
-                                app.get_library_entry(new_index)
+                                app.library.get_library_entry(&app.logic, new_index)
                             {
                                 break;
                             }
                         }
                     }
-                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
-                        app.library_selected_index = new_index;
+                    if let Some(LibraryEntry::Track { .. }) =
+                        app.library.get_library_entry(&app.logic, new_index)
+                    {
+                        app.library.selected_index = new_index;
                     }
                 }
             }
         }
-        app.library_drag_last_y = Some(y);
+        app.library.drag_last_y = Some(y);
         return true;
     }
 
@@ -805,40 +1047,47 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
 
 /// Handle mouse button release in the library — confirm pending click or reset drag state.
 pub fn handle_mouse_up(app: &mut App) {
-    if let Some((_cx, _cy, index)) = app.library_click_pending.take()
-        && !app.library_dragging
-        && let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index)
+    if let Some((_cx, _cy, index)) = app.library.click_pending.take()
+        && !app.library.dragging
+        && let Some(LibraryEntry::Track { id, .. }) =
+            app.library.get_library_entry(&app.logic, index)
     {
-        app.library_selected_index = index;
+        app.library.selected_index = index;
         app.logic.request_play_track(&id);
     }
-    app.library_dragging = false;
-    app.library_drag_last_y = None;
-    app.scrollbar_dragging = false;
+    app.library.dragging = false;
+    app.library.drag_last_y = None;
+    app.library.scrollbar_dragging = false;
 }
 
 /// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
 pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
-    let entries_len = app.flat_library_len();
+    let entries_len = app.library.flat_library_len();
     for _ in 0..steps {
-        let mut new_index = app.library_selected_index;
+        let mut new_index = app.library.selected_index;
         if direction < 0 {
             while new_index > 0 {
                 new_index -= 1;
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
                     break;
                 }
             }
         } else {
             while new_index < entries_len.saturating_sub(1) {
                 new_index += 1;
-                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, new_index)
+                {
                     break;
                 }
             }
         }
-        if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
-            app.library_selected_index = new_index;
+        if let Some(LibraryEntry::Track { .. }) =
+            app.library.get_library_entry(&app.logic, new_index)
+        {
+            app.library.selected_index = new_index;
         }
     }
 }
@@ -866,7 +1115,7 @@ pub fn scroll_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, 
                 track_index += 1;
             }
             if track_index < entries.len() {
-                app.library_selected_index = track_index;
+                app.library.selected_index = track_index;
             }
             return;
         }
