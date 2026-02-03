@@ -19,16 +19,6 @@ use crate::{
     keys,
 };
 
-/// Converts a shared style Rgb color to ratatui's Color.
-fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
-    Color::Rgb(rgb.r, rgb.g, rgb.b)
-}
-
-/// Converts HSV to gamma-corrected ratatui Color to match egui's rendering.
-fn hsv_to_color_gamma(hsv: shared_style::Hsv) -> Color {
-    rgb_to_color(shared_style::hsv_to_rgb_gamma(hsv))
-}
-
 /// Extension trait for using shared style colors with ratatui.
 /// Uses gamma-corrected colors to match egui's appearance.
 pub trait StyleExt {
@@ -44,41 +34,92 @@ pub trait StyleExt {
     fn track_name_playing_color(&self) -> Color;
     fn track_duration_color(&self) -> Color;
 }
-
 impl StyleExt for shared_style::Style {
     fn background_color(&self) -> Color {
-        hsv_to_color_gamma(self.background_hsv)
+        hsv_to_color(self.background_hsv)
     }
     fn text_color(&self) -> Color {
-        hsv_to_color_gamma(self.text_hsv)
+        hsv_to_color(self.text_hsv)
     }
     fn album_color(&self) -> Color {
-        hsv_to_color_gamma(self.album_hsv)
+        hsv_to_color(self.album_hsv)
     }
     fn album_length_color(&self) -> Color {
-        hsv_to_color_gamma(self.album_length_hsv)
+        hsv_to_color(self.album_length_hsv)
     }
     fn album_year_color(&self) -> Color {
-        hsv_to_color_gamma(self.album_year_hsv)
+        hsv_to_color(self.album_year_hsv)
     }
     fn track_number_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_number_hsv)
+        hsv_to_color(self.track_number_hsv)
     }
     fn track_length_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_length_hsv)
+        hsv_to_color(self.track_length_hsv)
     }
     fn track_name_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_name_hsv)
+        hsv_to_color(self.track_name_hsv)
     }
     fn track_name_hovered_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_name_hovered_hsv)
+        hsv_to_color(self.track_name_hovered_hsv)
     }
     fn track_name_playing_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_name_playing_hsv)
+        hsv_to_color(self.track_name_playing_hsv)
     }
     fn track_duration_color(&self) -> Color {
-        hsv_to_color_gamma(self.track_duration_hsv)
+        hsv_to_color(self.track_duration_hsv)
     }
+}
+/// Converts a shared style Rgb color to ratatui's Color.
+fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
+}
+fn hsv_to_color(hsv: shared_style::Hsv) -> Color {
+    // from egui, fusing together hsv conversion and gamma correction
+    /// All ranges in 0-1, rgb is linear.
+    #[inline]
+    pub fn from_hsv([h, s, v]: shared_style::Hsv) -> shared_style::Rgb {
+        #![allow(clippy::many_single_char_names)]
+        let h = (h.fract() + 1.0).fract(); // wrap
+        let s = s.clamp(0.0, 1.0);
+
+        let f = h * 6.0 - (h * 6.0).floor();
+        let p = v * (1.0 - s);
+        let q = v * (1.0 - f * s);
+        let t = v * (1.0 - (1.0 - f) * s);
+
+        let [r, g, b] = match (h * 6.0).floor() as i32 % 6 {
+            0 => [v, t, p],
+            1 => [q, v, p],
+            2 => [p, v, t],
+            3 => [p, q, v],
+            4 => [t, p, v],
+            5 => [v, p, q],
+            _ => unreachable!(),
+        };
+
+        pub fn gamma_u8_from_linear_f32(l: f32) -> u8 {
+            if l <= 0.0 {
+                0
+            } else if l <= 0.0031308 {
+                fast_round(3294.6 * l)
+            } else if l <= 1.0 {
+                fast_round(269.025 * l.powf(1.0 / 2.4) - 14.025)
+            } else {
+                255
+            }
+        }
+
+        fn fast_round(r: f32) -> u8 {
+            (r + 0.5) as _ // rust does a saturating cast since 1.45
+        }
+
+        shared_style::Rgb::new(
+            gamma_u8_from_linear_f32(r),
+            gamma_u8_from_linear_f32(g),
+            gamma_u8_from_linear_f32(b),
+        )
+    }
+    rgb_to_color(from_hsv(hsv))
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
@@ -120,7 +161,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// Hashes a string to produce a pleasing colour (uses shared implementation).
 /// Uses gamma-corrected version to match egui's color rendering.
 pub fn string_to_color(s: &str) -> Color {
-    rgb_to_color(shared_style::string_to_rgb_gamma(s))
+    hsv_to_color(shared_style::string_to_hsv(s))
 }
 
 /// Width of the volume slider area (speaker icon + bar + percentage).

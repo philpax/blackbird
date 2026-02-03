@@ -13,85 +13,10 @@ pub struct Rgb {
     pub g: u8,
     pub b: u8,
 }
-
 impl Rgb {
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b }
     }
-}
-
-/// Convert HSV to RGB.
-pub fn hsv_to_rgb(hsv: Hsv) -> Rgb {
-    let [h, s, v] = hsv;
-    let c = v * s;
-    let h_prime = h * 6.0;
-    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
-    let m = v - c;
-
-    let (r, g, b) = if h_prime < 1.0 {
-        (c, x, 0.0)
-    } else if h_prime < 2.0 {
-        (x, c, 0.0)
-    } else if h_prime < 3.0 {
-        (0.0, c, x)
-    } else if h_prime < 4.0 {
-        (0.0, x, c)
-    } else if h_prime < 5.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-
-    Rgb {
-        r: ((r + m) * 255.0) as u8,
-        g: ((g + m) * 255.0) as u8,
-        b: ((b + m) * 255.0) as u8,
-    }
-}
-
-/// Apply sRGB gamma correction (linear to sRGB).
-fn linear_to_srgb(linear: f32) -> f32 {
-    if linear <= 0.0031308 {
-        linear * 12.92
-    } else {
-        1.055 * linear.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-/// Convert HSV to gamma-corrected RGB for terminal display.
-/// egui's Hsva treats values as linear and applies gamma internally,
-/// so terminals need gamma-corrected values to match egui's appearance.
-pub fn hsv_to_rgb_gamma(hsv: Hsv) -> Rgb {
-    let [h, s, v] = hsv;
-    let c = v * s;
-    let h_prime = h * 6.0;
-    let x = c * (1.0 - (h_prime % 2.0 - 1.0).abs());
-    let m = v - c;
-
-    let (r, g, b) = if h_prime < 1.0 {
-        (c, x, 0.0)
-    } else if h_prime < 2.0 {
-        (x, c, 0.0)
-    } else if h_prime < 3.0 {
-        (0.0, c, x)
-    } else if h_prime < 4.0 {
-        (0.0, x, c)
-    } else if h_prime < 5.0 {
-        (x, 0.0, c)
-    } else {
-        (c, 0.0, x)
-    };
-
-    Rgb {
-        r: (linear_to_srgb(r + m) * 255.0) as u8,
-        g: (linear_to_srgb(g + m) * 255.0) as u8,
-        b: (linear_to_srgb(b + m) * 255.0) as u8,
-    }
-}
-
-/// Hashes a string and produces a gamma-corrected RGB colour for terminal display.
-pub fn string_to_rgb_gamma(s: &str) -> Rgb {
-    hsv_to_rgb_gamma(string_to_hsv(s))
 }
 
 /// Hashes a string and produces a pleasing colour from that hash.
@@ -104,11 +29,6 @@ pub fn string_to_hsv(s: &str) -> Hsv {
     let hue = (hash % DISTINCT_COLOURS) as f32 / DISTINCT_COLOURS as f32;
 
     [hue, 0.75, 0.75]
-}
-
-/// Hashes a string and produces a pleasing RGB colour from that hash.
-pub fn string_to_rgb(s: &str) -> Rgb {
-    hsv_to_rgb(string_to_hsv(s))
 }
 
 macro_rules! style_fields {
@@ -124,7 +44,6 @@ macro_rules! style_fields {
             /// Scroll multiplier for mouse wheel scrolling.
             pub scroll_multiplier: f32,
         }
-
         impl Default for Style {
             fn default() -> Self {
                 Self {
@@ -132,15 +51,6 @@ macro_rules! style_fields {
                     scroll_multiplier: 50.0,
                 }
             }
-        }
-
-        impl Style {
-            $(
-                #[doc = concat!("Get RGB colour for ", stringify!($fn_name))]
-                pub fn $fn_name(&self) -> Rgb {
-                    hsv_to_rgb(self.$field)
-                }
-            )*
         }
     }
 }
