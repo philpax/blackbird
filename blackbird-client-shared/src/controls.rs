@@ -1,3 +1,4 @@
+//! Media controls (MPRIS / Windows SMTC) shared between the egui and TUI clients.
 use std::sync::{Arc, RwLock};
 
 use blackbird_core::{

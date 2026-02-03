@@ -1,3 +1,4 @@
+//! Cover art cache shared between the egui and TUI clients.
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
