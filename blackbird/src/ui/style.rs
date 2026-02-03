@@ -4,11 +4,6 @@ use egui::{Color32, ecolor::Hsva};
 /// Re-export the shared Style type.
 pub use shared_style::Style;
 
-/// Convert shared Rgb to egui Color32.
-fn rgb_to_color32(rgb: shared_style::Rgb) -> Color32 {
-    Color32::from_rgb(rgb.r, rgb.g, rgb.b)
-}
-
 /// Extension trait for Style to get egui Color32 values.
 pub trait StyleExt {
     fn background_color32(&self) -> Color32;
@@ -23,40 +18,42 @@ pub trait StyleExt {
     fn track_name_playing_color32(&self) -> Color32;
     fn track_duration_color32(&self) -> Color32;
 }
-
+fn hsv_to_egui_color32([h, s, v]: shared_style::Hsv) -> Color32 {
+    Color32::from(Hsva::new(h, s, v, 1.0))
+}
 impl StyleExt for Style {
     fn background_color32(&self) -> Color32 {
-        rgb_to_color32(self.background())
+        hsv_to_egui_color32(self.background_hsv)
     }
     fn text_color32(&self) -> Color32 {
-        rgb_to_color32(self.text())
+        hsv_to_egui_color32(self.text_hsv)
     }
     fn album_color32(&self) -> Color32 {
-        rgb_to_color32(self.album())
+        hsv_to_egui_color32(self.album_hsv)
     }
     fn album_length_color32(&self) -> Color32 {
-        rgb_to_color32(self.album_length())
+        hsv_to_egui_color32(self.album_length_hsv)
     }
     fn album_year_color32(&self) -> Color32 {
-        rgb_to_color32(self.album_year())
+        hsv_to_egui_color32(self.album_year_hsv)
     }
     fn track_number_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_number())
+        hsv_to_egui_color32(self.track_number_hsv)
     }
     fn track_length_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_length())
+        hsv_to_egui_color32(self.track_length_hsv)
     }
     fn track_name_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_name())
+        hsv_to_egui_color32(self.track_name_hsv)
     }
     fn track_name_hovered_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_name_hovered())
+        hsv_to_egui_color32(self.track_name_hovered_hsv)
     }
     fn track_name_playing_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_name_playing())
+        hsv_to_egui_color32(self.track_name_playing_hsv)
     }
     fn track_duration_color32(&self) -> Color32 {
-        rgb_to_color32(self.track_duration())
+        hsv_to_egui_color32(self.track_duration_hsv)
     }
 }
 
