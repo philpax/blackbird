@@ -719,6 +719,7 @@ dependencies = [
  "image",
  "ratatui",
  "serde",
+ "smol_str 0.3.5",
  "toml",
  "tracing",
  "tracing-subscriber",

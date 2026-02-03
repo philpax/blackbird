@@ -139,7 +139,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                 app.search_selected_index += 1;
             }
         }
-        Action::Backspace => {
+        Action::DeleteChar => {
             app.search_query.pop();
             app.update_search();
         }

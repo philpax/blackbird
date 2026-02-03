@@ -266,7 +266,7 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     for action in help_actions {
         if let Some((key, label)) = action.help_label() {
             spans.push(Span::styled(
-                key,
+                String::from(key),
                 Style::default().fg(style.track_name_playing_color()),
             ));
             spans.push(Span::raw(format!(":{label} ")));

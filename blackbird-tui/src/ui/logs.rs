@@ -129,10 +129,10 @@ pub fn handle_key(app: &mut App, action: Action) {
                     (app.logs_scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
             }
         }
-        Action::Home => {
+        Action::GotoTop => {
             app.logs_scroll_offset = 0;
         }
-        Action::End => {
+        Action::GotoBottom => {
             if log_len > 0 {
                 app.logs_scroll_offset = log_len - 1;
             }

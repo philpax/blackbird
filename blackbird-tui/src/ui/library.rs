@@ -625,7 +625,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                 }
             }
         }
-        Action::Home => {
+        Action::GotoTop => {
             for i in 0..entries_len {
                 if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
                     app.library_selected_index = i;
@@ -633,7 +633,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                 }
             }
         }
-        Action::End => {
+        Action::GotoBottom => {
             if entries_len > 0 {
                 for i in (0..entries_len).rev() {
                     if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
