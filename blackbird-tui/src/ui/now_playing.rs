@@ -6,7 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::App;
+use crate::app::{AlbumArtOverlay, App, FocusedPanel};
 
 use super::{StyleExt, string_to_color};
 
@@ -248,4 +248,110 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
 
     let widget = Paragraph::new(lines).alignment(Alignment::Right);
     frame.render_widget(widget, area);
+}
+
+/// Handle click in the now-playing area (track info, album info, transport, playback mode).
+pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
+    // Recompute the now-playing horizontal layout.
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Length(6),  // album art
+            Constraint::Min(20),    // track info
+            Constraint::Length(24), // transport controls
+        ])
+        .split(area);
+
+    let art_area = chunks[0];
+    let info_area = chunks[1];
+    let transport_area = chunks[2];
+
+    let row = y.saturating_sub(area.y);
+
+    // Click on album art → open overlay
+    if x >= art_area.x
+        && x < art_area.x + art_area.width
+        && let Some(details) = app.logic.get_track_display_details()
+        && let Some(cover_art_id) = details.cover_art_id
+    {
+        app.album_art_overlay = Some(AlbumArtOverlay {
+            cover_art_id,
+            title: format!("{} \u{2013} {}", details.album_artist, details.album_name),
+        });
+        return;
+    }
+
+    // Click on track info area
+    if x >= info_area.x && x < info_area.x + info_area.width {
+        if x == info_area.x {
+            // Click on heart column → toggle star
+            if row == 0 {
+                if let Some(track_id) = app.logic.get_playing_track_id() {
+                    let starred = app
+                        .logic
+                        .get_state()
+                        .read()
+                        .unwrap()
+                        .library
+                        .track_map
+                        .get(&track_id)
+                        .map(|t| t.starred)
+                        .unwrap_or(false);
+                    app.logic.set_track_starred(&track_id, !starred);
+                    app.mark_library_dirty();
+                }
+            } else if row == 1
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                let starred = app
+                    .logic
+                    .get_state()
+                    .read()
+                    .unwrap()
+                    .library
+                    .albums
+                    .get(&details.album_id)
+                    .map(|a| a.starred)
+                    .unwrap_or(false);
+                app.logic.set_album_starred(&details.album_id, !starred);
+                app.mark_library_dirty();
+            }
+        } else {
+            // Click on text → navigate to playing track/album
+            if row == 0 {
+                if let Some(track_id) = app.logic.get_playing_track_id() {
+                    app.scroll_to_track = Some(track_id);
+                    app.focused_panel = FocusedPanel::Library;
+                }
+            } else if row == 1
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                app.scroll_to_album(&details.album_id);
+                app.focused_panel = FocusedPanel::Library;
+            }
+        }
+        return;
+    }
+
+    // Click on transport area
+    if x >= transport_area.x && x < transport_area.x + transport_area.width {
+        if row == 0 {
+            // Transport buttons row: "⏮  ▶  ⏹  ⏭" right-aligned in 24 chars
+            let rel_x = x.saturating_sub(transport_area.x);
+            let btn_start = transport_area.width.saturating_sub(10);
+            if rel_x >= btn_start {
+                let btn_x = rel_x - btn_start;
+                match btn_x {
+                    0 => app.logic.previous(),       // ⏮
+                    3 => app.logic.toggle_current(), // ▶/⏸
+                    6 => app.logic.stop_current(),   // ⏹
+                    9 => app.logic.next(),           // ⏭
+                    _ => {}
+                }
+            }
+        } else if row == 1 {
+            // Mode text row: "[mode]" right-aligned → cycle playback mode
+            app.cycle_playback_mode();
+        }
+    }
 }

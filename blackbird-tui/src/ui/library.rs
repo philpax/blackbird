@@ -12,8 +12,9 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{App, LibraryEntry},
+    app::{AlbumArtOverlay, App, LibraryEntry},
     cover_art::QuadrantColors,
+    keys::Action,
 };
 
 use super::{StyleExt, string_to_color};
@@ -545,5 +546,373 @@ fn render_scrollbar_with_alphabet(
         let span = Span::styled(content, style);
         let rect = Rect::new(col_x, area.y + row, 1, 1);
         frame.render_widget(Paragraph::new(Line::from(span)), rect);
+    }
+}
+
+pub fn handle_key(app: &mut App, action: Action) {
+    let entries_len = app.flat_library_len();
+
+    match action {
+        Action::Quit => app.should_quit = true,
+        Action::PlayPause => app.logic.toggle_current(),
+        Action::Next => app.logic.next(),
+        Action::Previous => app.logic.previous(),
+        Action::Stop => app.logic.stop_current(),
+        Action::CyclePlaybackMode => app.cycle_playback_mode(),
+        Action::Search => app.toggle_search(),
+        Action::Lyrics => app.toggle_lyrics(),
+        Action::Logs => app.toggle_logs(),
+        Action::VolumeMode => app.volume_editing = true,
+        Action::GotoPlaying => {
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                app.scroll_to_track = Some(track_id);
+            }
+        }
+        Action::SeekBackward => app.seek_relative(-5),
+        Action::SeekForward => app.seek_relative(5),
+        Action::Star => {
+            if let Some(entry) = app.get_library_entry(app.library_selected_index) {
+                match entry {
+                    LibraryEntry::Track { id, starred, .. } => {
+                        app.logic.set_track_starred(&id, !starred);
+                        app.mark_library_dirty();
+                    }
+                    LibraryEntry::GroupHeader {
+                        album_id, starred, ..
+                    } => {
+                        app.logic.set_album_starred(&album_id, !starred);
+                        app.mark_library_dirty();
+                    }
+                }
+            }
+        }
+        Action::MoveUp => {
+            let mut new_index = app.library_selected_index;
+            while new_index > 0 {
+                new_index -= 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                app.library_selected_index = new_index;
+            }
+        }
+        Action::MoveDown => {
+            let mut new_index = app.library_selected_index;
+            while new_index < entries_len.saturating_sub(1) {
+                new_index += 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+            if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                app.library_selected_index = new_index;
+            }
+        }
+        Action::PageUp => {
+            let target = app.library_selected_index.saturating_sub(20);
+            let mut new_index = target;
+            while new_index < entries_len {
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+                new_index += 1;
+            }
+            if new_index < entries_len {
+                app.library_selected_index = new_index;
+            }
+        }
+        Action::PageDown => {
+            if entries_len > 0 {
+                let target = (app.library_selected_index + 20).min(entries_len - 1);
+                let mut new_index = target;
+                loop {
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                        break;
+                    }
+                    if new_index == 0 {
+                        break;
+                    }
+                    new_index -= 1;
+                }
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    app.library_selected_index = new_index;
+                }
+            }
+        }
+        Action::Home => {
+            for i in 0..entries_len {
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
+                    app.library_selected_index = i;
+                    break;
+                }
+            }
+        }
+        Action::End => {
+            if entries_len > 0 {
+                for i in (0..entries_len).rev() {
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(i) {
+                        app.library_selected_index = i;
+                        break;
+                    }
+                }
+            }
+        }
+        Action::Select => {
+            if let Some(LibraryEntry::Track { id, .. }) =
+                app.get_library_entry(app.library_selected_index)
+            {
+                app.logic.request_play_track(&id);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Handle click in the library area.
+pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
+    let entries = app.get_flat_library().to_vec();
+    let scrollbar_x = library_area.x + library_area.width - 1;
+
+    // Click on scrollbar (rightmost column)
+    if x == scrollbar_x {
+        scroll_to_y(app, &entries, library_area, y);
+        app.scrollbar_dragging = true;
+        return;
+    }
+
+    // Calculate which entry was clicked
+    let inner_y = y.saturating_sub(library_area.y);
+    let scroll_offset = app.library_scroll_offset;
+
+    let mut line = 0usize;
+    let mut clicked_index = None;
+    let mut click_line_in_entry = 0usize;
+
+    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+        let entry_height = match entry {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        };
+
+        if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
+            clicked_index = Some(i);
+            click_line_in_entry = inner_y as usize - line;
+            break;
+        }
+        line += entry_height;
+    }
+
+    let Some(index) = clicked_index else {
+        return;
+    };
+    let Some(entry) = entries.get(index).cloned() else {
+        return;
+    };
+
+    // Check if clicking on the heart (last content character before scrollbar).
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+    let has_scrollbar = total_lines > library_area.height as usize;
+    let list_width = library_area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
+    let heart_col = library_area.x as usize + list_width.saturating_sub(2);
+    let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
+
+    match &entry {
+        LibraryEntry::Track { id, starred, .. } => {
+            if is_heart_click {
+                app.logic.set_track_starred(id, !starred);
+                app.mark_library_dirty();
+            } else {
+                app.library_click_pending = Some((x, y, index));
+                app.library_dragging = false;
+                app.library_drag_last_y = Some(y);
+            }
+        }
+        LibraryEntry::GroupHeader {
+            artist,
+            album,
+            album_id,
+            starred,
+            cover_art_id,
+            ..
+        } => {
+            let art_end_col = library_area.x + 5;
+            if x < art_end_col {
+                if let Some(id) = cover_art_id {
+                    app.album_art_overlay = Some(AlbumArtOverlay {
+                        cover_art_id: id.clone(),
+                        title: format!("{artist} \u{2013} {album}"),
+                    });
+                }
+            } else if is_heart_click && click_line_in_entry == 1 {
+                app.logic.set_album_starred(album_id, !starred);
+                app.mark_library_dirty();
+            } else {
+                app.library_click_pending = Some((x, y, index));
+                app.library_dragging = false;
+                app.library_drag_last_y = Some(y);
+            }
+        }
+    }
+}
+
+/// Handle mouse drag in the library area. Returns `true` if the drag was handled.
+pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> bool {
+    // Scrollbar drag — once started, continues regardless of x position
+    if app.scrollbar_dragging
+        && y >= library_area.y
+        && y < library_area.y + library_area.height
+    {
+        let entries = app.get_flat_library().to_vec();
+        scroll_to_y(app, &entries, library_area, y);
+        app.library_click_pending = None;
+        app.library_dragging = true;
+        return true;
+    }
+
+    let scrollbar_x = library_area.x + library_area.width - 1;
+
+    if x == scrollbar_x
+        && y >= library_area.y
+        && y < library_area.y + library_area.height
+    {
+        let entries = app.get_flat_library().to_vec();
+        scroll_to_y(app, &entries, library_area, y);
+        app.library_click_pending = None;
+        app.library_dragging = true;
+        app.scrollbar_dragging = true;
+        return true;
+    }
+
+    // Content drag → pan library
+    if app.library_click_pending.is_some() || app.library_dragging {
+        app.library_click_pending = None;
+        app.library_dragging = true;
+
+        if let Some(last_y) = app.library_drag_last_y {
+            let delta = y as i32 - last_y as i32;
+            if delta != 0 {
+                let entries_len = app.flat_library_len();
+                let steps = delta.unsigned_abs() as usize;
+                for _ in 0..steps {
+                    let mut new_index = app.library_selected_index;
+                    if delta > 0 {
+                        while new_index > 0 {
+                            new_index -= 1;
+                            if let Some(LibraryEntry::Track { .. }) =
+                                app.get_library_entry(new_index)
+                            {
+                                break;
+                            }
+                        }
+                    } else {
+                        while new_index < entries_len.saturating_sub(1) {
+                            new_index += 1;
+                            if let Some(LibraryEntry::Track { .. }) =
+                                app.get_library_entry(new_index)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(LibraryEntry::Track { .. }) =
+                        app.get_library_entry(new_index)
+                    {
+                        app.library_selected_index = new_index;
+                    }
+                }
+            }
+        }
+        app.library_drag_last_y = Some(y);
+        return true;
+    }
+
+    false
+}
+
+/// Handle mouse button release in the library — confirm pending click or reset drag state.
+pub fn handle_mouse_up(app: &mut App) {
+    if let Some((_cx, _cy, index)) = app.library_click_pending.take()
+        && !app.library_dragging
+        && let Some(LibraryEntry::Track { id, .. }) = app.get_library_entry(index)
+    {
+        app.library_selected_index = index;
+        app.logic.request_play_track(&id);
+    }
+    app.library_dragging = false;
+    app.library_drag_last_y = None;
+    app.scrollbar_dragging = false;
+}
+
+/// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
+pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
+    let entries_len = app.flat_library_len();
+    for _ in 0..steps {
+        let mut new_index = app.library_selected_index;
+        if direction < 0 {
+            while new_index > 0 {
+                new_index -= 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+        } else {
+            while new_index < entries_len.saturating_sub(1) {
+                new_index += 1;
+                if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+                    break;
+                }
+            }
+        }
+        if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
+            app.library_selected_index = new_index;
+        }
+    }
+}
+
+/// Scroll library to a position based on Y coordinate (for scrollbar dragging).
+pub fn scroll_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, y: u16) {
+    let visible_height = library_area.height as usize;
+    let inner_y = y.saturating_sub(library_area.y);
+    let ratio = inner_y as f32 / visible_height as f32;
+
+    let total_lines: usize = entries
+        .iter()
+        .map(|e| match e {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        })
+        .sum();
+
+    let target_line = ((total_lines as f32) * ratio) as usize;
+
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let entry_height = match entry {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        };
+
+        if current_line + entry_height > target_line {
+            let mut track_index = i;
+            while track_index < entries.len() {
+                if let LibraryEntry::Track { .. } = &entries[track_index] {
+                    break;
+                }
+                track_index += 1;
+            }
+            if track_index < entries.len() {
+                app.library_selected_index = track_index;
+            }
+            return;
+        }
+        current_line += entry_height;
     }
 }

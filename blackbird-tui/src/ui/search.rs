@@ -9,6 +9,7 @@ use ratatui::{
 
 use super::{StyleExt, string_to_color};
 use crate::app::App;
+use crate::keys::Action;
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
@@ -115,4 +116,41 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     list_state.select(Some(app.search_selected_index));
 
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
+}
+
+pub fn handle_key(app: &mut App, action: Action) {
+    match action {
+        Action::Back => app.toggle_search(),
+        Action::Select => {
+            if let Some(track_id) = app.search_results.get(app.search_selected_index) {
+                app.logic.request_play_track(track_id);
+                app.toggle_search();
+            }
+        }
+        Action::MoveUp => {
+            if app.search_selected_index > 0 {
+                app.search_selected_index -= 1;
+            }
+        }
+        Action::MoveDown => {
+            if !app.search_results.is_empty()
+                && app.search_selected_index < app.search_results.len() - 1
+            {
+                app.search_selected_index += 1;
+            }
+        }
+        Action::Backspace => {
+            app.search_query.pop();
+            app.update_search();
+        }
+        Action::ClearLine => {
+            app.search_query.clear();
+            app.update_search();
+        }
+        Action::Char(c) => {
+            app.search_query.push(c);
+            app.update_search();
+        }
+        _ => {}
+    }
 }

@@ -1,9 +1,9 @@
 pub mod album_art_overlay;
-mod library;
-mod logs;
-mod lyrics;
-mod now_playing;
-mod search;
+pub(crate) mod library;
+pub(crate) mod logs;
+pub(crate) mod lyrics;
+pub(crate) mod now_playing;
+pub(crate) mod search;
 
 use blackbird_client_shared::style as shared_style;
 use ratatui::{
@@ -13,6 +13,8 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph},
 };
+
+use std::time::Duration;
 
 use crate::{
     app::{App, FocusedPanel},
@@ -235,6 +237,39 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(format!(" {vol_pct}"), Style::default().fg(vol_active_color)),
     ]);
     frame.render_widget(Paragraph::new(vol_line), vol_area);
+}
+
+/// Handle click on scrub bar or volume slider area.
+pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
+    // Recompute the scrub bar layout matching draw_scrub_bar.
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Min(20),
+            Constraint::Length(VOLUME_SLIDER_WIDTH),
+        ])
+        .split(scrub_area);
+
+    let scrub_bar = chunks[0];
+    let vol_area = chunks[1];
+
+    if x >= vol_area.x && x < vol_area.x + vol_area.width {
+        // Click on volume slider: "♪ ████░░░░ nnn%"
+        // The slider bar starts at offset 2 ("♪ ") and ends 5 before the end (" nnn%")
+        let bar_start = vol_area.x + 2;
+        let bar_width = vol_area.width.saturating_sub(7);
+        if bar_width > 1 && x >= bar_start && x < bar_start + bar_width {
+            let ratio = (x - bar_start) as f32 / (bar_width - 1) as f32;
+            app.logic.set_volume(ratio.clamp(0.0, 1.0));
+        }
+    } else if x >= scrub_bar.x && x < scrub_bar.x + scrub_bar.width {
+        // Click on scrub bar → seek
+        let ratio = (x - scrub_bar.x) as f32 / scrub_bar.width as f32;
+        if let Some(details) = app.logic.get_track_display_details() {
+            let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
+            app.logic.seek_current(seek_pos);
+        }
+    }
 }
 
 fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {

@@ -7,6 +7,7 @@ use ratatui::{
 };
 
 use crate::app::App;
+use crate::keys::Action;
 
 use super::StyleExt;
 
@@ -98,4 +99,38 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     state.select(Some(offset));
 
     frame.render_stateful_widget(list, inner, &mut state);
+}
+
+pub fn handle_key(app: &mut App, action: Action) {
+    let log_len = app.log_buffer.len();
+
+    match action {
+        Action::Back => app.toggle_logs(),
+        Action::Quit => app.should_quit = true,
+        Action::MoveUp => {
+            app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(1);
+        }
+        Action::MoveDown => {
+            if log_len > 0 {
+                app.logs_scroll_offset = (app.logs_scroll_offset + 1).min(log_len - 1);
+            }
+        }
+        Action::PageUp => {
+            app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(20);
+        }
+        Action::PageDown => {
+            if log_len > 0 {
+                app.logs_scroll_offset = (app.logs_scroll_offset + 20).min(log_len - 1);
+            }
+        }
+        Action::Home => {
+            app.logs_scroll_offset = 0;
+        }
+        Action::End => {
+            if log_len > 0 {
+                app.logs_scroll_offset = log_len - 1;
+            }
+        }
+        _ => {}
+    }
 }
