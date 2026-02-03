@@ -48,6 +48,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         app.logic.get_playing_position(),
     );
 
+    let selected_index = app.lyrics_selected_index;
+    let track_name_hovered_color = style.track_name_hovered_color();
+
     // Pre-compute style colors to avoid borrow conflicts in closure.
     let text_color = style.text_color();
     let track_duration_color = style.track_duration_color();
@@ -60,25 +63,40 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .map(|(idx, line)| {
             let is_current = lyrics.synced && idx == current_line_idx;
             let is_past = lyrics.synced && idx < current_line_idx;
+            let is_selected = selected_index == Some(idx);
 
-            let line_color = if is_current {
+            let line_color = if is_selected {
+                track_name_hovered_color
+            } else if is_current {
                 text_color
             } else if is_past {
-                // Dimmed past lyrics
                 Color::Rgb(128, 128, 128)
             } else {
-                // Slightly dimmed future lyrics
                 Color::Rgb(180, 180, 180)
             };
 
             let mut spans = Vec::new();
+
+            // Selection indicator
+            if is_selected {
+                spans.push(Span::styled(
+                    "> ",
+                    Style::default()
+                        .fg(track_name_hovered_color)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                spans.push(Span::raw("  "));
+            }
 
             if let Some(start_ms) = line.start
                 && !line.value.trim().is_empty()
             {
                 let timestamp_secs = (start_ms / 1000) as u32;
                 let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
-                let ts_color = if is_current {
+                let ts_color = if is_selected {
+                    track_name_hovered_color
+                } else if is_current {
                     track_name_playing_color
                 } else {
                     track_duration_color
@@ -89,8 +107,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 ));
             }
 
-            let text_style = if is_current {
-                Style::default().fg(line_color).add_modifier(Modifier::BOLD)
+            let text_style = if is_selected || is_current {
+                Style::default()
+                    .fg(line_color)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(line_color)
             };
@@ -103,16 +123,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items);
 
-    // Auto-scroll to current line for synced lyrics
     let mut list_state = ListState::default();
     if lyrics.synced {
-        list_state.select(Some(current_line_idx));
-        // Offset so the current line is roughly centered
+        // If the user has a keyboard selection, center on that; otherwise follow playback.
+        let focus_line = selected_index.unwrap_or(current_line_idx);
+        list_state.select(Some(focus_line));
         let visible_height = inner.height as usize;
-        let offset = current_line_idx.saturating_sub(visible_height / 2);
+        let offset = focus_line.saturating_sub(visible_height / 2);
         *list_state.offset_mut() = offset;
     } else {
-        list_state.select(None);
+        list_state.select(selected_index);
         *list_state.offset_mut() = app.lyrics_scroll_offset;
     }
 

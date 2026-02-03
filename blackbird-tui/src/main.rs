@@ -230,9 +230,12 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 && y < library_area.y + library_area.height
                 && x >= library_area.x
                 && x < library_area.x + library_area.width
-                && app.focused_panel == FocusedPanel::Library
             {
-                handle_library_click(app, library_area, x, y);
+                if app.focused_panel == FocusedPanel::Library {
+                    handle_library_click(app, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Lyrics {
+                    handle_lyrics_click(app, library_area, x, y);
+                }
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -347,7 +350,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     }
                 }
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(6);
+                lyrics_move_selection(app, -6);
             } else if app.focused_panel == FocusedPanel::Logs {
                 app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(6);
             }
@@ -369,7 +372,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     }
                 }
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                app.lyrics_scroll_offset += 6;
+                lyrics_move_selection(app, 6);
             } else if app.focused_panel == FocusedPanel::Logs {
                 let log_len = app.log_buffer.len();
                 if log_len > 0 {
@@ -518,6 +521,45 @@ fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
             let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
             app.logic.seek_current(seek_pos);
         }
+    }
+}
+
+/// Handle click in the lyrics area — seek to the clicked line.
+fn handle_lyrics_click(app: &mut App, area: Rect, _x: u16, y: u16) {
+    let Some(lyrics) = &app.lyrics_data else {
+        return;
+    };
+    if lyrics.line.is_empty() {
+        return;
+    }
+
+    // The lyrics area has a border; the inner area starts 1 row below.
+    let inner_y = area.y + 1;
+    let inner_height = area.height.saturating_sub(2); // top + bottom border
+    if y < inner_y || y >= inner_y + inner_height {
+        return;
+    }
+
+    let row_in_list = (y - inner_y) as usize;
+
+    // Determine the scroll offset that was used during rendering.
+    let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
+        lyrics,
+        app.logic.get_playing_position(),
+    );
+    let scroll_offset = if lyrics.synced {
+        if let Some(selected) = app.lyrics_selected_index {
+            selected.saturating_sub(inner_height as usize / 2)
+        } else {
+            current_line_idx.saturating_sub(inner_height as usize / 2)
+        }
+    } else {
+        app.lyrics_scroll_offset
+    };
+
+    let clicked_index = scroll_offset + row_in_list;
+    if clicked_index < lyrics.line.len() {
+        lyrics_seek_to_line(app, clicked_index);
     }
 }
 
@@ -885,21 +927,86 @@ fn handle_lyrics_action(app: &mut App, action: Action) {
         Action::Back => app.toggle_lyrics(),
         Action::Quit => app.should_quit = true,
         Action::MoveUp => {
-            app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(1);
+            lyrics_move_selection(app, -1);
         }
         Action::MoveDown => {
-            app.lyrics_scroll_offset += 1;
+            lyrics_move_selection(app, 1);
         }
         Action::PageUp => {
-            app.lyrics_scroll_offset = app.lyrics_scroll_offset.saturating_sub(20);
+            lyrics_move_selection(app, -20);
         }
         Action::PageDown => {
-            app.lyrics_scroll_offset += 20;
+            lyrics_move_selection(app, 20);
         }
+        Action::Select => {
+            lyrics_seek_to_selected(app);
+        }
+        Action::SeekForward => app.seek_relative(5),
+        Action::SeekBackward => app.seek_relative(-5),
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
         _ => {}
+    }
+}
+
+/// Move the lyrics selection cursor by `delta` lines.
+/// If no selection exists, starts from the current playing line.
+fn lyrics_move_selection(app: &mut App, delta: i32) {
+    let line_count = app
+        .lyrics_data
+        .as_ref()
+        .map(|l| l.line.len())
+        .unwrap_or(0);
+    if line_count == 0 {
+        return;
+    }
+
+    let current = app.lyrics_selected_index.unwrap_or_else(|| {
+        app.lyrics_data
+            .as_ref()
+            .map(|lyrics| {
+                blackbird_client_shared::lyrics::find_current_lyrics_line(
+                    lyrics,
+                    app.logic.get_playing_position(),
+                )
+            })
+            .unwrap_or(0)
+    });
+
+    let new_index = (current as i32 + delta).clamp(0, line_count as i32 - 1) as usize;
+    app.lyrics_selected_index = Some(new_index);
+}
+
+/// Seek playback to the timestamp of the currently selected lyrics line.
+fn lyrics_seek_to_selected(app: &mut App) {
+    let Some(selected) = app.lyrics_selected_index else {
+        return;
+    };
+    let Some(lyrics) = &app.lyrics_data else {
+        return;
+    };
+    if let Some(line) = lyrics.line.get(selected)
+        && let Some(start_ms) = line.start
+    {
+        app.logic
+            .seek_current(std::time::Duration::from_millis(start_ms as u64));
+        // Clear selection so the view returns to auto-follow.
+        app.lyrics_selected_index = None;
+    }
+}
+
+/// Seek playback to the timestamp of a lyrics line at the given index.
+fn lyrics_seek_to_line(app: &mut App, line_index: usize) {
+    let Some(lyrics) = &app.lyrics_data else {
+        return;
+    };
+    if let Some(line) = lyrics.line.get(line_index)
+        && let Some(start_ms) = line.start
+    {
+        app.logic
+            .seek_current(std::time::Duration::from_millis(start_ms as u64));
+        app.lyrics_selected_index = None;
     }
 }
 

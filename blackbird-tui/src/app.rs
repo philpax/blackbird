@@ -79,6 +79,8 @@ pub struct App {
     pub lyrics_data: Option<bc::bs::StructuredLyrics>,
     pub lyrics_loading: bool,
     pub lyrics_scroll_offset: usize,
+    /// Keyboard-selected line index for scrubbing. `None` = auto-follow playback.
+    pub lyrics_selected_index: Option<usize>,
 
     // Volume adjustment mode
     pub volume_editing: bool,
@@ -140,6 +142,7 @@ impl App {
             lyrics_data: None,
             lyrics_loading: false,
             lyrics_scroll_offset: 0,
+            lyrics_selected_index: None,
 
             volume_editing: false,
 
@@ -294,6 +297,7 @@ impl App {
         } else {
             self.focused_panel = FocusedPanel::Lyrics;
             self.lyrics_scroll_offset = 0;
+            self.lyrics_selected_index = None;
             // Request lyrics for the currently playing track.
             if let Some(track_id) = self.logic.get_playing_track_id() {
                 self.lyrics_track_id = Some(track_id.clone());
