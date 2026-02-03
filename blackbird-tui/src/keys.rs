@@ -140,8 +140,7 @@ pub fn search_action(key: &KeyEvent) -> Option<Action> {
 /// Resolve a key event into an action in lyrics context.
 pub fn lyrics_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
-        KEY_BACK | KEY_LYRICS => Some(Action::Back),
-        KEY_QUIT => Some(Action::Quit),
+        KEY_BACK | KEY_LYRICS | KEY_QUIT => Some(Action::Back),
         KEY_UP => Some(Action::MoveUp),
         KEY_DOWN => Some(Action::MoveDown),
         KEY_PAGE_UP => Some(Action::PageUp),
@@ -169,8 +168,7 @@ pub fn volume_action(key: &KeyEvent) -> Option<Action> {
 /// Resolve a key event into an action in logs context.
 pub fn logs_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
-        KEY_BACK | KEY_LOGS => Some(Action::Back),
-        KEY_QUIT => Some(Action::Quit),
+        KEY_BACK | KEY_LOGS | KEY_QUIT => Some(Action::Back),
         KEY_UP => Some(Action::MoveUp),
         KEY_DOWN => Some(Action::MoveDown),
         KEY_PAGE_UP => Some(Action::PageUp),
@@ -221,4 +219,4 @@ pub const LYRICS_HELP: &[Action] = &[
 ];
 
 /// Ordered list of actions to show in the logs help bar.
-pub const LOGS_HELP: &[Action] = &[Action::Back, Action::MoveUp, Action::MoveDown, Action::Quit];
+pub const LOGS_HELP: &[Action] = &[Action::Back, Action::MoveUp, Action::MoveDown];
