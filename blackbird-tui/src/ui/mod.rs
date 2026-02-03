@@ -1,4 +1,5 @@
 pub mod album_art_overlay;
+pub(crate) mod layout;
 pub(crate) mod library;
 pub(crate) mod logs;
 pub(crate) mod lyrics;
@@ -8,7 +9,7 @@ pub(crate) mod search;
 use blackbird_client_shared::style as shared_style;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
     widgets::{Block, Gauge, Paragraph},
@@ -132,27 +133,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     frame.render_widget(bg, size);
 
     // Main layout matches egui: [NowPlaying] | [Scrub+Volume] | [Library/Search/Lyrics] | [Help].
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2), // now playing + controls (2 lines, no margin)
-            Constraint::Length(1), // scrub bar + volume
-            Constraint::Min(3),    // library / search / lyrics
-            Constraint::Length(1), // help bar
-        ])
-        .split(size);
+    let main = layout::split_main(size);
 
-    now_playing::draw(frame, app, main_chunks[0]);
-    draw_scrub_bar(frame, app, main_chunks[1]);
+    now_playing::draw(frame, app, main.now_playing);
+    draw_scrub_bar(frame, app, main.scrub_bar);
 
     match app.focused_panel {
-        FocusedPanel::Library => library::draw(frame, app, main_chunks[2]),
-        FocusedPanel::Search => search::draw(frame, app, main_chunks[2]),
-        FocusedPanel::Lyrics => lyrics::draw(frame, app, main_chunks[2]),
-        FocusedPanel::Logs => logs::draw(frame, app, main_chunks[2]),
+        FocusedPanel::Library => library::draw(frame, app, main.content),
+        FocusedPanel::Search => search::draw(frame, app, main.content),
+        FocusedPanel::Lyrics => lyrics::draw(frame, app, main.content),
+        FocusedPanel::Logs => logs::draw(frame, app, main.content),
     }
 
-    draw_help_bar(frame, app, main_chunks[3]);
+    draw_help_bar(frame, app, main.help_bar);
 
     // Draw album art overlay on top of everything if active.
     if app.album_art_overlay.is_some() {
@@ -165,9 +158,6 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 pub fn string_to_color(s: &str) -> Color {
     hsv_to_color(shared_style::string_to_hsv(s))
 }
-
-/// Width of the volume slider area (speaker icon + bar + percentage).
-pub const VOLUME_SLIDER_WIDTH: u16 = 16;
 
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
@@ -196,10 +186,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     // Split area: scrub bar | volume slider.
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Min(20), Constraint::Length(VOLUME_SLIDER_WIDTH)])
-        .split(area);
+    let sv = layout::split_scrub_volume(area);
 
     let gauge = Gauge::default()
         .gauge_style(
@@ -209,11 +196,11 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         )
         .ratio(ratio as f64)
         .label(label);
-    frame.render_widget(gauge, chunks[0]);
+    frame.render_widget(gauge, sv.scrub_bar);
 
     // Draw volume as a visual slider: "♪ ████░░░░ nn%"
-    let vol_area = chunks[1];
-    let bar_width = (vol_area.width as usize).saturating_sub(7); // "♪ " (2) + " nnn%" (5)
+    let vol_area = sv.volume;
+    let bar_width = (vol_area.width as usize).saturating_sub(layout::VOLUME_BAR_PADDING as usize);
     let filled = ((volume * bar_width as f32).round() as usize).min(bar_width);
     let empty = bar_width.saturating_sub(filled);
 
@@ -242,29 +229,20 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 /// Handle click on scrub bar or volume slider area.
 pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
     // Recompute the scrub bar layout matching draw_scrub_bar.
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Min(20),
-            Constraint::Length(VOLUME_SLIDER_WIDTH),
-        ])
-        .split(scrub_area);
+    let sv = layout::split_scrub_volume(scrub_area);
 
-    let scrub_bar = chunks[0];
-    let vol_area = chunks[1];
-
-    if x >= vol_area.x && x < vol_area.x + vol_area.width {
+    if x >= sv.volume.x && x < sv.volume.x + sv.volume.width {
         // Click on volume slider: "♪ ████░░░░ nnn%"
-        // The slider bar starts at offset 2 ("♪ ") and ends 5 before the end (" nnn%")
-        let bar_start = vol_area.x + 2;
-        let bar_width = vol_area.width.saturating_sub(7);
+        // The slider bar starts at offset VOLUME_ICON_WIDTH ("♪ ") and ends VOLUME_LABEL_WIDTH before the end (" nnn%")
+        let bar_start = sv.volume.x + layout::VOLUME_ICON_WIDTH;
+        let bar_width = sv.volume.width.saturating_sub(layout::VOLUME_BAR_PADDING);
         if bar_width > 1 && x >= bar_start && x < bar_start + bar_width {
             let ratio = (x - bar_start) as f32 / (bar_width - 1) as f32;
             app.logic.set_volume(ratio.clamp(0.0, 1.0));
         }
-    } else if x >= scrub_bar.x && x < scrub_bar.x + scrub_bar.width {
+    } else if x >= sv.scrub_bar.x && x < sv.scrub_bar.x + sv.scrub_bar.width {
         // Click on scrub bar → seek
-        let ratio = (x - scrub_bar.x) as f32 / scrub_bar.width as f32;
+        let ratio = (x - sv.scrub_bar.x) as f32 / sv.scrub_bar.width as f32;
         if let Some(details) = app.logic.get_track_display_details() {
             let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
             app.logic.seek_current(seek_pos);

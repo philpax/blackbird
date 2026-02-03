@@ -51,6 +51,19 @@ pub enum LibraryEntry {
     },
 }
 
+impl LibraryEntry {
+    pub fn height(&self) -> usize {
+        match self {
+            LibraryEntry::GroupHeader { .. } => 2,
+            LibraryEntry::Track { .. } => 1,
+        }
+    }
+}
+
+pub fn total_entry_lines(entries: &[LibraryEntry]) -> usize {
+    entries.iter().map(LibraryEntry::height).sum()
+}
+
 pub struct App {
     pub logic: bc::Logic,
     pub config: Config,

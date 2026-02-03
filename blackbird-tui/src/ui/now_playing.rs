@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -25,17 +25,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     };
 
     // Layout: [album art] [track info] [controls]
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(6), // album art (4 cols x 2 rows of half-blocks + 1 margin + 1 space)
-            Constraint::Min(20),   // track info
-            Constraint::Length(24), // transport controls
-        ])
-        .split(area);
+    let np = super::layout::split_now_playing(area);
 
     // -- Album art as 4 coloured quadrants --
-    draw_album_art(frame, app, chunks[0], tdd.cover_art_id.as_ref());
+    draw_album_art(frame, app, np.album_art, tdd.cover_art_id.as_ref());
 
     // -- Track info --
     let album_starred = app
@@ -50,7 +43,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or(false);
 
     // Determine heart hover state based on mouse position.
-    let info_area = chunks[1];
+    let info_area = np.track_info;
     let mouse_pos = app.mouse_position;
     let track_heart_hovered = mouse_pos.is_some_and(|(mx, my)| mx == info_area.x && my == area.y);
     let album_heart_hovered =
@@ -116,10 +109,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let info_lines = vec![Line::from(track_spans), Line::from(album_spans)];
 
     let info = Paragraph::new(info_lines);
-    frame.render_widget(info, chunks[1]);
+    frame.render_widget(info, np.track_info);
 
     // -- Transport controls --
-    draw_transport(frame, app, chunks[2]);
+    draw_transport(frame, app, np.transport);
 }
 
 fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
@@ -174,9 +167,9 @@ fn draw_album_art(
     // Each terminal character shows 2 vertical colors: fg = top row, bg = bottom row.
     // This gives us 4 columns × 4 rows in 2 terminal rows, 4 characters wide.
 
-    let art_width = 4u16; // 4 columns of color
-    let art_height = 2u16; // 2 terminal rows (each showing 2 color rows via half-block)
-    let left_x = area.x + 1; // +1 for left margin
+    let art_width = super::layout::ART_COLS;
+    let art_height = super::layout::ART_TERM_ROWS;
+    let left_x = area.x + super::layout::ART_LEFT_MARGIN;
 
     // Center vertically
     let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
@@ -253,18 +246,11 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
 /// Handle click in the now-playing area (track info, album info, transport, playback mode).
 pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
     // Recompute the now-playing horizontal layout.
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Length(6),  // album art
-            Constraint::Min(20),    // track info
-            Constraint::Length(24), // transport controls
-        ])
-        .split(area);
+    let np = super::layout::split_now_playing(area);
 
-    let art_area = chunks[0];
-    let info_area = chunks[1];
-    let transport_area = chunks[2];
+    let art_area = np.album_art;
+    let info_area = np.track_info;
+    let transport_area = np.transport;
 
     let row = y.saturating_sub(area.y);
 
@@ -338,14 +324,16 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
         if row == 0 {
             // Transport buttons row: "⏮  ▶  ⏹  ⏭" right-aligned in 24 chars
             let rel_x = x.saturating_sub(transport_area.x);
-            let btn_start = transport_area.width.saturating_sub(10);
+            let btn_start = transport_area
+                .width
+                .saturating_sub(super::layout::TRANSPORT_BUTTON_GROUP_WIDTH);
             if rel_x >= btn_start {
                 let btn_x = rel_x - btn_start;
                 match btn_x {
-                    0 => app.logic.previous(),       // ⏮
-                    3 => app.logic.toggle_current(), // ▶/⏸
-                    6 => app.logic.stop_current(),   // ⏹
-                    9 => app.logic.next(),           // ⏭
+                    super::layout::TRANSPORT_BTN_PREV => app.logic.previous(),
+                    super::layout::TRANSPORT_BTN_PLAY => app.logic.toggle_current(),
+                    super::layout::TRANSPORT_BTN_STOP => app.logic.stop_current(),
+                    super::layout::TRANSPORT_BTN_NEXT => app.logic.next(),
                     _ => {}
                 }
             }

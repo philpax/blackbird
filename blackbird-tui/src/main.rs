@@ -22,7 +22,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
@@ -184,8 +184,8 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
     if app.volume_editing {
         if let Some(action) = keys::volume_action(key) {
             match action {
-                Action::VolumeUp => app.adjust_volume(0.05),
-                Action::VolumeDown => app.adjust_volume(-0.05),
+                Action::VolumeUp => app.adjust_volume(ui::layout::VOLUME_STEP),
+                Action::VolumeDown => app.adjust_volume(-ui::layout::VOLUME_STEP),
                 Action::Back => app.volume_editing = false,
                 _ => {}
             }
@@ -219,19 +219,11 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
 
 fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     // Compute layout areas matching ui::draw
-    let main_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(2), // now playing + controls (2 lines, no margin)
-            Constraint::Length(1), // scrub bar + volume
-            Constraint::Min(3),    // library / search / lyrics
-            Constraint::Length(1), // help bar
-        ])
-        .split(size);
+    let main = ui::layout::split_main(size);
 
-    let now_playing_area = main_chunks[0];
-    let scrub_area = main_chunks[1];
-    let library_area = main_chunks[2];
+    let now_playing_area = main.now_playing;
+    let scrub_area = main.scrub_bar;
+    let library_area = main.content;
 
     let x = mouse.column;
     let y = mouse.row;
@@ -306,22 +298,25 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
         }
         MouseEventKind::ScrollUp => {
             if app.focused_panel == FocusedPanel::Library {
-                ui::library::handle_scroll(app, -1, 6);
+                ui::library::handle_scroll(app, -1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(app, -6);
+                ui::lyrics::move_selection(app, -(ui::layout::SCROLL_WHEEL_STEPS as i32));
             } else if app.focused_panel == FocusedPanel::Logs {
-                app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(6);
+                app.logs_scroll_offset = app
+                    .logs_scroll_offset
+                    .saturating_sub(ui::layout::SCROLL_WHEEL_STEPS);
             }
         }
         MouseEventKind::ScrollDown => {
             if app.focused_panel == FocusedPanel::Library {
-                ui::library::handle_scroll(app, 1, 6);
+                ui::library::handle_scroll(app, 1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(app, 6);
+                ui::lyrics::move_selection(app, ui::layout::SCROLL_WHEEL_STEPS as i32);
             } else if app.focused_panel == FocusedPanel::Logs {
                 let log_len = app.log_buffer.len();
                 if log_len > 0 {
-                    app.logs_scroll_offset = (app.logs_scroll_offset + 6).min(log_len - 1);
+                    app.logs_scroll_offset =
+                        (app.logs_scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
                 }
             }
         }
@@ -379,6 +374,6 @@ fn create_hidden_media_window() -> Option<*mut std::ffi::c_void> {
         )
         .ok()?;
 
-        Some(hwnd.0 as *mut std::ffi::c_void)
+        Some(hwnd.0)
     }
 }

@@ -56,8 +56,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             };
 
             // Truncate target if too long.
-            let target = if entry.target.len() > 24 {
-                format!("...{}", &entry.target[entry.target.len() - 21..])
+            let target = if entry.target.len() > super::layout::LOG_TARGET_WIDTH {
+                format!(
+                    "...{}",
+                    &entry.target[entry.target.len() - super::layout::LOG_TARGET_SUFFIX_LEN..]
+                )
             } else {
                 entry.target.clone()
             };
@@ -71,7 +74,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    format!("{target:24}"),
+                    format!("{target:width$}", width = super::layout::LOG_TARGET_WIDTH),
                     Style::default().fg(track_duration_color),
                 ),
                 Span::raw(" "),
@@ -116,11 +119,14 @@ pub fn handle_key(app: &mut App, action: Action) {
             }
         }
         Action::PageUp => {
-            app.logs_scroll_offset = app.logs_scroll_offset.saturating_sub(20);
+            app.logs_scroll_offset = app
+                .logs_scroll_offset
+                .saturating_sub(super::layout::PAGE_SCROLL_SIZE);
         }
         Action::PageDown => {
             if log_len > 0 {
-                app.logs_scroll_offset = (app.logs_scroll_offset + 20).min(log_len - 1);
+                app.logs_scroll_offset =
+                    (app.logs_scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
             }
         }
         Action::Home => {

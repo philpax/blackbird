@@ -12,7 +12,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::{AlbumArtOverlay, App, LibraryEntry},
+    app::{AlbumArtOverlay, App, LibraryEntry, total_entry_lines},
     cover_art::QuadrantColors,
     keys::Action,
 };
@@ -87,17 +87,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Calculate total content height in lines to determine if scrollbar is needed.
-    let total_lines: usize = entries
-        .iter()
-        .map(|e| match e {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        })
-        .sum();
+    let total_lines = total_entry_lines(&entries);
 
-    let has_scrollbar = total_lines > visible_height;
-    // Subtract 1 for alphabet column (to the right of scrollbar) + 1 for scrollbar if shown
-    let list_width = inner.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
+    let geo = super::layout::library_geometry(inner, total_lines);
+    let has_scrollbar = geo.has_scrollbar;
+    let list_width = geo.list_width;
 
     let items: Vec<ListItem> = entries
         .iter()
@@ -165,7 +159,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
                     // Calculate padding for right-alignment using unicode width
-                    let left_content_width = 1 + 4 + 1 + album.width() + year_str.width(); // margin + art + space + album + year
+                    let left_content_width = super::layout::ART_LEFT_MARGIN as usize
+                        + super::layout::ART_COLS as usize
+                        + 1
+                        + album.width()
+                        + year_str.width(); // margin + art + space + album + year
                     let right_content = format!(" {dur_str} ");
                     let right_width = right_content.width() + 1; // duration + heart
                     let padding_needed = list_width
@@ -252,14 +250,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     // Build left side: indent + track number + play icon + title + playcount
                     let track_num_formatted = format!("{:>5} ", track_str);
                     let mut left_spans = vec![
-                        Span::raw("     "),
+                        Span::raw(" ".repeat(super::layout::TRACK_INDENT)),
                         Span::styled(
                             track_num_formatted.clone(),
                             Style::default().fg(track_number_color),
                         ),
                     ];
 
-                    let mut left_width = 5 + track_num_formatted.width(); // indent + track_str formatted
+                    let mut left_width = super::layout::TRACK_INDENT + track_num_formatted.width(); // indent + track_str formatted
 
                     if is_playing {
                         left_spans.push(Span::styled(
@@ -338,14 +336,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         if i >= selected_index {
             break;
         }
-        match entry {
-            LibraryEntry::GroupHeader { .. } => line_offset += 2,
-            LibraryEntry::Track { .. } => line_offset += 1,
-        }
+        line_offset += entry.height();
     }
 
     // Center the selected item in the visible area.
-    let half_height = (visible_height / 2).saturating_sub(1);
+    let half_height = (geo.visible_height / 2).saturating_sub(1);
     let centered_offset = line_offset.saturating_sub(half_height);
 
     // Convert line offset back to item offset for ListState.
@@ -357,10 +352,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             item_offset = i;
             break;
         }
-        match entry {
-            LibraryEntry::GroupHeader { .. } => current_line += 2,
-            LibraryEntry::Track { .. } => current_line += 1,
-        }
+        current_line += entry.height();
         item_offset = i + 1;
     }
 
@@ -376,8 +368,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         frame,
         &entries,
         inner,
-        visible_height,
-        total_lines,
+        geo.visible_height,
+        geo.total_lines,
         centered_offset,
         has_scrollbar,
         text_color,
@@ -414,17 +406,9 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
     let entries = app.get_flat_library();
 
     // Compute list_width and heart column
-    let total_lines: usize = entries
-        .iter()
-        .map(|e| match e {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        })
-        .sum();
-    let visible_height = area.height as usize;
-    let has_scrollbar = total_lines > visible_height;
-    let list_width = area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
-    let heart_col = area.x as usize + list_width.saturating_sub(2);
+    let total_lines = total_entry_lines(entries);
+    let geo = super::layout::library_geometry(area, total_lines);
+    let heart_col = geo.heart_col;
 
     // Check if mouse is on the heart column
     if (mx as usize) < heart_col || (mx as usize) > heart_col + 1 {
@@ -436,12 +420,9 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
 
     let mut line = 0usize;
     for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
-        let entry_height = match entry {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        };
+        let h = entry.height();
 
-        if inner_y >= line && inner_y < line + entry_height {
+        if inner_y >= line && inner_y < line + h {
             // For group headers, heart is only on line 2 (index 1)
             if let LibraryEntry::GroupHeader { .. } = entry {
                 if inner_y - line == 1 {
@@ -451,7 +432,7 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
             }
             return Some(i);
         }
-        line += entry_height;
+        line += h;
     }
     None
 }
@@ -485,11 +466,11 @@ fn render_scrollbar_with_alphabet(
         match entry {
             LibraryEntry::GroupHeader { artist, .. } => {
                 let first_char = artist.chars().next().unwrap_or('?');
-                groups.push((first_char, 2));
+                groups.push((first_char, entry.height()));
             }
             LibraryEntry::Track { .. } => {
                 if let Some(last) = groups.last_mut() {
-                    last.1 += 1;
+                    last.1 += entry.height();
                 }
             }
         }
@@ -568,8 +549,8 @@ pub fn handle_key(app: &mut App, action: Action) {
                 app.scroll_to_track = Some(track_id);
             }
         }
-        Action::SeekBackward => app.seek_relative(-5),
-        Action::SeekForward => app.seek_relative(5),
+        Action::SeekBackward => app.seek_relative(-super::layout::SEEK_STEP_SECS),
+        Action::SeekForward => app.seek_relative(super::layout::SEEK_STEP_SECS),
         Action::Star => {
             if let Some(entry) = app.get_library_entry(app.library_selected_index) {
                 match entry {
@@ -611,7 +592,9 @@ pub fn handle_key(app: &mut App, action: Action) {
             }
         }
         Action::PageUp => {
-            let target = app.library_selected_index.saturating_sub(20);
+            let target = app
+                .library_selected_index
+                .saturating_sub(super::layout::PAGE_SCROLL_SIZE);
             let mut new_index = target;
             while new_index < entries_len {
                 if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
@@ -625,7 +608,8 @@ pub fn handle_key(app: &mut App, action: Action) {
         }
         Action::PageDown => {
             if entries_len > 0 {
-                let target = (app.library_selected_index + 20).min(entries_len - 1);
+                let target = (app.library_selected_index + super::layout::PAGE_SCROLL_SIZE)
+                    .min(entries_len - 1);
                 let mut new_index = target;
                 loop {
                     if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
@@ -691,17 +675,14 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let mut click_line_in_entry = 0usize;
 
     for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
-        let entry_height = match entry {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        };
+        let h = entry.height();
 
-        if inner_y as usize >= line && (inner_y as usize) < line + entry_height {
+        if inner_y as usize >= line && (inner_y as usize) < line + h {
             clicked_index = Some(i);
             click_line_in_entry = inner_y as usize - line;
             break;
         }
-        line += entry_height;
+        line += h;
     }
 
     let Some(index) = clicked_index else {
@@ -712,16 +693,9 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     };
 
     // Check if clicking on the heart (last content character before scrollbar).
-    let total_lines: usize = entries
-        .iter()
-        .map(|e| match e {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        })
-        .sum();
-    let has_scrollbar = total_lines > library_area.height as usize;
-    let list_width = library_area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
-    let heart_col = library_area.x as usize + list_width.saturating_sub(2);
+    let total_lines = total_entry_lines(&entries);
+    let geo = super::layout::library_geometry(library_area, total_lines);
+    let heart_col = geo.heart_col;
     let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
 
     match &entry {
@@ -743,7 +717,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             cover_art_id,
             ..
         } => {
-            let art_end_col = library_area.x + 5;
+            let art_end_col = library_area.x + super::layout::ART_END_COL;
             if x < art_end_col {
                 if let Some(id) = cover_art_id {
                     app.album_art_overlay = Some(AlbumArtOverlay {
@@ -766,10 +740,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
 /// Handle mouse drag in the library area. Returns `true` if the drag was handled.
 pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> bool {
     // Scrollbar drag — once started, continues regardless of x position
-    if app.scrollbar_dragging
-        && y >= library_area.y
-        && y < library_area.y + library_area.height
-    {
+    if app.scrollbar_dragging && y >= library_area.y && y < library_area.y + library_area.height {
         let entries = app.get_flat_library().to_vec();
         scroll_to_y(app, &entries, library_area, y);
         app.library_click_pending = None;
@@ -779,10 +750,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
 
     let scrollbar_x = library_area.x + library_area.width - 1;
 
-    if x == scrollbar_x
-        && y >= library_area.y
-        && y < library_area.y + library_area.height
-    {
+    if x == scrollbar_x && y >= library_area.y && y < library_area.y + library_area.height {
         let entries = app.get_flat_library().to_vec();
         scroll_to_y(app, &entries, library_area, y);
         app.library_click_pending = None;
@@ -822,9 +790,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
                             }
                         }
                     }
-                    if let Some(LibraryEntry::Track { .. }) =
-                        app.get_library_entry(new_index)
-                    {
+                    if let Some(LibraryEntry::Track { .. }) = app.get_library_entry(new_index) {
                         app.library_selected_index = new_index;
                     }
                 }
@@ -883,24 +849,15 @@ pub fn scroll_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, 
     let inner_y = y.saturating_sub(library_area.y);
     let ratio = inner_y as f32 / visible_height as f32;
 
-    let total_lines: usize = entries
-        .iter()
-        .map(|e| match e {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        })
-        .sum();
+    let total_lines = total_entry_lines(entries);
 
     let target_line = ((total_lines as f32) * ratio) as usize;
 
     let mut current_line = 0usize;
     for (i, entry) in entries.iter().enumerate() {
-        let entry_height = match entry {
-            LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
-        };
+        let h = entry.height();
 
-        if current_line + entry_height > target_line {
+        if current_line + h > target_line {
             let mut track_index = i;
             while track_index < entries.len() {
                 if let LibraryEntry::Track { .. } = &entries[track_index] {
@@ -913,6 +870,6 @@ pub fn scroll_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, 
             }
             return;
         }
-        current_line += entry_height;
+        current_line += h;
     }
 }

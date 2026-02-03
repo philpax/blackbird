@@ -111,9 +111,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             }
 
             let text_style = if is_selected || is_current {
-                Style::default()
-                    .fg(line_color)
-                    .add_modifier(Modifier::BOLD)
+                Style::default().fg(line_color).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(line_color)
             };
@@ -148,11 +146,11 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Quit => app.should_quit = true,
         Action::MoveUp => move_selection(app, -1),
         Action::MoveDown => move_selection(app, 1),
-        Action::PageUp => move_selection(app, -20),
-        Action::PageDown => move_selection(app, 20),
+        Action::PageUp => move_selection(app, -(super::layout::PAGE_SCROLL_SIZE as i32)),
+        Action::PageDown => move_selection(app, super::layout::PAGE_SCROLL_SIZE as i32),
         Action::Select => seek_to_selected(app),
-        Action::SeekForward => app.seek_relative(5),
-        Action::SeekBackward => app.seek_relative(-5),
+        Action::SeekForward => app.seek_relative(super::layout::SEEK_STEP_SECS),
+        Action::SeekBackward => app.seek_relative(-super::layout::SEEK_STEP_SECS),
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
@@ -202,11 +200,7 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, _x: u16, y: u16) {
 /// Move the lyrics selection cursor by `delta` lines.
 /// If no selection exists, starts from the current playing line.
 pub fn move_selection(app: &mut App, delta: i32) {
-    let line_count = app
-        .lyrics_data
-        .as_ref()
-        .map(|l| l.line.len())
-        .unwrap_or(0);
+    let line_count = app.lyrics_data.as_ref().map(|l| l.line.len()).unwrap_or(0);
     if line_count == 0 {
         return;
     }

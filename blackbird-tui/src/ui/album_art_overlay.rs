@@ -23,26 +23,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     let background_color = app.config.style.background_color();
     let text_color = app.config.style.text_color();
 
-    // Overlay dimensions: 90% of window width, with 1-cell border on each side.
-    let overlay_width = ((size.width as f32) * 0.9) as u16;
-    let overlay_width = overlay_width.max(10).min(size.width);
+    let overlay_rect = super::layout::overlay_rect(size);
 
     // Art area inside border: subtract 2 for left/right border.
-    let art_cols = (overlay_width - 2) as usize;
-    // Art is square in "pixels" — each terminal row shows 2 color rows via half-blocks.
-    let art_pixel_rows = art_cols; // square
-    let art_term_rows = art_pixel_rows.div_ceil(2);
-
-    // Total overlay height: border top (1) + art rows + border bottom (1) + title line (1).
-    let overlay_height = (art_term_rows as u16 + 3).min(size.height);
+    let art_cols = (overlay_rect.width - 2) as usize;
     // Recompute actual art rows based on available height.
-    let actual_art_term_rows = (overlay_height - 3) as usize;
+    let actual_art_term_rows =
+        (overlay_rect.height - super::layout::OVERLAY_BORDER_OVERHEAD) as usize;
     let actual_art_pixel_rows = actual_art_term_rows * 2;
-
-    // Center the overlay.
-    let overlay_x = (size.width.saturating_sub(overlay_width)) / 2;
-    let overlay_y = (size.height.saturating_sub(overlay_height)) / 2;
-    let overlay_rect = Rect::new(overlay_x, overlay_y, overlay_width, overlay_height);
 
     // Clear the area behind the overlay.
     frame.render_widget(Clear, overlay_rect);
@@ -57,8 +45,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
 
     // Draw title bar with X button.
     // Title on left, X on right, inside the top border row.
-    let title_y = overlay_y;
-    let title_area = Rect::new(overlay_x + 2, title_y, overlay_width - 4, 1);
+    let title_y = overlay_rect.y;
+    let title_area = Rect::new(
+        overlay_rect.x + 2,
+        title_y,
+        overlay_rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET,
+        1,
+    );
     let title_line = Line::from(vec![Span::styled(
         &title_text,
         Style::default().fg(text_color).add_modifier(Modifier::BOLD),
@@ -66,7 +59,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     frame.render_widget(Paragraph::new(title_line), title_area);
 
     // X button at top-right corner of border.
-    let x_button_area = Rect::new(overlay_x + overlay_width - 4, title_y, 3, 1);
+    let x_button_area = Rect::new(
+        overlay_rect.x + overlay_rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET,
+        title_y,
+        3,
+        1,
+    );
     let x_button = Line::from(vec![Span::styled(
         "[X]",
         Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -79,8 +77,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
             .get_art_grid(Some(&cover_art_id), art_cols, actual_art_pixel_rows);
 
     // Render art using half-block characters inside the border.
-    let art_x = overlay_x + 1; // inside left border
-    let art_y = overlay_y + 1; // below top border
+    let art_x = overlay_rect.x + 1; // inside left border
+    let art_y = overlay_rect.y + 1; // below top border
 
     for term_row in 0..actual_art_term_rows {
         let color_row_top = term_row * 2;
@@ -110,9 +108,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     if loading {
         let label = " Loading\u{2026} ";
         let label_len = label.len() as u16;
-        if label_len < overlay_width - 2 {
-            let label_x = overlay_x + (overlay_width - label_len) / 2;
-            let label_y = overlay_y + overlay_height / 2;
+        if label_len < overlay_rect.width - 2 {
+            let label_x = overlay_rect.x + (overlay_rect.width - label_len) / 2;
+            let label_y = overlay_rect.y + overlay_rect.height / 2;
             let label_rect = Rect::new(label_x, label_y, label_len, 1);
             let label_widget = Paragraph::new(Line::from(Span::styled(
                 label,
@@ -129,29 +127,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
 /// Returns the overlay rect for hit testing, or None if no overlay is shown.
 pub fn overlay_rect(app: &App, size: Rect) -> Option<Rect> {
     app.album_art_overlay.as_ref()?;
-
-    let overlay_width = ((size.width as f32) * 0.9) as u16;
-    let overlay_width = overlay_width.max(10).min(size.width);
-    let art_cols = (overlay_width - 2) as usize;
-    let art_pixel_rows = art_cols;
-    let art_term_rows = art_pixel_rows.div_ceil(2);
-    let overlay_height = (art_term_rows as u16 + 3).min(size.height);
-    let overlay_x = (size.width.saturating_sub(overlay_width)) / 2;
-    let overlay_y = (size.height.saturating_sub(overlay_height)) / 2;
-
-    Some(Rect::new(
-        overlay_x,
-        overlay_y,
-        overlay_width,
-        overlay_height,
-    ))
+    Some(super::layout::overlay_rect(size))
 }
 
 /// Returns true if the given coordinates hit the X button of the overlay.
 pub fn is_x_button_click(app: &App, size: Rect, x: u16, y: u16) -> bool {
     if let Some(rect) = overlay_rect(app, size) {
-        // X button is at top-right: [X] occupying 3 chars at (rect.x + rect.width - 4, rect.y)
-        let x_start = rect.x + rect.width - 4;
+        // X button is at top-right: [X] occupying 3 chars at (rect.x + rect.width - OVERLAY_X_BUTTON_OFFSET, rect.y)
+        let x_start = rect.x + rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET;
         let x_end = x_start + 3;
         y == rect.y && x >= x_start && x < x_end
     } else {
