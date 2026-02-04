@@ -34,7 +34,6 @@ pub fn split_main(area: Rect) -> MainLayout {
 
 // ── Now-playing horizontal layout ───────────────────────────────────────────
 
-pub const NOW_PLAYING_ART_WIDTH: u16 = 6;
 pub const TRACK_INFO_MIN_WIDTH: u16 = 20;
 pub const TRANSPORT_WIDTH: u16 = 24;
 
@@ -48,7 +47,7 @@ pub fn split_now_playing(area: Rect) -> NowPlayingLayout {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Length(NOW_PLAYING_ART_WIDTH),
+            Constraint::Length(art_cols() + 2),
             Constraint::Min(TRACK_INFO_MIN_WIDTH),
             Constraint::Length(TRANSPORT_WIDTH),
         ])
@@ -88,10 +87,22 @@ pub fn split_scrub_volume(area: Rect) -> ScrubVolumeLayout {
 
 // ── Album art (now-playing & library) ───────────────────────────────────────
 
-pub const ART_COLS: u16 = 4;
+const ART_PIXEL_ROWS: u16 = 4;
 pub const ART_TERM_ROWS: u16 = 2;
 pub const ART_LEFT_MARGIN: u16 = 1;
-pub const ART_END_COL: u16 = 5; // = MARGIN + COLS
+
+/// Returns the number of display columns for the 4x4 art grid, corrected for
+/// non-square terminal character cells via nearest-neighbor stretching.
+pub(crate) fn art_cols() -> u16 {
+    (ART_PIXEL_ROWS as f64 / half_block_correction())
+        .round()
+        .clamp(ART_PIXEL_ROWS as f64, 8.0) as u16
+}
+
+/// Returns the first column past the album art (margin + display columns).
+pub(crate) fn art_end_col() -> u16 {
+    ART_LEFT_MARGIN + art_cols()
+}
 
 // ── Transport buttons ───────────────────────────────────────────────────────
 
@@ -116,7 +127,7 @@ const DEFAULT_CELL_RATIO: f64 = 10.0 / 13.0;
 /// half-block art. A character cell is typically taller than it is wide, so
 /// a grid of half-block pixels with equal columns and rows appears taller
 /// than it is wide. This factor scales the pixel-row count down to compensate.
-fn half_block_correction() -> f64 {
+pub(crate) fn half_block_correction() -> f64 {
     let Ok(ws) = crossterm::terminal::window_size() else {
         return DEFAULT_CELL_RATIO;
     };

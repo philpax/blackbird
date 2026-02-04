@@ -21,6 +21,7 @@ use smol_str::ToSmolStr as _;
 
 use crate::{
     app::{App, FocusedPanel},
+    cover_art::ArtColors,
     keys,
 };
 
@@ -125,6 +126,24 @@ fn hsv_to_color(hsv: shared_style::Hsv) -> Color {
         )
     }
     rgb_to_color(from_hsv(hsv))
+}
+
+/// Builds half-block art spans for one terminal row from a 4x4 color grid,
+/// stretching to [`layout::art_cols()`] display columns via nearest-neighbor
+/// mapping.
+fn art_row_spans(colors: &ArtColors, top_row: usize, bot_row: usize) -> Vec<Span<'static>> {
+    let cols = layout::art_cols();
+    let mut spans = Vec::with_capacity(cols as usize);
+    for col in 0..cols {
+        let data_col = col as usize * 4 / cols as usize;
+        spans.push(Span::styled(
+            "\u{2580}",
+            Style::default()
+                .fg(colors.colors[top_row][data_col])
+                .bg(colors.colors[bot_row][data_col]),
+        ));
+    }
+    spans
 }
 
 pub fn draw(frame: &mut Frame, app: &mut App) {

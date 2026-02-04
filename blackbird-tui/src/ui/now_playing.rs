@@ -166,34 +166,17 @@ fn draw_album_art(
         return;
     }
 
-    // Render 4 cols × 4 rows using half-block characters (U+2580 upper half).
-    // Each terminal character shows 2 vertical colors: fg = top row, bg = bottom row.
-    // This gives us 4 columns × 4 rows in 2 terminal rows, 4 characters wide.
-
-    let art_width = super::layout::ART_COLS;
+    let art_width = super::layout::art_cols();
     let art_height = super::layout::ART_TERM_ROWS;
     let left_x = area.x + super::layout::ART_LEFT_MARGIN;
 
-    // Center vertically
+    // Center vertically.
     let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
 
-    // Terminal row 0: color rows 0-1, Terminal row 1: color rows 2-3
     for term_row in 0..art_height.min(area.height) {
+        let top = (term_row * 2) as usize;
+        let spans = super::art_row_spans(&art, top, top + 1);
         let row_rect = Rect::new(left_x, top_y + term_row, art_width, 1);
-        let mut spans = Vec::new();
-
-        let color_row_top = (term_row * 2) as usize;
-        let color_row_bot = color_row_top + 1;
-
-        for col in 0..4 {
-            spans.push(Span::styled(
-                "\u{2580}",
-                Style::default()
-                    .fg(art.colors[color_row_top][col])
-                    .bg(art.colors[color_row_bot][col]),
-            ));
-        }
-
         frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
     }
 }

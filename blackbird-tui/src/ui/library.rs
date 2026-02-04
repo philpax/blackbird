@@ -335,40 +335,20 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let dur_str = seconds_to_hms_string(*duration, false);
 
                     // Line 1: Album art (rows 0-1) + artist name
-                    let line1 = Line::from(vec![
-                        Span::raw(" "), // left margin, same as now playing
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[0][0])
-                                .bg(colors.colors[1][0]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[0][1])
-                                .bg(colors.colors[1][1]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[0][2])
-                                .bg(colors.colors[1][2]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[0][3])
-                                .bg(colors.colors[1][3]),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(artist, Style::default().fg(string_to_color(artist))),
-                    ]);
+                    let art_cols = super::layout::art_cols();
+                    let mut line1_spans = vec![Span::raw(" ")];
+                    line1_spans.extend(super::art_row_spans(&colors, 0, 1));
+                    line1_spans.push(Span::raw(" "));
+                    line1_spans.push(Span::styled(
+                        artist,
+                        Style::default().fg(string_to_color(artist)),
+                    ));
+                    let line1 = Line::from(line1_spans);
 
                     // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
-                    // Calculate padding for right-alignment using unicode width
+                    // Calculate padding for right-alignment using unicode width.
                     let left_content_width = super::layout::ART_LEFT_MARGIN as usize
-                        + super::layout::ART_COLS as usize
+                        + art_cols as usize
                         + 1
                         + album.width()
                         + year_str.width(); // margin + art + space + album + year
@@ -378,39 +358,21 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .saturating_sub(left_content_width + right_width)
                         .saturating_sub(1);
 
-                    let line2 = Line::from(vec![
-                        Span::raw(" "), // left margin, same as now playing
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[2][0])
-                                .bg(colors.colors[3][0]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[2][1])
-                                .bg(colors.colors[3][1]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[2][2])
-                                .bg(colors.colors[3][2]),
-                        ),
-                        Span::styled(
-                            "\u{2580}",
-                            Style::default()
-                                .fg(colors.colors[2][3])
-                                .bg(colors.colors[3][3]),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(album, Style::default().fg(album_color)),
-                        Span::styled(year_str, Style::default().fg(album_year_color)),
-                        Span::raw(" ".repeat(padding_needed)),
-                        Span::styled(right_content, Style::default().fg(album_length_color)),
-                        Span::styled(heart, heart_style),
-                    ]);
+                    let mut line2_spans = vec![Span::raw(" ")];
+                    line2_spans.extend(super::art_row_spans(&colors, 2, 3));
+                    line2_spans.push(Span::raw(" "));
+                    line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
+                    line2_spans.push(Span::styled(
+                        year_str,
+                        Style::default().fg(album_year_color),
+                    ));
+                    line2_spans.push(Span::raw(" ".repeat(padding_needed)));
+                    line2_spans.push(Span::styled(
+                        right_content,
+                        Style::default().fg(album_length_color),
+                    ));
+                    line2_spans.push(Span::styled(heart, heart_style));
+                    let line2 = Line::from(line2_spans);
 
                     ListItem::new(vec![line1, line2])
                 }
@@ -946,7 +908,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             cover_art_id,
             ..
         } => {
-            let art_end_col = library_area.x + super::layout::ART_END_COL;
+            let art_end_col = library_area.x + super::layout::art_end_col();
             if x < art_end_col {
                 if let Some(id) = cover_art_id {
                     app.album_art_overlay = Some(AlbumArtOverlay {
