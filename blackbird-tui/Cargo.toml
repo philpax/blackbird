@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["audio", "media-controls"]
+default = ["audio", "media-controls", "tray-icon"]
 audio = ["blackbird-core/audio"]
 media-controls = ["blackbird-client-shared/media-controls"]
+tray-icon = ["blackbird-client-shared/tray-icon"]
 
 [dependencies]
 blackbird-client-shared = { path = "../blackbird-client-shared" }

@@ -61,6 +61,10 @@ fn main() -> anyhow::Result<()> {
         logic.set_scroll_target(track_id);
     }
 
+    // Initialize platform-specific tray icon requirements (GTK on Linux).
+    #[cfg(feature = "tray-icon")]
+    blackbird_client_shared::tray::init_platform();
+
     // Initialize media controls (MPRIS on Linux, SMTC on Windows) for global playback keys.
     #[cfg(feature = "media-controls")]
     let mut media_controls = blackbird_client_shared::controls::Controls::new(
@@ -80,6 +84,13 @@ fn main() -> anyhow::Result<()> {
     )
     .map_err(|e| tracing::warn!("Failed to initialize media controls: {e}"))
     .ok();
+
+    // Create tray icon and menu.
+    #[cfg(feature = "tray-icon")]
+    let (tray_icon, mut tray_menu) = {
+        let icon = blackbird_client_shared::load_icon();
+        blackbird_client_shared::tray::TrayMenu::new(icon, logic.get_playback_mode())
+    };
 
     let playback_rx = logic.subscribe_to_playback_events();
     let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);
@@ -108,6 +119,10 @@ fn main() -> anyhow::Result<()> {
         tick_rate,
         #[cfg(feature = "media-controls")]
         &mut media_controls,
+        #[cfg(feature = "tray-icon")]
+        &mut tray_menu,
+        #[cfg(feature = "tray-icon")]
+        &tray_icon,
     );
 
     // Restore terminal
@@ -132,6 +147,8 @@ fn run_app(
     #[cfg(feature = "media-controls")] media_controls: &mut Option<
         blackbird_client_shared::controls::Controls,
     >,
+    #[cfg(feature = "tray-icon")] tray_menu: &mut blackbird_client_shared::tray::TrayMenu,
+    #[cfg(feature = "tray-icon")] tray_icon: &blackbird_client_shared::tray::TrayIcon,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
 
@@ -158,6 +175,21 @@ fn run_app(
             #[cfg(feature = "media-controls")]
             if let Some(mc) = media_controls.as_mut() {
                 mc.update();
+            }
+            #[cfg(feature = "tray-icon")]
+            {
+                if let Some(action) = tray_menu.handle_menu_events(&app.logic) {
+                    match action {
+                        blackbird_client_shared::tray::TrayAction::Quit => {
+                            app.should_quit = true;
+                        }
+                        blackbird_client_shared::tray::TrayAction::Repaint
+                        | blackbird_client_shared::tray::TrayAction::FocusWindow => {}
+                    }
+                }
+                // Drain icon events to prevent accumulation.
+                let _ = tray_menu.handle_icon_events();
+                tray_menu.update(&app.logic, tray_icon);
             }
             last_tick = Instant::now();
         }

@@ -1,5 +1,23 @@
+//! System tray icon and menu integration.
+//!
+//! Provides a platform-agnostic tray icon with a context menu for playback
+//! control. The menu displays the current track, liked status, navigation
+//! controls, and playback mode selection.
+
 use blackbird_core as bc;
 use tray_icon::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+
+pub use tray_icon::TrayIcon;
+
+/// An action requested by the user through the tray icon or its menu.
+pub enum TrayAction {
+    /// The user clicked "Quit" in the menu.
+    Quit,
+    /// The user left-clicked the tray icon, requesting window focus.
+    FocusWindow,
+    /// A menu action was handled that may have changed state, requesting a repaint.
+    Repaint,
+}
 
 pub struct TrayMenu {
     current_track_item: MenuItem,
@@ -17,32 +35,32 @@ impl TrayMenu {
     pub fn new(
         icon: image::RgbaImage,
         current_playback_mode: bc::PlaybackMode,
-    ) -> (tray_icon::TrayIcon, Self) {
+    ) -> (TrayIcon, Self) {
         let menu = Menu::new();
 
-        // Current track (disabled, non-clickable)
+        // Current track (disabled, non-clickable).
         let current_track_item = MenuItem::new("Not playing", false, None);
         menu.append(&current_track_item).unwrap();
 
-        // Liked checkbox
+        // Liked checkbox.
         let liked_item = CheckMenuItem::new("Liked", true, false, None);
         menu.append(&liked_item).unwrap();
 
-        // Separator
+        // Separator.
         menu.append(&PredefinedMenuItem::separator()).unwrap();
 
-        // Previous
+        // Previous.
         let prev_item = MenuItem::new("Previous", true, None);
         menu.append(&prev_item).unwrap();
 
-        // Next
+        // Next.
         let next_item = MenuItem::new("Next", true, None);
         menu.append(&next_item).unwrap();
 
-        // Separator
+        // Separator.
         menu.append(&PredefinedMenuItem::separator()).unwrap();
 
-        // Playback modes - using an array instead of individual fields
+        // Playback modes.
         let playback_modes = [
             bc::PlaybackMode::Sequential,
             bc::PlaybackMode::RepeatOne,
@@ -63,10 +81,10 @@ impl TrayMenu {
             })
             .collect();
 
-        // Separator
+        // Separator.
         menu.append(&PredefinedMenuItem::separator()).unwrap();
 
-        // Quit
+        // Quit.
         let quit_item = MenuItem::new("Quit", true, None);
         menu.append(&quit_item).unwrap();
 
@@ -87,7 +105,7 @@ impl TrayMenu {
         (tray_icon, tray_menu)
     }
 
-    fn build_tray_icon(icon: image::RgbaImage, menu: &Menu) -> tray_icon::TrayIcon {
+    fn build_tray_icon(icon: image::RgbaImage, menu: &Menu) -> TrayIcon {
         let (icon_width, icon_height) = icon.dimensions();
         tray_icon::TrayIconBuilder::new()
             .with_tooltip(Self::build_tooltip(None))
@@ -104,46 +122,62 @@ impl TrayMenu {
         track_display_details.map_or_else(|| "Not playing".to_string(), |d| d.to_string())
     }
 
-    /// Handle menu events
-    pub fn handle_events(&self, logic: &bc::Logic, ctx: &egui::Context) {
-        if let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == self.prev_item.id() {
-                logic.previous();
-                ctx.request_repaint();
-            } else if event.id == self.next_item.id() {
-                logic.next();
-                ctx.request_repaint();
-            } else if event.id == self.liked_item.id() {
-                // Toggle liked status for the current track
-                if let Some(details) = logic.get_track_display_details() {
-                    logic.set_track_starred(&details.track_id, !details.starred);
-                    ctx.request_repaint();
-                }
-            } else if event.id == self.quit_item.id() {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            } else {
-                // Check if it's a playback mode item
-                for (mode, item) in &self.playback_mode_items {
-                    if event.id == item.id() {
-                        logic.set_playback_mode(*mode);
-                        ctx.request_repaint();
-                        break;
-                    }
+    /// Drain tray icon click events and return `FocusWindow` on left-click.
+    pub fn handle_icon_events(&self) -> Option<TrayAction> {
+        let mut action = None;
+        while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
+            if let tray_icon::TrayIconEvent::Click {
+                button: tray_icon::MouseButton::Left,
+                ..
+            } = event
+            {
+                action = Some(TrayAction::FocusWindow);
+            }
+        }
+        action
+    }
+
+    /// Process a single menu event, calling the appropriate logic method.
+    /// Returns `Quit` when the quit item is clicked, `Repaint` for actions
+    /// that change playback state, or `None` if no event was pending.
+    pub fn handle_menu_events(&self, logic: &bc::Logic) -> Option<TrayAction> {
+        let event = MenuEvent::receiver().try_recv().ok()?;
+
+        if event.id == self.prev_item.id() {
+            logic.previous();
+            Some(TrayAction::Repaint)
+        } else if event.id == self.next_item.id() {
+            logic.next();
+            Some(TrayAction::Repaint)
+        } else if event.id == self.liked_item.id() {
+            if let Some(details) = logic.get_track_display_details() {
+                logic.set_track_starred(&details.track_id, !details.starred);
+            }
+            Some(TrayAction::Repaint)
+        } else if event.id == self.quit_item.id() {
+            Some(TrayAction::Quit)
+        } else {
+            // Check if it's a playback mode item.
+            for (mode, item) in &self.playback_mode_items {
+                if event.id == item.id() {
+                    logic.set_playback_mode(*mode);
+                    return Some(TrayAction::Repaint);
                 }
             }
+            None
         }
     }
 
-    /// Update the menu state based on current playback state
-    pub fn update(&mut self, logic: &bc::Logic, tray_icon: &tray_icon::TrayIcon) {
-        // Update tooltip
+    /// Update the menu state based on current playback state.
+    pub fn update(&mut self, logic: &bc::Logic, tray_icon: &TrayIcon) {
+        // Update tooltip.
         tray_icon
             .set_tooltip(Some(Self::build_tooltip(
                 logic.get_track_display_details().as_ref(),
             )))
             .ok();
 
-        // Update menu current track display and liked status
+        // Update menu current track display and liked status.
         let track_details = logic.get_track_display_details();
         let track_display = track_details.as_ref().map(|details| details.to_string());
         if track_display != self.last_track_display {
@@ -155,7 +189,7 @@ impl TrayMenu {
             self.last_track_display = track_display;
         }
 
-        // Update liked checkbox
+        // Update liked checkbox.
         let current_starred = track_details.as_ref().map(|d| d.starred);
         if current_starred != self.last_starred {
             if let Some(starred) = current_starred {
@@ -168,7 +202,7 @@ impl TrayMenu {
             self.last_starred = current_starred;
         }
 
-        // Update menu playback mode checkmarks
+        // Update menu playback mode checkmarks.
         let current_mode = logic.get_playback_mode();
         if current_mode != self.last_playback_mode {
             for (mode, item) in &self.playback_mode_items {
@@ -176,5 +210,19 @@ impl TrayMenu {
             }
             self.last_playback_mode = current_mode;
         }
+    }
+}
+
+/// Initialize platform-specific requirements for tray icon support.
+///
+/// On Linux, this initializes GTK on the main thread and spawns the GTK
+/// event loop in a background thread. On other platforms this is a no-op.
+pub fn init_platform() {
+    #[cfg(target_os = "linux")]
+    {
+        gtk::init().expect("failed to initialize gtk");
+        std::thread::spawn(|| {
+            gtk::main();
+        });
     }
 }

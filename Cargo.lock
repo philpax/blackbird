@@ -592,14 +592,12 @@ dependencies = [
  "egui-phosphor",
  "egui_extras",
  "global-hotkey",
- "gtk",
  "image",
  "raw-window-handle",
  "serde",
  "toml",
  "tracing",
  "tracing-subscriber",
- "tray-icon",
 ]
 
 [[package]]
@@ -608,11 +606,13 @@ version = "0.1.0"
 dependencies = [
  "blackbird-core",
  "blackbird-shared",
+ "gtk",
  "image",
  "serde",
  "souvlaki",
  "toml",
  "tracing",
+ "tray-icon",
 ]
 
 [[package]]
