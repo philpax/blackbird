@@ -108,6 +108,26 @@ pub const OVERLAY_MIN_WIDTH: u16 = 10;
 pub const OVERLAY_BORDER_OVERHEAD: u16 = 3;
 pub const OVERLAY_X_BUTTON_OFFSET: u16 = 4;
 
+/// Default character cell width-to-height ratio used when the terminal
+/// does not report pixel dimensions.
+const DEFAULT_CELL_RATIO: f64 = 10.0 / 13.0;
+
+/// Correction factor for non-square terminal character cells when rendering
+/// half-block art. A character cell is typically taller than it is wide, so
+/// a grid of half-block pixels with equal columns and rows appears taller
+/// than it is wide. This factor scales the pixel-row count down to compensate.
+fn half_block_correction() -> f64 {
+    let Ok(ws) = crossterm::terminal::window_size() else {
+        return DEFAULT_CELL_RATIO;
+    };
+    if ws.width == 0 || ws.height == 0 || ws.columns == 0 || ws.rows == 0 {
+        return DEFAULT_CELL_RATIO;
+    }
+    let char_width = ws.width as f64 / ws.columns as f64;
+    let char_height = ws.height as f64 / ws.rows as f64;
+    char_width / char_height
+}
+
 /// Computes the overlay rectangle, preserving the source image's aspect ratio
 /// and ensuring the overlay never covers the now-playing bar or scrub bar.
 ///
@@ -121,13 +141,17 @@ pub fn overlay_rect(size: Rect, aspect_ratio: f64) -> Rect {
         return Rect::new(0, min_y, OVERLAY_MIN_WIDTH.min(size.width), 0);
     }
 
+    // Combine image aspect ratio with the half-block correction so the art
+    // appears with correct proportions regardless of the terminal font.
+    let corrected_ratio = aspect_ratio * half_block_correction();
+
     // Start with the width-based sizing.
     let mut overlay_width = ((size.width as f32) * OVERLAY_WIDTH_FRACTION) as u16;
     overlay_width = overlay_width.max(OVERLAY_MIN_WIDTH).min(size.width);
     let art_cols = (overlay_width.saturating_sub(2)) as usize;
 
-    // Derive art height from the aspect ratio.
-    let art_pixel_rows = ((art_cols as f64) * aspect_ratio).ceil() as usize;
+    // Derive art height from the corrected aspect ratio.
+    let art_pixel_rows = ((art_cols as f64) * corrected_ratio).ceil() as usize;
     let art_term_rows = art_pixel_rows.div_ceil(2);
     let mut overlay_height = art_term_rows as u16 + OVERLAY_BORDER_OVERHEAD;
 
@@ -137,7 +161,7 @@ pub fn overlay_rect(size: Rect, aspect_ratio: f64) -> Rect {
         overlay_height = max_height;
         let art_term_rows = overlay_height.saturating_sub(OVERLAY_BORDER_OVERHEAD) as usize;
         let art_pixel_rows = art_term_rows * 2;
-        let art_cols = ((art_pixel_rows as f64) / aspect_ratio).floor() as usize;
+        let art_cols = ((art_pixel_rows as f64) / corrected_ratio).floor() as usize;
         overlay_width = (art_cols as u16 + 2).max(OVERLAY_MIN_WIDTH).min(size.width);
     }
 
