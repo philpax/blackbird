@@ -1,3 +1,4 @@
+use blackbird_client_shared::style as shared_style;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -6,9 +7,14 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
-use crate::{app::App, keys::Action, log_buffer::LogBuffer};
+use crate::{keys::Action, log_buffer::LogBuffer};
 
 use super::StyleExt;
+
+pub enum LogsAction {
+    ToggleLogs,
+    Quit,
+}
 
 pub struct LogsState {
     pub log_buffer: LogBuffer,
@@ -29,9 +35,8 @@ impl LogsState {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
-    let style = &app.config.style;
-    let entries = app.logs.log_buffer.get_entries();
+pub fn draw(frame: &mut Frame, logs: &mut LogsState, style: &shared_style::Style, area: Rect) {
+    let entries = logs.log_buffer.get_entries();
 
     let block = Block::default()
         .title(format!(" Logs ({}) ", entries.len()))
@@ -114,48 +119,48 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Clamp scroll offset to valid range.
     let max_offset = entries.len().saturating_sub(1);
-    let offset = app.logs.scroll_offset.min(max_offset);
-    app.logs.scroll_offset = offset;
+    let offset = logs.scroll_offset.min(max_offset);
+    logs.scroll_offset = offset;
 
     state.select(Some(offset));
 
     frame.render_stateful_widget(list, inner, &mut state);
 }
 
-pub fn handle_key(app: &mut App, action: Action) {
-    let log_len = app.logs.log_buffer.len();
+pub fn handle_key(logs: &mut LogsState, action: Action) -> Option<LogsAction> {
+    let log_len = logs.log_buffer.len();
 
     match action {
-        Action::Back => app.toggle_logs(),
-        Action::Quit => app.should_quit = true,
+        Action::Back => return Some(LogsAction::ToggleLogs),
+        Action::Quit => return Some(LogsAction::Quit),
         Action::MoveUp => {
-            app.logs.scroll_offset = app.logs.scroll_offset.saturating_sub(1);
+            logs.scroll_offset = logs.scroll_offset.saturating_sub(1);
         }
         Action::MoveDown => {
             if log_len > 0 {
-                app.logs.scroll_offset = (app.logs.scroll_offset + 1).min(log_len - 1);
+                logs.scroll_offset = (logs.scroll_offset + 1).min(log_len - 1);
             }
         }
         Action::PageUp => {
-            app.logs.scroll_offset = app
-                .logs
+            logs.scroll_offset = logs
                 .scroll_offset
                 .saturating_sub(super::layout::PAGE_SCROLL_SIZE);
         }
         Action::PageDown => {
             if log_len > 0 {
-                app.logs.scroll_offset =
-                    (app.logs.scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
+                logs.scroll_offset =
+                    (logs.scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
             }
         }
         Action::GotoTop => {
-            app.logs.scroll_offset = 0;
+            logs.scroll_offset = 0;
         }
         Action::GotoBottom => {
             if log_len > 0 {
-                app.logs.scroll_offset = log_len - 1;
+                logs.scroll_offset = log_len - 1;
             }
         }
         _ => {}
     }
+    None
 }

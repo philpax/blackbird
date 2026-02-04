@@ -142,9 +142,21 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     match app.focused_panel {
         FocusedPanel::Library => library::draw(frame, app, main.content),
-        FocusedPanel::Search => search::draw(frame, app, main.content),
-        FocusedPanel::Lyrics => lyrics::draw(frame, app, main.content),
-        FocusedPanel::Logs => logs::draw(frame, app, main.content),
+        FocusedPanel::Search => search::draw(
+            frame,
+            &app.search,
+            &app.config.style,
+            &app.logic,
+            main.content,
+        ),
+        FocusedPanel::Lyrics => lyrics::draw(
+            frame,
+            &app.lyrics,
+            &app.config.style,
+            app.logic.get_playing_position(),
+            main.content,
+        ),
+        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, main.content),
     }
 
     draw_help_bar(frame, app, main.help_bar);
@@ -166,14 +178,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let popup_area = Rect::new(x, y, popup_width, popup_height);
 
         // Clear the area behind the popup.
-        let clear = Block::default().style(Style::default().bg(app.config.style.background_color()));
+        let clear =
+            Block::default().style(Style::default().bg(app.config.style.background_color()));
         frame.render_widget(clear, popup_area);
 
         let popup = Paragraph::new(format!(" {prompt}"))
-            .block(
-                Block::bordered()
-                    .style(Style::default().fg(app.config.style.text_color())),
-            )
+            .block(Block::bordered().style(Style::default().fg(app.config.style.text_color())))
             .style(Style::default().fg(app.config.style.text_color()));
         frame.render_widget(popup, popup_area);
     }

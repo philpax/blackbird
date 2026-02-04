@@ -132,20 +132,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     }
 }
 
-/// Returns the overlay rect for hit testing, or None if no overlay is shown.
-pub fn overlay_rect(app: &App, size: Rect) -> Option<Rect> {
-    app.album_art_overlay.as_ref()?;
-    Some(super::layout::overlay_rect(size))
-}
-
 /// Returns true if the given coordinates hit the X button of the overlay.
-pub fn is_x_button_click(app: &App, size: Rect, x: u16, y: u16) -> bool {
-    if let Some(rect) = overlay_rect(app, size) {
-        // X button is at top-right: [X] occupying 3 chars at (rect.x + rect.width - OVERLAY_X_BUTTON_OFFSET, rect.y)
-        let x_start = rect.x + rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET;
-        let x_end = x_start + 3;
-        y == rect.y && x >= x_start && x < x_end
-    } else {
-        false
-    }
+pub fn is_x_button_click(size: Rect, x: u16, y: u16) -> bool {
+    let rect = super::layout::overlay_rect(size);
+    let x_start = rect.x + rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET;
+    let x_end = x_start + 3;
+    y == rect.y && x >= x_start && x < x_end
 }

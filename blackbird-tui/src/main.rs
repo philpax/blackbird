@@ -209,18 +209,33 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
             }
         }
         FocusedPanel::Search => {
-            if let Some(action) = keys::search_action(key) {
-                ui::search::handle_key(app, action);
+            if let Some(action) = keys::search_action(key)
+                && let Some(sa) = ui::search::handle_key(&mut app.search, &app.logic, action)
+            {
+                match sa {
+                    ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                }
             }
         }
         FocusedPanel::Lyrics => {
-            if let Some(action) = keys::lyrics_action(key) {
-                ui::lyrics::handle_key(app, action);
+            if let Some(action) = keys::lyrics_action(key)
+                && let Some(la) = ui::lyrics::handle_key(&mut app.lyrics, &app.logic, action)
+            {
+                match la {
+                    ui::lyrics::LyricsAction::ToggleLyrics => app.toggle_lyrics(),
+                    ui::lyrics::LyricsAction::Quit => app.should_quit = true,
+                    ui::lyrics::LyricsAction::SeekRelative(secs) => app.seek_relative(secs),
+                }
             }
         }
         FocusedPanel::Logs => {
-            if let Some(action) = keys::logs_action(key) {
-                ui::logs::handle_key(app, action);
+            if let Some(action) = keys::logs_action(key)
+                && let Some(la) = ui::logs::handle_key(&mut app.logs, action)
+            {
+                match la {
+                    ui::logs::LogsAction::ToggleLogs => app.toggle_logs(),
+                    ui::logs::LogsAction::Quit => app.should_quit = true,
+                }
             }
         }
     }
@@ -246,18 +261,16 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
             // --- Album art overlay (handled first, on top of everything) ---
             if app.album_art_overlay.is_some() {
-                if ui::album_art_overlay::is_x_button_click(app, size, x, y) {
+                let rect = ui::layout::overlay_rect(size);
+                if ui::album_art_overlay::is_x_button_click(size, x, y) {
                     app.album_art_overlay = None;
-                } else if let Some(rect) = ui::album_art_overlay::overlay_rect(app, size) {
-                    // Click inside the overlay but not on X → ignore
-                    if x >= rect.x
-                        && x < rect.x + rect.width
-                        && y >= rect.y
-                        && y < rect.y + rect.height
-                    {
-                        return;
-                    }
-                    // Click outside overlay → close it
+                } else if x >= rect.x
+                    && x < rect.x + rect.width
+                    && y >= rect.y
+                    && y < rect.y + rect.height
+                {
+                    // Click inside overlay but not on X → ignore
+                } else {
                     app.album_art_overlay = None;
                 }
                 return;
@@ -284,7 +297,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 if app.focused_panel == FocusedPanel::Library {
                     ui::library::handle_mouse_click(app, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Lyrics {
-                    ui::lyrics::handle_mouse_click(app, library_area, x, y);
+                    ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
                 }
             }
         }
@@ -309,7 +322,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_scroll(app, -1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(app, -(ui::layout::SCROLL_WHEEL_STEPS as i32));
+                ui::lyrics::move_selection(
+                    &mut app.lyrics,
+                    app.logic.get_playing_position(),
+                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
+                );
             } else if app.focused_panel == FocusedPanel::Logs {
                 app.logs.scroll_offset = app
                     .logs
@@ -321,13 +338,16 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_scroll(app, 1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(app, ui::layout::SCROLL_WHEEL_STEPS as i32);
+                ui::lyrics::move_selection(
+                    &mut app.lyrics,
+                    app.logic.get_playing_position(),
+                    ui::layout::SCROLL_WHEEL_STEPS as i32,
+                );
             } else if app.focused_panel == FocusedPanel::Logs {
                 let log_len = app.logs.log_buffer.len();
                 if log_len > 0 {
                     app.logs.scroll_offset =
-                        (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS)
-                            .min(log_len - 1);
+                        (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
                 }
             }
         }

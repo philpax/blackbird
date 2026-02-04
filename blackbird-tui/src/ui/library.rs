@@ -16,10 +16,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::App,
-    cover_art::QuadrantColors,
-    keys::Action,
-    ui::album_art_overlay::AlbumArtOverlay,
+    app::App, cover_art::QuadrantColors, keys::Action, ui::album_art_overlay::AlbumArtOverlay,
 };
 
 use super::{StyleExt, string_to_color};
@@ -117,11 +114,7 @@ impl LibraryState {
     }
 
     /// Returns a clone of the entry at the given index, if it exists.
-    pub fn get_library_entry(
-        &mut self,
-        logic: &bc::Logic,
-        index: usize,
-    ) -> Option<LibraryEntry> {
+    pub fn get_library_entry(&mut self, logic: &bc::Logic, index: usize) -> Option<LibraryEntry> {
         if self.flat_library_dirty {
             self.rebuild_flat_library(logic);
             self.flat_library_dirty = false;
@@ -219,8 +212,7 @@ impl LibraryState {
         }
 
         // Check if current selection is already a track.
-        if let Some(LibraryEntry::Track { .. }) =
-            self.cached_flat_library.get(self.selected_index)
+        if let Some(LibraryEntry::Track { .. }) = self.cached_flat_library.get(self.selected_index)
         {
             return;
         }

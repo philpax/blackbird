@@ -1,3 +1,4 @@
+use blackbird_client_shared::style as shared_style;
 use blackbird_core::{
     self as bc, TrackDisplayDetails, blackbird_state::TrackId, util::seconds_to_hms_string,
 };
@@ -9,9 +10,13 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-use crate::{app::App, keys::Action};
+use crate::keys::Action;
 
 use super::{StyleExt, string_to_color};
+
+pub enum SearchAction {
+    ToggleSearch,
+}
 
 pub struct SearchState {
     pub query: String,
@@ -46,9 +51,13 @@ impl SearchState {
     }
 }
 
-pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
-    let style = &app.config.style;
-
+pub fn draw(
+    frame: &mut Frame,
+    search: &SearchState,
+    style: &shared_style::Style,
+    logic: &bc::Logic,
+    area: Rect,
+) {
     let block = Block::default()
         .title(" Search ")
         .borders(Borders::ALL)
@@ -65,7 +74,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Search input
     let input = Paragraph::new(Line::from(vec![
         Span::styled("> ", Style::default().fg(style.track_name_playing_color())),
-        Span::styled(&app.search.query, Style::default().fg(style.text_color())),
+        Span::styled(&search.query, Style::default().fg(style.text_color())),
         Span::styled(
             "\u{2588}",
             Style::default().fg(style.track_name_playing_color()),
@@ -74,8 +83,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(input, chunks[0]);
 
     // Search results
-    if app.search.query.len() < 3 {
-        let hint = if app.search.query.is_empty() {
+    if search.query.len() < 3 {
+        let hint = if search.query.is_empty() {
             "Type to search..."
         } else {
             "Enter at least 3 characters..."
@@ -86,14 +95,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    if app.search.results.is_empty() {
+    if search.results.is_empty() {
         let no_results = Paragraph::new("No results found.")
             .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(no_results, chunks[1]);
         return;
     }
 
-    let state_arc = app.logic.get_state();
+    let state_arc = logic.get_state();
     let app_state = state_arc.read().unwrap();
 
     // Pre-compute style colors to avoid borrow conflicts in closure.
@@ -102,13 +111,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let track_duration_color = style.track_duration_color();
     let track_name_hovered_color = style.track_name_hovered_color();
 
-    let items: Vec<ListItem> = app
-        .search
+    let items: Vec<ListItem> = search
         .results
         .iter()
         .enumerate()
         .map(|(i, track_id)| {
-            let is_selected = i == app.search.selected_index;
+            let is_selected = i == search.selected_index;
             let details = TrackDisplayDetails::from_track_id(track_id, &app_state);
 
             let line = if let Some(d) = details {
@@ -149,44 +157,47 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items);
     let mut list_state = ListState::default();
-    list_state.select(Some(app.search.selected_index));
+    list_state.select(Some(search.selected_index));
 
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 }
 
-pub fn handle_key(app: &mut App, action: Action) {
+pub fn handle_key(
+    search: &mut SearchState,
+    logic: &bc::Logic,
+    action: Action,
+) -> Option<SearchAction> {
     match action {
-        Action::Back => app.toggle_search(),
+        Action::Back => return Some(SearchAction::ToggleSearch),
         Action::Select => {
-            if let Some(track_id) = app.search.results.get(app.search.selected_index) {
-                app.logic.request_play_track(track_id);
-                app.toggle_search();
+            if let Some(track_id) = search.results.get(search.selected_index) {
+                logic.request_play_track(track_id);
+                return Some(SearchAction::ToggleSearch);
             }
         }
         Action::MoveUp => {
-            if app.search.selected_index > 0 {
-                app.search.selected_index -= 1;
+            if search.selected_index > 0 {
+                search.selected_index -= 1;
             }
         }
         Action::MoveDown => {
-            if !app.search.results.is_empty()
-                && app.search.selected_index < app.search.results.len() - 1
-            {
-                app.search.selected_index += 1;
+            if !search.results.is_empty() && search.selected_index < search.results.len() - 1 {
+                search.selected_index += 1;
             }
         }
         Action::DeleteChar => {
-            app.search.query.pop();
-            app.search.update(&app.logic);
+            search.query.pop();
+            search.update(logic);
         }
         Action::ClearLine => {
-            app.search.query.clear();
-            app.search.update(&app.logic);
+            search.query.clear();
+            search.update(logic);
         }
         Action::Char(c) => {
-            app.search.query.push(c);
-            app.search.update(&app.logic);
+            search.query.push(c);
+            search.update(logic);
         }
         _ => {}
     }
+    None
 }
