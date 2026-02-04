@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "blackbird",
+    "blackbird-client-shared",
     "blackbird-core",
     "blackbird-id3mover",
     "blackbird-json-export",
@@ -9,6 +10,7 @@ members = [
     "blackbird-spotcheck",
     "blackbird-state",
     "blackbird-subsonic",
+    "blackbird-tui",
 ]
 resolver = "2"
 default-members = ["blackbird"]

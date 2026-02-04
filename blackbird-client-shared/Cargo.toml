@@ -1,0 +1,22 @@
+[package]
+name = "blackbird-client-shared"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+media-controls = ["dep:souvlaki"]
+tray-icon = ["dep:tray-icon", "dep:gtk"]
+
+[dependencies]
+blackbird-core = { path = "../blackbird-core", default-features = false }
+blackbird-shared = { path = "../blackbird-shared" }
+
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+serde = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+souvlaki = { version = "0.8.3", optional = true }
+tray-icon = { version = "0.21.2", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = { version = "0.18", optional = true }

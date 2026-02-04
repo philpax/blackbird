@@ -3,27 +3,18 @@ use std::sync::{Arc, RwLock};
 mod config;
 mod controls;
 mod cover_art_cache;
-#[cfg(feature = "tray-icon")]
-mod tray;
 mod ui;
 
 use blackbird_core as bc;
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
-use image::EncodableLayout;
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() {
-    // Initialize GTK on Linux for tray icon support
-    // GTK must be initialized on the main thread, but the event loop runs in a separate thread
-    #[cfg(all(target_os = "linux", feature = "tray-icon"))]
-    {
-        gtk::init().unwrap();
-        std::thread::spawn(|| {
-            gtk::main();
-        });
-    }
+    // Initialize platform-specific tray icon requirements (GTK on Linux).
+    #[cfg(feature = "tray-icon")]
+    blackbird_client_shared::tray::init_platform();
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
@@ -33,9 +24,7 @@ fn main() {
         )
         .init();
 
-    let icon = image::load_from_memory(include_bytes!("../assets/icon.png"))
-        .unwrap()
-        .to_rgba8();
+    let icon = blackbird_client_shared::load_icon();
 
     // Load and save config at startup
     let config = Config::load();
@@ -46,21 +35,21 @@ fn main() {
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
-        base_url: config.server.base_url.clone(),
-        username: config.server.username.clone(),
-        password: config.server.password.clone(),
-        transcode: config.server.transcode,
+        base_url: config.shared.server.base_url.clone(),
+        username: config.shared.server.username.clone(),
+        password: config.shared.server.password.clone(),
+        transcode: config.shared.server.transcode,
         volume: config.general.volume,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
     });
 
-    // Restore last playback mode
-    logic.set_playback_mode(config.last_playback.playback_mode);
+    // Restore last playback mode.
+    logic.set_playback_mode(config.shared.last_playback.playback_mode);
 
-    // Set the scroll target to the last played track
-    if let Some(track_id) = &config.last_playback.track_id {
+    // Set the scroll target to the last played track.
+    if let Some(track_id) = &config.shared.last_playback.track_id {
         logic.set_scroll_target(track_id);
     }
 
@@ -75,9 +64,9 @@ fn main() {
                 config.general.window_height as f32,
             ])
             .with_icon(egui::IconData {
-                rgba: icon.as_bytes().into(),
-                width: icon.width() as u32,
-                height: icon.height() as u32,
+                rgba: icon.as_raw().clone(),
+                width: icon.width(),
+                height: icon.height(),
             }),
         ..eframe::NativeOptions::default()
     };
@@ -118,9 +107,9 @@ pub struct App {
     pub(crate) ui_state: ui::UiState,
     shutdown_initiated: bool,
     #[cfg(feature = "tray-icon")]
-    tray_icon: tray_icon::TrayIcon,
+    tray_icon: blackbird_client_shared::tray::TrayIcon,
     #[cfg(feature = "tray-icon")]
-    tray_menu: tray::TrayMenu,
+    tray_menu: blackbird_client_shared::tray::TrayMenu,
     _global_hotkey_manager: GlobalHotKeyManager,
     search_hotkey: HotKey,
     mini_library_hotkey: HotKey,
@@ -162,7 +151,16 @@ impl App {
 
         #[cfg(feature = "media-controls")]
         let controls = controls::Controls::new(
-            Some(cc),
+            {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                cc.window_handle().ok().and_then(|handle| {
+                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
+                        Some(h.hwnd.get() as *mut std::ffi::c_void)
+                    } else {
+                        None
+                    }
+                })
+            },
             logic.subscribe_to_playback_events(),
             logic.request_handle(),
             logic.get_state(),
@@ -179,7 +177,7 @@ impl App {
         #[cfg(feature = "tray-icon")]
         let (tray_icon, tray_menu) = {
             let current_playback_mode = logic.get_playback_mode();
-            tray::TrayMenu::new(icon, current_playback_mode)
+            blackbird_client_shared::tray::TrayMenu::new(icon, current_playback_mode)
         };
 
         let global_hotkey_manager =
@@ -245,18 +243,23 @@ impl eframe::App for App {
 
         #[cfg(feature = "tray-icon")]
         {
-            while let Ok(event) = tray_icon::TrayIconEvent::receiver().try_recv() {
-                if let tray_icon::TrayIconEvent::Click {
-                    button: tray_icon::MouseButton::Left,
-                    ..
-                } = event
-                {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-                }
+            if let Some(blackbird_client_shared::tray::TrayAction::FocusWindow) =
+                self.tray_menu.handle_icon_events()
+            {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
 
-            // Handle menu events
-            self.tray_menu.handle_events(&self.logic, ctx);
+            if let Some(action) = self.tray_menu.handle_menu_events(&self.logic) {
+                match action {
+                    blackbird_client_shared::tray::TrayAction::Quit => {
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                    blackbird_client_shared::tray::TrayAction::Repaint => {
+                        ctx.request_repaint();
+                    }
+                    blackbird_client_shared::tray::TrayAction::FocusWindow => {}
+                }
+            }
         }
 
         // Handle global hotkey events
@@ -324,10 +327,11 @@ impl eframe::App for App {
         }
         config.general.volume = self.logic.get_volume();
         if let Some(track_and_position) = self.logic.get_playing_track_and_position() {
-            config.last_playback.track_id = Some(track_and_position.track_id);
-            config.last_playback.track_position_secs = track_and_position.position.as_secs_f64();
+            config.shared.last_playback.track_id = Some(track_and_position.track_id);
+            config.shared.last_playback.track_position_secs =
+                track_and_position.position.as_secs_f64();
         }
-        config.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
         config.save();
     }
 }

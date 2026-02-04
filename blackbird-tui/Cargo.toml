@@ -1,13 +1,13 @@
 [package]
-name = "blackbird"
+name = "blackbird-tui"
 version = "0.1.0"
 edition = "2024"
 
 [features]
-default = ["tray-icon", "audio", "media-controls"]
-tray-icon = ["blackbird-client-shared/tray-icon"]
+default = ["audio", "media-controls", "tray-icon"]
 audio = ["blackbird-core/audio"]
 media-controls = ["blackbird-client-shared/media-controls"]
+tray-icon = ["blackbird-client-shared/tray-icon"]
 
 [dependencies]
 blackbird-client-shared = { path = "../blackbird-client-shared" }
@@ -20,15 +20,16 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 toml = { workspace = true }
 
-egui = "0.32.0"
-eframe = "0.32.0"
-egui_extras = { version = "0.32.0", features = ["image"] }
+ratatui = "0.29"
+crossterm = "0.28"
+smol_str = "0.3"
+unicode-width = "0.2"
 image = { version = "0.25", default-features = false, features = [
     "jpeg",
     "png",
     "webp",
     "gif",
 ] }
-egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
-raw-window-handle = "0.6"
-global-hotkey = "0.6"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
