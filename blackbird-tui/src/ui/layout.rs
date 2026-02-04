@@ -105,7 +105,7 @@ pub const TRANSPORT_BTN_NEXT: u16 = 9;
 
 pub const OVERLAY_WIDTH_FRACTION: f32 = 0.9;
 pub const OVERLAY_MIN_WIDTH: u16 = 10;
-pub const OVERLAY_BORDER_OVERHEAD: u16 = 3;
+pub const OVERLAY_BORDER_OVERHEAD: u16 = 2;
 pub const OVERLAY_X_BUTTON_OFFSET: u16 = 4;
 
 /// Default character cell width-to-height ratio used when the terminal
