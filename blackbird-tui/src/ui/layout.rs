@@ -108,15 +108,41 @@ pub const OVERLAY_MIN_WIDTH: u16 = 10;
 pub const OVERLAY_BORDER_OVERHEAD: u16 = 3;
 pub const OVERLAY_X_BUTTON_OFFSET: u16 = 4;
 
-pub fn overlay_rect(size: Rect) -> Rect {
-    let overlay_width = ((size.width as f32) * OVERLAY_WIDTH_FRACTION) as u16;
-    let overlay_width = overlay_width.max(OVERLAY_MIN_WIDTH).min(size.width);
-    let art_cols = (overlay_width - 2) as usize;
-    let art_pixel_rows = art_cols;
+/// Computes the overlay rectangle, preserving the source image's aspect ratio
+/// and ensuring the overlay never covers the now-playing bar or scrub bar.
+///
+/// `aspect_ratio` is the source image's height / width (1.0 for square).
+pub fn overlay_rect(size: Rect, aspect_ratio: f64) -> Rect {
+    // The overlay must sit below the now-playing bar and scrub bar.
+    let min_y = NOW_PLAYING_HEIGHT + SCRUB_BAR_HEIGHT;
+    let max_height = size.height.saturating_sub(min_y);
+
+    if max_height < OVERLAY_BORDER_OVERHEAD + 1 || size.width < OVERLAY_MIN_WIDTH {
+        return Rect::new(0, min_y, OVERLAY_MIN_WIDTH.min(size.width), 0);
+    }
+
+    // Start with the width-based sizing.
+    let mut overlay_width = ((size.width as f32) * OVERLAY_WIDTH_FRACTION) as u16;
+    overlay_width = overlay_width.max(OVERLAY_MIN_WIDTH).min(size.width);
+    let art_cols = (overlay_width.saturating_sub(2)) as usize;
+
+    // Derive art height from the aspect ratio.
+    let art_pixel_rows = ((art_cols as f64) * aspect_ratio).ceil() as usize;
     let art_term_rows = art_pixel_rows.div_ceil(2);
-    let overlay_height = (art_term_rows as u16 + OVERLAY_BORDER_OVERHEAD).min(size.height);
+    let mut overlay_height = art_term_rows as u16 + OVERLAY_BORDER_OVERHEAD;
+
+    // If too tall for the available space, constrain by height and shrink
+    // the width so the aspect ratio is still correct.
+    if overlay_height > max_height {
+        overlay_height = max_height;
+        let art_term_rows = overlay_height.saturating_sub(OVERLAY_BORDER_OVERHEAD) as usize;
+        let art_pixel_rows = art_term_rows * 2;
+        let art_cols = ((art_pixel_rows as f64) / aspect_ratio).floor() as usize;
+        overlay_width = (art_cols as u16 + 2).max(OVERLAY_MIN_WIDTH).min(size.width);
+    }
+
     let overlay_x = (size.width.saturating_sub(overlay_width)) / 2;
-    let overlay_y = (size.height.saturating_sub(overlay_height)) / 2;
+    let overlay_y = min_y + (max_height.saturating_sub(overlay_height)) / 2;
     Rect::new(overlay_x, overlay_y, overlay_width, overlay_height)
 }
 

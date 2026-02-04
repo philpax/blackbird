@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::Cursor,
     sync::{
         Arc, Mutex,
         mpsc::{Receiver, Sender},
@@ -87,6 +88,9 @@ pub struct TuiCoverArt {
     /// Variable-size grid for the overlay (lazily computed via with_client_data_mut).
     /// Reset to None when from_image_data is called (new image data arrived).
     pub overlay_grid: Option<ArtColorGrid>,
+    /// Aspect ratio (height / width) of the source image. Computed from the
+    /// image header so it is available without a full decode.
+    aspect_ratio: Option<f64>,
 }
 
 impl ClientData for TuiCoverArt {
@@ -98,11 +102,13 @@ impl ClientData for TuiCoverArt {
         } else {
             (Some(compute_quadrant_colors(data)), Some(data.clone()))
         };
+        let aspect_ratio = image_aspect_ratio(data);
         TuiCoverArt {
             raw_bytes: data.clone(),
             low_res_bytes,
             colors,
             overlay_grid: None,
+            aspect_ratio,
         }
     }
 
@@ -112,6 +118,9 @@ impl ClientData for TuiCoverArt {
         }
         if self.low_res_bytes.is_none() {
             self.low_res_bytes = previous.low_res_bytes.clone();
+        }
+        if self.aspect_ratio.is_none() {
+            self.aspect_ratio = previous.aspect_ratio;
         }
     }
 }
@@ -276,6 +285,31 @@ impl CoverArtCache {
 
         (ArtColorGrid::empty(cols, rows), true)
     }
+
+    /// Returns the aspect ratio (height / width) of the source image, or 1.0
+    /// if the image is not in the cache or the dimensions are unknown.
+    pub fn get_aspect_ratio(&mut self, cover_art_id: Option<&CoverArtId>) -> f64 {
+        let Some(id) = cover_art_id else {
+            return 1.0;
+        };
+        self.inner
+            .with_client_data_mut(id, |data, _raw| data.aspect_ratio)
+            .flatten()
+            .unwrap_or(1.0)
+    }
+}
+
+/// Reads the image header to extract the aspect ratio (height / width)
+/// without decoding the full pixel data.
+fn image_aspect_ratio(data: &[u8]) -> Option<f64> {
+    let reader = image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()?;
+    let (w, h) = reader.into_dimensions().ok()?;
+    if w == 0 {
+        return None;
+    }
+    Some(h as f64 / w as f64)
 }
 
 /// Computes the average colour of each region in a 4×4 grid (4 cols, 4 rows).

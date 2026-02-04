@@ -31,7 +31,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     let background_color = app.config.style.background_color();
     let text_color = app.config.style.text_color();
 
-    let overlay_rect = super::layout::overlay_rect(size);
+    let aspect_ratio = app.cover_art_cache.get_aspect_ratio(Some(&cover_art_id));
+    let overlay_rect = super::layout::overlay_rect(size, aspect_ratio);
 
     // Art area inside border: subtract 2 for left/right border.
     let art_cols = (overlay_rect.width - 2) as usize;
@@ -133,8 +134,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
 }
 
 /// Returns true if the given coordinates hit the X button of the overlay.
-pub fn is_x_button_click(size: Rect, x: u16, y: u16) -> bool {
-    let rect = super::layout::overlay_rect(size);
+pub fn is_x_button_click(size: Rect, aspect_ratio: f64, x: u16, y: u16) -> bool {
+    let rect = super::layout::overlay_rect(size, aspect_ratio);
     let x_start = rect.x + rect.width - super::layout::OVERLAY_X_BUTTON_OFFSET;
     let x_end = x_start + 3;
     y == rect.y && x >= x_start && x < x_end

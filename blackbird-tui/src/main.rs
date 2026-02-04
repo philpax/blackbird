@@ -261,8 +261,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
             // --- Album art overlay (handled first, on top of everything) ---
             if app.album_art_overlay.is_some() {
-                let rect = ui::layout::overlay_rect(size);
-                if ui::album_art_overlay::is_x_button_click(size, x, y) {
+                let aspect_ratio = app
+                    .cover_art_cache
+                    .get_aspect_ratio(app.album_art_overlay.as_ref().map(|o| &o.cover_art_id));
+                let rect = ui::layout::overlay_rect(size, aspect_ratio);
+                if ui::album_art_overlay::is_x_button_click(size, aspect_ratio, x, y) {
                     app.album_art_overlay = None;
                 } else if x >= rect.x
                     && x < rect.x + rect.width
