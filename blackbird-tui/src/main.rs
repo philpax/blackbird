@@ -50,6 +50,7 @@ fn main() -> anyhow::Result<()> {
         password: config.shared.server.password.clone(),
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
+        sort_order: config.shared.last_playback.sort_order,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,

@@ -23,7 +23,9 @@ use tokio_thread::TokioThread;
 mod queue;
 
 mod app_state;
-pub use app_state::{AppState, AppStateError, PlaybackMode, ScrobbleState, TrackAndPosition};
+pub use app_state::{
+    AppState, AppStateError, PlaybackMode, ScrobbleState, SortOrder, TrackAndPosition,
+};
 
 mod library;
 pub use library::Library;
@@ -167,6 +169,7 @@ pub struct LogicArgs {
     pub password: String,
     pub transcode: bool,
     pub volume: f32,
+    pub sort_order: SortOrder,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     pub library_populated_tx: std::sync::mpsc::Sender<()>,
@@ -180,6 +183,7 @@ impl Logic {
             password,
             transcode,
             volume,
+            sort_order,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             library_populated_tx,
@@ -187,6 +191,7 @@ impl Logic {
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             volume,
+            sort_order,
             ..AppState::default()
         }));
         let client = Arc::new(bs::Client::new(
@@ -633,6 +638,17 @@ impl Logic {
         self.read_state().playback_mode
     }
 
+    pub fn set_sort_order(&self, order: SortOrder) {
+        tracing::debug!("Sort order set to {order:?}");
+        let mut st = self.write_state();
+        st.sort_order = order;
+        st.library.resort(order);
+    }
+
+    pub fn get_sort_order(&self) -> SortOrder {
+        self.read_state().sort_order
+    }
+
     pub fn get_volume(&self) -> f32 {
         self.read_state().volume
     }
@@ -848,12 +864,16 @@ impl Logic {
                     })
                     .await?;
 
-                    state.write().unwrap().library.populate(
+                    let mut st = state.write().unwrap();
+                    let sort_order = st.sort_order;
+                    st.library.populate(
                         result.track_ids,
                         result.track_map,
                         result.groups,
                         result.albums,
+                        sort_order,
                     );
+                    drop(st);
 
                     // Signal that library population is complete
                     let _ = library_populated_tx.send(());

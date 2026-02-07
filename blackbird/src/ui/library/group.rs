@@ -49,7 +49,7 @@ pub fn ui<'a>(
                 .selectable(false),
             );
 
-            // Album + Year + Duration
+            // Album + Year + Added + Duration
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
                     let mut layout_job = egui::text::LayoutJob::default();
@@ -70,6 +70,22 @@ pub fn ui<'a>(
                                 ..Default::default()
                             },
                         );
+                    }
+                    // Show the date the album was added to the library.
+                    let state = logic.get_state();
+                    let state = state.read().unwrap();
+                    if let Some(album) = state.library.albums.get(&group.album_id) {
+                        // Extract "YYYY-MM-DD" from ISO 8601 timestamp.
+                        if let Some(date) = album.created.get(..10) {
+                            layout_job.append(
+                                format!(" +{date}").as_str(),
+                                0.0,
+                                TextFormat {
+                                    color: style.album_year_color32(),
+                                    ..Default::default()
+                                },
+                            );
+                        }
                     }
                     ui.add(Label::new(layout_job).selectable(false));
                 });

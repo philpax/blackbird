@@ -1,4 +1,7 @@
-use blackbird_client_shared::alphabet_scroll as shared_alphabet;
+use std::borrow::Cow;
+
+use blackbird_client_shared::library_scroll as shared_scroll;
+use blackbird_core::SortOrder;
 use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
 use crate::{
@@ -6,11 +9,14 @@ use crate::{
     ui::{style, style::StyleExt},
 };
 
-use super::{group, shared::AlphabetScrollState};
+use super::{group, shared::LibraryScrollState};
 
-/// Computes alphabet scroll positions as fractions of total content.
-/// Uses shared logic from blackbird-client-shared.
-pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState) {
+/// Computes scroll indicator positions as fractions of total content.
+/// The labels shown depend on the current sort order:
+/// - Alphabetical: first letter of artist name (A-Z)
+/// - NewestFirst: release year (full year like "2024")
+/// - RecentlyAdded: year from the created date (full year like "2024")
+pub fn compute_positions(logic: &mut bc::Logic, state: &mut LibraryScrollState) {
     let app_state = logic.get_state();
     let app_state = app_state.read().unwrap();
 
@@ -20,24 +26,56 @@ pub fn compute_positions(logic: &mut bc::Logic, state: &mut AlphabetScrollState)
         return;
     }
 
-    // Convert groups to (first_letter, line_count) pairs for the shared logic
-    let group_data = app_state.library.groups.iter().map(|grp| {
-        let first_char = grp.artist.chars().next().unwrap_or('?');
-        let line_count = group::line_count(grp);
-        (first_char, line_count)
-    });
+    let sort_order = app_state.sort_order;
 
-    // Use egui's standard cluster threshold (1.5% of viewport)
+    // Convert groups to (label, line_count) pairs based on sort order.
+    let group_data: Vec<(Cow<'_, str>, usize)> = app_state
+        .library
+        .groups
+        .iter()
+        .map(|grp| {
+            let label: Cow<'_, str> = match sort_order {
+                SortOrder::Alphabetical => {
+                    // First letter of artist name.
+                    Cow::Owned(grp.artist.chars().next().unwrap_or('?').to_string())
+                }
+                SortOrder::NewestFirst => {
+                    // Full release year.
+                    Cow::Owned(
+                        grp.year
+                            .map(|y| y.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                    )
+                }
+                SortOrder::RecentlyAdded => {
+                    // Full year from created date (first 4 chars of ISO date).
+                    Cow::Owned(
+                        app_state
+                            .library
+                            .albums
+                            .get(&grp.album_id)
+                            .map(|a| a.created.chars().take(4).collect::<String>())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "?".to_string()),
+                    )
+                }
+            };
+            let line_count = group::line_count(grp);
+            (label, line_count)
+        })
+        .collect();
+
+    // Use egui's standard cluster threshold (1.5% of viewport).
     const CLUSTER_THRESHOLD: f32 = 0.015;
 
-    state.positions = shared_alphabet::compute_positions(group_data, CLUSTER_THRESHOLD);
+    state.positions = shared_scroll::compute_positions(group_data.into_iter(), CLUSTER_THRESHOLD);
 }
 
-/// Renders alphabet letters to the right side where the scrollbar would be
+/// Renders scroll indicator labels to the right side where the scrollbar would be
 pub fn render(
     ui: &mut Ui,
     style: &style::Style,
-    state: &mut AlphabetScrollState,
+    state: &mut LibraryScrollState,
     viewport_rect: &Rect,
     app_state: &bc::AppState,
     playing_track_id: Option<&TrackId>,
@@ -54,24 +92,24 @@ pub fn render(
     }
 
     let font_id = TextStyle::Body.resolve(ui.style());
-    let letter_color = style.text_color32();
+    let label_color = style.text_color32();
 
     let viewport_height = viewport_rect.height();
 
     // Map fractions to pixel positions
     // Clustering is already done in the precomputation step
     let scroll_style = &ui.style().spacing.scroll;
-    let letter_x =
+    let label_x =
         viewport_rect.right() - scroll_style.bar_outer_margin - scroll_style.bar_width / 2.0;
 
-    for (letter, fraction) in &state.positions {
+    for (label, fraction) in &state.positions {
         let y = viewport_rect.top() + (fraction * viewport_height);
         ui.painter().text(
-            pos2(letter_x, y),
+            pos2(label_x, y),
             Align2::CENTER_CENTER,
-            *letter,
+            label,
             font_id.clone(),
-            letter_color,
+            label_color,
         );
     }
 

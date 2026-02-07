@@ -6,10 +6,10 @@
 //!
 //! Both views share common rendering logic via [`shared`].
 
-mod alphabet_scroll;
 pub mod full;
 mod group;
 mod incremental_search;
+mod library_scroll;
 pub mod mini;
 pub mod shared;
 mod track;

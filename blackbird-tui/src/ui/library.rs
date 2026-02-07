@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use blackbird_client_shared::alphabet_scroll;
+use blackbird_client_shared::library_scroll;
 use blackbird_core::{
-    self as bc,
+    self as bc, SortOrder,
     blackbird_state::{CoverArtId, TrackId},
     util::seconds_to_hms_string,
 };
@@ -21,6 +21,15 @@ use crate::{
 
 use super::{StyleExt, string_to_color};
 
+/// Returns the width of the scroll indicator based on sort order.
+/// Alphabetical uses single letters (1 char), year-based modes use full years (4 chars).
+fn scroll_indicator_width(sort_order: SortOrder) -> usize {
+    match sort_order {
+        SortOrder::Alphabetical => 1,
+        SortOrder::NewestFirst | SortOrder::RecentlyAdded => 4,
+    }
+}
+
 /// A single entry in the flat library list.
 #[derive(Debug, Clone)]
 pub enum LibraryEntry {
@@ -28,6 +37,8 @@ pub enum LibraryEntry {
         artist: String,
         album: String,
         year: Option<i32>,
+        /// The date the album was added to the library (ISO 8601 format).
+        created: Option<String>,
         duration: u32,
         starred: bool,
         album_id: blackbird_core::blackbird_state::AlbumId,
@@ -129,10 +140,16 @@ impl LibraryState {
 
         self.cached_flat_library.clear();
         for group in &state.library.groups {
+            let created = state
+                .library
+                .albums
+                .get(&group.album_id)
+                .map(|a| a.created.to_string());
             self.cached_flat_library.push(LibraryEntry::GroupHeader {
                 artist: group.artist.to_string(),
                 album: group.album.to_string(),
                 year: group.year,
+                created,
                 duration: group.duration,
                 starred: group.starred,
                 album_id: group.album_id.clone(),
@@ -296,8 +313,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Calculate total content height in lines to determine if scrollbar is needed.
     let total_lines = total_entry_lines(&entries);
+    let sort_order = app.logic.get_sort_order();
+    let indicator_width = scroll_indicator_width(sort_order);
 
-    let geo = super::layout::library_geometry(inner, total_lines);
+    let geo = super::layout::library_geometry(inner, total_lines, indicator_width);
     let has_scrollbar = geo.has_scrollbar;
     let list_width = geo.list_width;
 
@@ -311,6 +330,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     artist,
                     album,
                     year,
+                    created,
                     duration,
                     starred,
                     cover_art_id,
@@ -331,7 +351,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .copied()
                         .unwrap_or_default();
 
+                    // Format year and added date.
                     let year_str = year.map(|y| format!(" ({y})")).unwrap_or_default();
+                    let added_str = created
+                        .as_ref()
+                        .and_then(|c| c.get(..10)) // Extract "YYYY-MM-DD" from ISO 8601
+                        .map(|d| format!(" +{d}"))
+                        .unwrap_or_default();
                     let dur_str = seconds_to_hms_string(*duration, false);
 
                     // Line 1: Album art (rows 0-1) + artist name
@@ -345,13 +371,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     ));
                     let line1 = Line::from(line1_spans);
 
-                    // Line 2: Album art (rows 2-3) + album name + year + duration + heart (right-aligned)
+                    // Line 2: Album art (rows 2-3) + album name + year + added + duration + heart (right-aligned)
                     // Calculate padding for right-alignment using unicode width.
                     let left_content_width = super::layout::ART_LEFT_MARGIN as usize
                         + art_cols as usize
                         + 1
                         + album.width()
-                        + year_str.width(); // margin + art + space + album + year
+                        + year_str.width()
+                        + added_str.width(); // margin + art + space + album + year + added
                     let right_content = format!(" {dur_str} ");
                     let right_width = right_content.width() + 1; // duration + heart
                     let padding_needed = list_width
@@ -364,6 +391,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
                     line2_spans.push(Span::styled(
                         year_str,
+                        Style::default().fg(album_year_color),
+                    ));
+                    line2_spans.push(Span::styled(
+                        added_str,
                         Style::default().fg(album_year_color),
                     ));
                     line2_spans.push(Span::raw(" ".repeat(padding_needed)));
@@ -533,8 +564,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Save the offset for use by keyboard navigation.
     app.library.scroll_offset = state.offset();
 
-    // Render combined scrollbar + alphabet indicator on the right column.
-    render_scrollbar_with_alphabet(
+    // Render combined scrollbar + library indicator on the right column.
+    render_scrollbar_with_library_indicator(
         frame,
         &entries,
         inner,
@@ -542,6 +573,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         geo.total_lines,
         centered_offset,
         has_scrollbar,
+        app.logic.get_sort_order(),
         text_color,
         background_color,
     );
@@ -575,9 +607,10 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
     let scroll_offset = app.library.scroll_offset;
     let entries = app.library.get_flat_library(&app.logic);
 
-    // Compute list_width and heart column
+    // Compute list_width and heart column.
     let total_lines = total_entry_lines(entries);
-    let geo = super::layout::library_geometry(area, total_lines);
+    let indicator_width = scroll_indicator_width(app.logic.get_sort_order());
+    let geo = super::layout::library_geometry(area, total_lines, indicator_width);
     let heart_col = geo.heart_col;
 
     // Check if mouse is on the heart column
@@ -607,15 +640,20 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
     None
 }
 
-/// Renders a combined scrollbar + alphabet indicator on the rightmost column.
+/// Renders a combined scrollbar + library scroll indicator on the rightmost column.
+///
+/// The indicator shows different labels based on sort order:
+/// - Alphabetical: first letter of artist name (A-Z)
+/// - NewestFirst: release year
+/// - RecentlyAdded: year from the created date
 ///
 /// Each cell in the column shows one of:
-/// - Letter on thumb: inverted letter (background fg, text bg) — shows both thumb and letter
-/// - Letter off thumb: normal letter
-/// - Thumb without letter: "█" block
+/// - Label on thumb: inverted (background fg, text bg) — shows both thumb and label
+/// - Label off thumb: normal
+/// - Thumb without label: "█" block
 /// - Empty track: "│" line (only when scrollbar visible)
 #[allow(clippy::too_many_arguments)]
-fn render_scrollbar_with_alphabet(
+fn render_scrollbar_with_library_indicator(
     frame: &mut Frame,
     entries: &[LibraryEntry],
     area: Rect,
@@ -623,20 +661,43 @@ fn render_scrollbar_with_alphabet(
     total_lines: usize,
     scroll_offset: usize,
     has_scrollbar: bool,
+    sort_order: SortOrder,
     text_color: Color,
     background_color: Color,
 ) {
+    use std::borrow::Cow;
+
     if visible_height == 0 {
         return;
     }
 
     // Aggregate entries into groups for the shared logic.
-    let mut groups: Vec<(char, usize)> = Vec::new();
+    let mut groups: Vec<(Cow<'_, str>, usize)> = Vec::new();
     for entry in entries {
         match entry {
-            LibraryEntry::GroupHeader { artist, .. } => {
-                let first_char = artist.chars().next().unwrap_or('?');
-                groups.push((first_char, entry.height()));
+            LibraryEntry::GroupHeader {
+                artist,
+                year,
+                created,
+                ..
+            } => {
+                let label: Cow<'_, str> = match sort_order {
+                    SortOrder::Alphabetical => {
+                        Cow::Owned(artist.chars().next().unwrap_or('?').to_string())
+                    }
+                    SortOrder::NewestFirst => Cow::Owned(
+                        year.map(|y| y.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                    ),
+                    SortOrder::RecentlyAdded => Cow::Owned(
+                        created
+                            .as_ref()
+                            .map(|c| c.chars().take(4).collect::<String>())
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or_else(|| "?".to_string()),
+                    ),
+                };
+                groups.push((label, entry.height()));
             }
             LibraryEntry::Track { .. } => {
                 if let Some(last) = groups.last_mut() {
@@ -647,14 +708,14 @@ fn render_scrollbar_with_alphabet(
     }
 
     let cluster_threshold = 1.0 / visible_height as f32;
-    let positions = alphabet_scroll::compute_positions(groups.into_iter(), cluster_threshold);
+    let positions = library_scroll::compute_positions(groups.into_iter(), cluster_threshold);
 
-    // Build a map of screen row -> letter for quick lookup.
-    let mut letter_at_row: HashMap<u16, char> = HashMap::new();
-    for (letter, fraction) in &positions {
+    // Build a map of screen row -> label for quick lookup.
+    let mut label_at_row: HashMap<u16, &str> = HashMap::new();
+    for (label, fraction) in &positions {
         let row = (fraction * visible_height as f32) as u16;
         if row < area.height {
-            letter_at_row.insert(row, *letter);
+            label_at_row.insert(row, label.as_str());
         }
     }
 
@@ -670,33 +731,45 @@ fn render_scrollbar_with_alphabet(
         None
     };
 
-    let col_x = area.x + area.width.saturating_sub(1);
+    // Rightmost position for right-aligned labels.
+    let right_edge = area.x + area.width;
 
     for row in 0..area.height {
         let is_thumb = thumb_range
             .map(|(s, e)| row >= s && row < e)
             .unwrap_or(false);
-        let letter = letter_at_row.get(&row);
+        let label = label_at_row.get(&row);
 
-        let (content, style) = match (letter, is_thumb, has_scrollbar) {
-            // Letter on thumb: inverted
-            (Some(ch), true, _) => (
-                ch.to_string(),
-                Style::default().fg(background_color).bg(text_color),
-            ),
-            // Letter off thumb
-            (Some(ch), false, _) => (ch.to_string(), Style::default().fg(text_color)),
-            // Thumb without letter
-            (None, true, _) => ("█".to_string(), Style::default().fg(text_color)),
-            // Scrollbar track (no thumb, no letter)
-            (None, false, true) => ("│".to_string(), Style::default().fg(text_color)),
-            // No scrollbar, no letter: skip
-            (None, false, false) => continue,
-        };
-
-        let span = Span::styled(content, style);
-        let rect = Rect::new(col_x, area.y + row, 1, 1);
-        frame.render_widget(Paragraph::new(Line::from(span)), rect);
+        // Render label or scrollbar indicator, right-aligned.
+        if let Some(lbl) = label {
+            // Right-align label at the edge.
+            let label_width = lbl.len() as u16;
+            let label_x = right_edge.saturating_sub(label_width);
+            let style = if is_thumb {
+                Style::default().fg(background_color).bg(text_color)
+            } else {
+                Style::default().fg(text_color)
+            };
+            let label_rect = Rect::new(label_x, area.y + row, label_width.min(area.width), 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(*lbl, style))),
+                label_rect,
+            );
+        } else {
+            // Scrollbar indicator (thumb or track) at rightmost column.
+            let scrollbar_content = match (is_thumb, has_scrollbar) {
+                (true, _) => "█",
+                (false, true) => "│",
+                (false, false) => continue,
+            };
+            let scrollbar_style = Style::default().fg(text_color);
+            let scrollbar_x = right_edge.saturating_sub(1);
+            let scrollbar_rect = Rect::new(scrollbar_x, area.y + row, 1, 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(scrollbar_content, scrollbar_style))),
+                scrollbar_rect,
+            );
+        }
     }
 }
 
@@ -710,6 +783,11 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Previous => app.logic.previous(),
         Action::Stop => app.logic.stop_current(),
         Action::CyclePlaybackMode => app.cycle_playback_mode(),
+        Action::ToggleSortOrder => {
+            let next = blackbird_client_shared::toggle_sort_order(app.logic.get_sort_order());
+            app.logic.set_sort_order(next);
+            app.library.mark_dirty();
+        }
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),
         Action::Logs => app.toggle_logs(),
@@ -848,10 +926,13 @@ pub fn handle_key(app: &mut App, action: Action) {
 /// Handle click in the library area.
 pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let entries = app.library.get_flat_library(&app.logic).to_vec();
-    let scrollbar_x = library_area.x + library_area.width - 1;
 
-    // Click on scrollbar (rightmost column)
-    if x == scrollbar_x {
+    // Determine the scroll indicator area (rightmost columns based on sort order).
+    let indicator_width = scroll_indicator_width(app.logic.get_sort_order()) as u16;
+    let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
+
+    // Click on scroll indicator area.
+    if x >= scroll_area_start {
         scroll_to_y(app, &entries, library_area, y);
         app.library.scrollbar_dragging = true;
         return;
@@ -885,7 +966,8 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
 
     // Check if clicking on the heart (last content character before scrollbar).
     let total_lines = total_entry_lines(&entries);
-    let geo = super::layout::library_geometry(library_area, total_lines);
+    let indicator_width = scroll_indicator_width(app.logic.get_sort_order());
+    let geo = super::layout::library_geometry(library_area, total_lines, indicator_width);
     let heart_col = geo.heart_col;
     let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
 
@@ -942,9 +1024,11 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
         return true;
     }
 
-    let scrollbar_x = library_area.x + library_area.width - 1;
+    // Check if starting a drag in the scroll indicator area.
+    let indicator_width = scroll_indicator_width(app.logic.get_sort_order()) as u16;
+    let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
 
-    if x == scrollbar_x && y >= library_area.y && y < library_area.y + library_area.height {
+    if x >= scroll_area_start && y >= library_area.y && y < library_area.y + library_area.height {
         let entries = app.library.get_flat_library(&app.logic).to_vec();
         scroll_to_y(app, &entries, library_area, y);
         app.library.click_pending = None;

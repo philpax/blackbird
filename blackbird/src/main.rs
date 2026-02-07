@@ -40,6 +40,7 @@ fn main() {
         password: config.shared.server.password.clone(),
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
+        sort_order: config.shared.last_playback.sort_order,
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
@@ -332,6 +333,7 @@ impl eframe::App for App {
                 track_and_position.position.as_secs_f64();
         }
         config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.shared.last_playback.sort_order = self.logic.get_sort_order();
         config.save();
     }
 }

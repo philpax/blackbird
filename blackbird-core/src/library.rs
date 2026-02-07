@@ -5,6 +5,8 @@ use std::{
 
 use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
 
+use crate::SortOrder;
+
 const SEARCH_CACHE_SIZE: usize = 50;
 
 #[derive(Default)]
@@ -29,66 +31,19 @@ pub struct Library {
 impl Library {
     pub fn populate(
         &mut self,
-        track_ids: Vec<TrackId>,
+        _track_ids: Vec<TrackId>,
         track_map: HashMap<TrackId, Track>,
         groups: Vec<Arc<Group>>,
         albums: HashMap<AlbumId, Album>,
+        sort_order: SortOrder,
     ) {
         self.albums = albums;
         self.track_map = track_map;
-        self.track_ids = track_ids;
-
-        // Clear search cache since library data is changing
-        self.search_cache.clear();
-        self.search_cache_order.clear();
-
-        // Populate reverse lookup maps for efficient group shuffle navigation
-        self.track_to_group_index.clear();
-        self.track_to_group_track_index.clear();
-        for (group_idx, group) in groups.iter().enumerate() {
-            for (track_idx, track_id) in group.tracks.iter().enumerate() {
-                self.track_to_group_index
-                    .insert(track_id.clone(), group_idx);
-                self.track_to_group_track_index
-                    .insert(track_id.clone(), track_idx);
-            }
-            self.album_to_group_index
-                .insert(group.album_id.clone(), group_idx);
-        }
-
-        fn populate_track_search_queries(
-            track_ids: &[TrackId],
-            track_map: &HashMap<TrackId, Track>,
-            albums: &HashMap<AlbumId, Album>,
-        ) -> Vec<String> {
-            let mut queries = vec![];
-            for track_id in track_ids {
-                let track = track_map.get(track_id).unwrap();
-                let album = track.album_id.as_ref().and_then(|id| albums.get(id));
-                let artist = track
-                    .artist
-                    .as_deref()
-                    .or(album.as_ref().map(|a| a.artist.as_str()));
-
-                let mut query = String::new();
-                if let Some(artist) = artist {
-                    query.push_str(&artist.to_lowercase());
-                    query.push(' ');
-                }
-                if let Some(album) = album {
-                    query.push_str(&album.name.to_lowercase());
-                    query.push(' ');
-                }
-                query.push_str(&track.title.to_lowercase());
-                queries.push(query);
-            }
-
-            queries
-        }
-        self.track_search_queries =
-            populate_track_search_queries(&self.track_ids, &self.track_map, &self.albums);
-
         self.groups = groups;
+
+        // Build derived data structures (track_ids, lookup maps, search queries).
+        self.resort(sort_order);
+
         self.has_loaded_all_tracks = true;
     }
 
@@ -150,5 +105,98 @@ impl Library {
         }
 
         results
+    }
+
+    /// Resorts the library groups based on the given sort order and rebuilds all lookup structures.
+    pub fn resort(&mut self, order: SortOrder) {
+        match order {
+            SortOrder::Alphabetical => {
+                // Sort by artist name (case-insensitive), then album name.
+                self.groups.sort_by(|a, b| {
+                    a.artist
+                        .to_lowercase()
+                        .cmp(&b.artist.to_lowercase())
+                        .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+                });
+            }
+            SortOrder::NewestFirst => {
+                // Sort by year descending (newest first), with None years at the end.
+                // Within the same year, sort alphabetically by artist then album.
+                self.groups.sort_by(|a, b| {
+                    match (a.year, b.year) {
+                        (Some(y1), Some(y2)) => y2.cmp(&y1), // Descending by year
+                        (Some(_), None) => std::cmp::Ordering::Less,
+                        (None, Some(_)) => std::cmp::Ordering::Greater,
+                        (None, None) => std::cmp::Ordering::Equal,
+                    }
+                    .then_with(|| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
+                    .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+                });
+            }
+            SortOrder::RecentlyAdded => {
+                // Sort by created date descending (most recently added first).
+                // ISO 8601 dates sort correctly as strings.
+                let albums = &self.albums;
+                self.groups.sort_by(|a, b| {
+                    let created_a = albums.get(&a.album_id).map(|album| album.created.as_str());
+                    let created_b = albums.get(&b.album_id).map(|album| album.created.as_str());
+                    // Reverse comparison for descending order (most recent first).
+                    created_b
+                        .cmp(&created_a)
+                        .then_with(|| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
+                        .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+                });
+            }
+        }
+
+        // Rebuild track_ids from reordered groups.
+        self.track_ids.clear();
+        for group in &self.groups {
+            for track_id in &group.tracks {
+                self.track_ids.push(track_id.clone());
+            }
+        }
+
+        // Rebuild reverse lookup maps.
+        self.track_to_group_index.clear();
+        self.track_to_group_track_index.clear();
+        self.album_to_group_index.clear();
+        for (group_idx, group) in self.groups.iter().enumerate() {
+            for (track_idx, track_id) in group.tracks.iter().enumerate() {
+                self.track_to_group_index
+                    .insert(track_id.clone(), group_idx);
+                self.track_to_group_track_index
+                    .insert(track_id.clone(), track_idx);
+            }
+            self.album_to_group_index
+                .insert(group.album_id.clone(), group_idx);
+        }
+
+        // Clear search cache since the order has changed.
+        self.search_cache.clear();
+        self.search_cache_order.clear();
+
+        // Rebuild track search queries to match new order.
+        self.track_search_queries.clear();
+        for track_id in &self.track_ids {
+            let track = self.track_map.get(track_id).unwrap();
+            let album = track.album_id.as_ref().and_then(|id| self.albums.get(id));
+            let artist = track
+                .artist
+                .as_deref()
+                .or(album.as_ref().map(|a| a.artist.as_str()));
+
+            let mut query = String::new();
+            if let Some(artist) = artist {
+                query.push_str(&artist.to_lowercase());
+                query.push(' ');
+            }
+            if let Some(album) = album {
+                query.push_str(&album.name.to_lowercase());
+                query.push(' ');
+            }
+            query.push_str(&track.title.to_lowercase());
+            self.track_search_queries.push(query);
+        }
     }
 }

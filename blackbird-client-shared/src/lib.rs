@@ -1,4 +1,4 @@
-use blackbird_core::PlaybackMode;
+use blackbird_core::{PlaybackMode, SortOrder};
 
 /// Volume adjustment step (5%).
 pub const VOLUME_STEP: f32 = 0.05;
@@ -6,9 +6,9 @@ pub const VOLUME_STEP: f32 = 0.05;
 /// Seek step in seconds.
 pub const SEEK_STEP_SECS: i64 = 5;
 
-pub mod alphabet_scroll;
 pub mod config;
 pub mod cover_art_cache;
+pub mod library_scroll;
 pub mod lyrics;
 pub mod style;
 
@@ -28,6 +28,15 @@ pub fn next_playback_mode(current: PlaybackMode) -> PlaybackMode {
         PlaybackMode::LikedShuffle => PlaybackMode::GroupShuffle,
         PlaybackMode::GroupShuffle => PlaybackMode::LikedGroupShuffle,
         PlaybackMode::LikedGroupShuffle => PlaybackMode::Sequential,
+    }
+}
+
+/// Cycles through sort orders.
+pub fn toggle_sort_order(current: SortOrder) -> SortOrder {
+    match current {
+        SortOrder::Alphabetical => SortOrder::NewestFirst,
+        SortOrder::NewestFirst => SortOrder::RecentlyAdded,
+        SortOrder::RecentlyAdded => SortOrder::Alphabetical,
     }
 }
 

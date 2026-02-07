@@ -10,6 +10,7 @@ pub enum Action {
     Next,
     Previous,
     CyclePlaybackMode,
+    ToggleSortOrder,
     Search,
     Lyrics,
     Logs,
@@ -41,6 +42,7 @@ pub const KEY_STOP: KeyCode = KeyCode::Char('s');
 pub const KEY_NEXT: KeyCode = KeyCode::Char('n');
 pub const KEY_PREVIOUS: KeyCode = KeyCode::Char('p');
 pub const KEY_CYCLE_MODE: KeyCode = KeyCode::Char('m');
+pub const KEY_TOGGLE_SORT: KeyCode = KeyCode::Char('o');
 pub const KEY_SEARCH: KeyCode = KeyCode::Char('/');
 pub const KEY_LYRICS: KeyCode = KeyCode::Char('l');
 pub const KEY_LOGS: KeyCode = KeyCode::Char('L');
@@ -86,6 +88,7 @@ impl Action {
             Action::Select => (KEY_SELECT, "play"),
             Action::Back => (KEY_BACK, "close"),
             Action::CyclePlaybackMode => (KEY_CYCLE_MODE, "mode"),
+            Action::ToggleSortOrder => (KEY_TOGGLE_SORT, "order"),
             _ => return None,
         };
         Some((key.to_smolstr(), desc))
@@ -101,6 +104,7 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_PREVIOUS => Some(Action::Previous),
         KEY_STOP => Some(Action::Stop),
         KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
+        KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),
         KEY_SEARCH => Some(Action::Search),
         KEY_LYRICS => Some(Action::Lyrics),
         KEY_LOGS => Some(Action::Logs),
@@ -206,6 +210,7 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::VolumeMode,
     Action::Select,
     Action::CyclePlaybackMode,
+    Action::ToggleSortOrder,
 ];
 
 /// Ordered list of actions to show in the search help bar.

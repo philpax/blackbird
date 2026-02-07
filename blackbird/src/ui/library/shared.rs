@@ -10,7 +10,7 @@ use crate::{
     ui::{style::StyleExt, util},
 };
 
-use super::{alphabet_scroll, group, incremental_search};
+use super::{group, incremental_search, library_scroll};
 
 // ============================================================================
 // State types
@@ -26,8 +26,8 @@ pub struct IncrementalSearchState {
 }
 
 #[derive(Default)]
-pub struct AlphabetScrollState {
-    pub(crate) positions: Vec<(char, f32)>,
+pub struct LibraryScrollState {
+    pub(crate) positions: Vec<(String, f32)>,
     pub(crate) needs_update: bool,
     pub(crate) cached_playing_track_id: Option<TrackId>,
     pub(crate) cached_playing_track_position: Option<f32>,
@@ -36,15 +36,15 @@ pub struct AlphabetScrollState {
 /// Shared state for library view rendering (used by both main library and mini-library)
 #[derive(Default)]
 pub struct LibraryViewState {
-    pub(crate) alphabet_scroll: AlphabetScrollState,
+    pub(crate) library_scroll: LibraryScrollState,
     pub(crate) incremental_search: IncrementalSearchState,
 }
 
 impl LibraryViewState {
-    pub fn invalidate_alphabet_scroll(&mut self) {
-        self.alphabet_scroll.needs_update = true;
-        self.alphabet_scroll.cached_playing_track_id = None;
-        self.alphabet_scroll.cached_playing_track_position = None;
+    pub fn invalidate_library_scroll(&mut self) {
+        self.library_scroll.needs_update = true;
+        self.library_scroll.cached_playing_track_id = None;
+        self.library_scroll.cached_playing_track_position = None;
     }
 }
 
@@ -122,10 +122,10 @@ pub(crate) fn render_library_view(
             return;
         }
 
-        // Compute alphabet scroll positions if library was populated
-        if view_state.alphabet_scroll.needs_update {
-            alphabet_scroll::compute_positions(logic, &mut view_state.alphabet_scroll);
-            view_state.alphabet_scroll.needs_update = false;
+        // Compute library scroll positions if library was populated
+        if view_state.library_scroll.needs_update {
+            library_scroll::compute_positions(logic, &mut view_state.library_scroll);
+            view_state.library_scroll.needs_update = false;
         }
 
         // Handle incremental search (type-to-search)
@@ -253,11 +253,11 @@ pub(crate) fn render_library_view(
                 }
             });
 
-        // Render alphabet scroll indicator
-        alphabet_scroll::render(
+        // Render library scroll indicator
+        library_scroll::render(
             ui,
             &config.style,
-            &mut view_state.alphabet_scroll,
+            &mut view_state.library_scroll,
             &ui.min_rect(),
             &logic.get_state().read().unwrap(),
             playing_track_id.as_ref(),

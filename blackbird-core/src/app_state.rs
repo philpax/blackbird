@@ -5,6 +5,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Library, TrackDisplayDetails, queue::QueueState};
 
+/// The sort order for displaying albums in the library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SortOrder {
+    /// Sort albums alphabetically by artist name.
+    #[default]
+    Alphabetical,
+    /// Sort albums by year, newest first.
+    NewestFirst,
+    /// Sort albums by when they were added to the library, most recent first.
+    RecentlyAdded,
+}
+
+impl SortOrder {
+    /// Returns a short human-readable label for the sort order.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SortOrder::Alphabetical => "a-z",
+            SortOrder::NewestFirst => "newest",
+            SortOrder::RecentlyAdded => "recent",
+        }
+    }
+}
+
+impl std::fmt::Display for SortOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 /// The playback mode for the player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PlaybackMode {
@@ -54,6 +83,7 @@ pub struct AppState {
     // bit ugly but cbf plumbing it better
     pub last_requested_track_for_ui_scroll: Option<TrackId>,
     pub playback_mode: PlaybackMode,
+    pub sort_order: SortOrder,
     pub queue: QueueState,
     pub volume: f32,
 
@@ -70,6 +100,7 @@ impl Default for AppState {
             started_loading_track: None,
             last_requested_track_for_ui_scroll: None,
             playback_mode: PlaybackMode::default(),
+            sort_order: SortOrder::default(),
             queue: QueueState::new(),
             volume: 0.0,
             scrobble_state: ScrobbleState::default(),

@@ -194,10 +194,20 @@ pub struct LibraryGeometry {
     pub heart_col: usize,
 }
 
-pub fn library_geometry(area: Rect, total_lines: usize) -> LibraryGeometry {
+/// Computes library geometry with the given scroll indicator width.
+///
+/// The `scroll_indicator_width` is the number of columns reserved for scroll
+/// indicator labels (1 for single letters, 4 for full years).
+pub fn library_geometry(
+    area: Rect,
+    total_lines: usize,
+    scroll_indicator_width: usize,
+) -> LibraryGeometry {
     let visible_height = area.height as usize;
     let has_scrollbar = total_lines > visible_height;
-    let list_width = area.width as usize - 1 - if has_scrollbar { 1 } else { 0 };
+    // Reserve space for scroll indicator labels plus scrollbar track.
+    let reserved = scroll_indicator_width + if has_scrollbar { 1 } else { 0 };
+    let list_width = (area.width as usize).saturating_sub(reserved);
     let heart_col = area.x as usize + list_width.saturating_sub(HEART_COL_OFFSET);
     LibraryGeometry {
         total_lines,

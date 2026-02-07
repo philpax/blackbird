@@ -320,6 +320,14 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
 
     for action in help_actions {
         if let Some((key, label)) = action.help_label() {
+            // For sort order, show the current value instead of static label.
+            let label: std::borrow::Cow<'static, str> = if *action == keys::Action::ToggleSortOrder
+            {
+                app.logic.get_sort_order().as_str().into()
+            } else {
+                label.into()
+            };
+
             spans.push(Span::styled(
                 String::from(key),
                 Style::default().fg(style.track_name_playing_color()),

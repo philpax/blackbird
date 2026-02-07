@@ -13,6 +13,9 @@ pub struct Config {
     pub style: ui::Style,
     #[serde(default)]
     pub keybindings: Keybindings,
+    /// Catch-all for unknown top-level sections (e.g. TUI-specific fields).
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 impl Config {
     pub const FILENAME: &str = "config.toml";
@@ -37,6 +40,9 @@ pub struct General {
     pub window_height: u32,
     pub volume: f32,
     pub incremental_search_timeout_ms: u64,
+    /// Catch-all for unknown fields (e.g. TUI-specific settings like tick_rate_ms).
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 impl Default for General {
     fn default() -> Self {
@@ -48,6 +54,7 @@ impl Default for General {
             window_height: 1280,
             volume: 1.0,
             incremental_search_timeout_ms: 5000,
+            extra: toml::Table::new(),
         }
     }
 }

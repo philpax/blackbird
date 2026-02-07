@@ -17,6 +17,7 @@ pub const KEY_LYRICS: Key = Key::L;
 pub const KEY_STAR: Key = Key::Num8; // '*' is Shift+8
 pub const KEY_VOLUME_UP: Key = Key::ArrowUp;
 pub const KEY_VOLUME_DOWN: Key = Key::ArrowDown;
+pub const KEY_TOGGLE_SORT: Key = Key::O;
 
 /// Actions that can be triggered by keyboard shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +27,7 @@ pub enum Action {
     Next,
     Previous,
     CyclePlaybackMode,
+    ToggleSortOrder,
     Star,
     SeekForward,
     SeekBackward,
@@ -45,6 +47,7 @@ impl Action {
             Action::Next => KEY_NEXT,
             Action::Previous => KEY_PREVIOUS,
             Action::CyclePlaybackMode => KEY_CYCLE_MODE,
+            Action::ToggleSortOrder => KEY_TOGGLE_SORT,
             Action::Star => KEY_STAR,
             Action::SeekForward => KEY_SEEK_FWD,
             Action::SeekBackward => KEY_SEEK_BACK,
@@ -70,6 +73,7 @@ impl Action {
             Action::Next => "next",
             Action::Previous => "prev",
             Action::CyclePlaybackMode => "mode",
+            Action::ToggleSortOrder => "order",
             Action::Star => "star",
             Action::SeekForward => "seek+",
             Action::SeekBackward => "seek-",
@@ -99,6 +103,7 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::VolumeUp,
     Action::VolumeDown,
     Action::CyclePlaybackMode,
+    Action::ToggleSortOrder,
 ];
 
 /// Maps a key press to a library action.
@@ -110,6 +115,7 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS => Some(Action::Previous),
         KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
+        KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),
         KEY_SEEK_BACK => Some(Action::SeekBackward),
         KEY_SEEK_FWD => Some(Action::SeekForward),
         KEY_GOTO_PLAYING => Some(Action::GotoPlaying),

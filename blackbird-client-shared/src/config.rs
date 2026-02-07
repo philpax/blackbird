@@ -1,5 +1,5 @@
 /// Configuration types shared between the egui and TUI clients.
-use blackbird_core::{PlaybackMode, blackbird_state::TrackId};
+use blackbird_core::{PlaybackMode, SortOrder, blackbird_state::TrackId};
 use serde::{Deserialize, Serialize};
 
 /// Load a TOML config file, returning `T::default()` if the file doesn't exist.
@@ -40,6 +40,8 @@ pub struct LastPlayback {
     pub track_position_secs: f64,
     /// The playback mode that was active.
     pub playback_mode: PlaybackMode,
+    /// The library sort order that was active.
+    pub sort_order: SortOrder,
 }
 impl Default for LastPlayback {
     fn default() -> Self {
@@ -47,6 +49,7 @@ impl Default for LastPlayback {
             track_id: None,
             track_position_secs: 0.0,
             playback_mode: PlaybackMode::default(),
+            sort_order: SortOrder::default(),
         }
     }
 }

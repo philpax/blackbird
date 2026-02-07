@@ -36,6 +36,8 @@ pub struct Album {
     pub _genre: Option<String>,
     /// Whether the album is starred.
     pub starred: bool,
+    /// The date the album was added to the library (ISO 8601 format).
+    pub created: SmolStr,
 }
 impl From<bs::AlbumID3> for Album {
     fn from(album: bs::AlbumID3) -> Self {
@@ -53,6 +55,7 @@ impl From<bs::AlbumID3> for Album {
             year: album.year,
             _genre: album.genre,
             starred: album.starred.is_some(),
+            created: album.created.into(),
         }
     }
 }

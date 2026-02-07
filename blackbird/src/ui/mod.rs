@@ -200,6 +200,16 @@ impl App {
                             );
                             logic.set_playback_mode(next);
                         }
+                        keys::Action::ToggleSortOrder => {
+                            let next =
+                                blackbird_client_shared::toggle_sort_order(logic.get_sort_order());
+                            logic.set_sort_order(next);
+                            self.ui_state.library_view.invalidate_library_scroll();
+                            self.ui_state
+                                .mini_library
+                                .library_view
+                                .invalidate_library_scroll();
+                        }
                         keys::Action::SeekBackward => {
                             seek_relative(logic, -blackbird_client_shared::SEEK_STEP_SECS);
                         }
@@ -266,11 +276,11 @@ impl App {
 
         // Process library population signal
         while let Ok(()) = self.library_populated_rx.try_recv() {
-            self.ui_state.library_view.invalidate_alphabet_scroll();
+            self.ui_state.library_view.invalidate_library_scroll();
             self.ui_state
                 .mini_library
                 .library_view
-                .invalidate_alphabet_scroll();
+                .invalidate_library_scroll();
         }
 
         if self.ui_state.search.open {
@@ -326,6 +336,15 @@ impl App {
                     for action in keys::LIBRARY_HELP {
                         let mut job = LayoutJob::default();
                         let (key, label) = action.help_label();
+
+                        // For sort order, show the current value instead of static label.
+                        let label: std::borrow::Cow<'static, str> =
+                            if *action == keys::Action::ToggleSortOrder {
+                                logic.get_sort_order().as_str().into()
+                            } else {
+                                label.into()
+                            };
+
                         job.append(
                             &key,
                             0.0,

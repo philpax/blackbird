@@ -177,6 +177,7 @@ impl App {
             config.shared.last_playback.track_position_secs = tap.position.as_secs_f64();
         }
         config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.shared.last_playback.sort_order = self.logic.get_sort_order();
         config.save();
     }
 
