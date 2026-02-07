@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blackbird_core::{self as bc, PlaybackMode, PlaybackToLogicMessage};
+use blackbird_core::{self as bc, PlaybackToLogicMessage};
 
 use crate::{
     config::Config,
@@ -165,16 +165,7 @@ impl App {
     }
 
     pub fn cycle_playback_mode(&mut self) {
-        let current = self.logic.get_playback_mode();
-        let next = match current {
-            PlaybackMode::Sequential => PlaybackMode::RepeatOne,
-            PlaybackMode::RepeatOne => PlaybackMode::GroupRepeat,
-            PlaybackMode::GroupRepeat => PlaybackMode::Shuffle,
-            PlaybackMode::Shuffle => PlaybackMode::LikedShuffle,
-            PlaybackMode::LikedShuffle => PlaybackMode::GroupShuffle,
-            PlaybackMode::GroupShuffle => PlaybackMode::LikedGroupShuffle,
-            PlaybackMode::LikedGroupShuffle => PlaybackMode::Sequential,
-        };
+        let next = blackbird_client_shared::next_playback_mode(self.logic.get_playback_mode());
         self.logic.set_playback_mode(next);
     }
 

@@ -21,6 +21,8 @@ pub struct IncrementalSearchState {
     pub(crate) query: String,
     pub(crate) last_input: Option<Instant>,
     pub(crate) result_index: usize,
+    /// Whether the search is currently active (activated with `/`).
+    pub(crate) active: bool,
 }
 
 #[derive(Default)]

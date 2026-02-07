@@ -1,5 +1,7 @@
 use std::sync::Arc;
+use std::time::Duration;
 
+mod keys;
 mod library;
 mod lyrics;
 mod playing_track;
@@ -12,7 +14,8 @@ pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::{Style, StyleExt};
 
 use egui::{
-    CentralPanel, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText, Visuals,
+    CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText,
+    TextFormat, TopBottomPanel, Visuals, text::LayoutJob,
 };
 
 use crate::{App, bc, config::Config};
@@ -161,6 +164,98 @@ impl App {
             }
         });
 
+        // Handle keyboard shortcuts when no modal is consuming input
+        let search_active = self.ui_state.library_view.incremental_search.active;
+        let can_handle_shortcuts =
+            !self.ui_state.search.open && !self.ui_state.lyrics.open && !search_active;
+
+        if can_handle_shortcuts {
+            ctx.input(|i| {
+                for event in &i.events {
+                    let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                    else {
+                        continue;
+                    };
+                    // Only handle shortcuts without modifiers (except shift for '*')
+                    if modifiers.command || modifiers.alt || modifiers.ctrl {
+                        continue;
+                    }
+
+                    let Some(action) = keys::library_action(*key, modifiers.shift) else {
+                        continue;
+                    };
+                    match action {
+                        keys::Action::PlayPause => logic.toggle_current(),
+                        keys::Action::Stop => logic.stop_current(),
+                        keys::Action::Next => logic.next(),
+                        keys::Action::Previous => logic.previous(),
+                        keys::Action::CyclePlaybackMode => {
+                            let next = blackbird_client_shared::next_playback_mode(
+                                logic.get_playback_mode(),
+                            );
+                            logic.set_playback_mode(next);
+                        }
+                        keys::Action::SeekBackward => {
+                            seek_relative(logic, -blackbird_client_shared::SEEK_STEP_SECS);
+                        }
+                        keys::Action::SeekForward => {
+                            seek_relative(logic, blackbird_client_shared::SEEK_STEP_SECS);
+                        }
+                        keys::Action::GotoPlaying => {
+                            if let Some(track_id) = logic.get_playing_track_id() {
+                                let state = logic.get_state();
+                                let mut state = state.write().unwrap();
+                                state.last_requested_track_for_ui_scroll = Some(track_id);
+                            }
+                        }
+                        keys::Action::SearchInline => {
+                            self.ui_state.library_view.incremental_search.active = true;
+                        }
+                        keys::Action::Lyrics => {
+                            self.ui_state.lyrics.open = !self.ui_state.lyrics.open;
+                            if self.ui_state.lyrics.open
+                                && let Some(track_id) = logic.get_playing_track_id()
+                            {
+                                self.ui_state.lyrics.track_id = Some(track_id.clone());
+                                self.ui_state.lyrics.loading = true;
+                                self.ui_state.lyrics.auto_scroll = true;
+                                logic.request_lyrics(&track_id);
+                            }
+                        }
+                        keys::Action::Star => {
+                            let Some(track_id) = logic.get_playing_track_id() else {
+                                continue;
+                            };
+                            let state = logic.get_state();
+                            let state = state.read().unwrap();
+                            let starred = state
+                                .library
+                                .track_map
+                                .get(&track_id)
+                                .is_some_and(|t| t.starred);
+                            drop(state);
+                            logic.set_track_starred(&track_id, !starred);
+                        }
+                        keys::Action::VolumeUp => {
+                            let vol = (logic.get_volume() + blackbird_client_shared::VOLUME_STEP)
+                                .min(1.0);
+                            logic.set_volume(vol);
+                        }
+                        keys::Action::VolumeDown => {
+                            let vol = (logic.get_volume() - blackbird_client_shared::VOLUME_STEP)
+                                .max(0.0);
+                            logic.set_volume(vol);
+                        }
+                    }
+                }
+            });
+        }
+
         // Process incoming lyrics data
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
             if Some(&lyrics_data.track_id) == self.ui_state.lyrics.track_id.as_ref() {
@@ -215,6 +310,45 @@ impl App {
             );
         }
 
+        // Help bar at the bottom
+        TopBottomPanel::bottom("help_bar")
+            .frame(
+                Frame::default()
+                    .inner_margin(Margin::symmetric(8, 4))
+                    .fill(config.style.background_color32()),
+            )
+            .show(ctx, |ui| {
+                let highlight_color = config.style.track_name_playing_color32();
+                let text_color = Color32::from_rgba_unmultiplied(180, 180, 180, 255);
+                let font_id = egui::TextStyle::Body.resolve(ui.style());
+
+                ui.horizontal(|ui| {
+                    for action in keys::LIBRARY_HELP {
+                        let mut job = LayoutJob::default();
+                        let (key, label) = action.help_label();
+                        job.append(
+                            &key,
+                            0.0,
+                            TextFormat {
+                                color: highlight_color,
+                                font_id: font_id.clone(),
+                                ..Default::default()
+                            },
+                        );
+                        job.append(
+                            &format!(":{label}"),
+                            0.0,
+                            TextFormat {
+                                color: text_color,
+                                font_id: font_id.clone(),
+                                ..Default::default()
+                            },
+                        );
+                        ui.label(job);
+                    }
+                });
+            });
+
         CentralPanel::default()
             .frame(
                 Frame::default()
@@ -263,4 +397,19 @@ impl App {
             }
         }
     }
+}
+
+/// Seek relative to the current position by the given number of seconds.
+fn seek_relative(logic: &mut bc::Logic, seconds: i64) {
+    let Some(details) = logic.get_track_display_details() else {
+        return;
+    };
+    let current = details.track_position;
+    let delta = Duration::from_secs(seconds.unsigned_abs());
+    let new_pos = if seconds > 0 {
+        current + delta
+    } else {
+        current.saturating_sub(delta)
+    };
+    logic.seek_current(new_pos);
 }

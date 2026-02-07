@@ -212,8 +212,7 @@ pub fn library_geometry(area: Rect, total_lines: usize) -> LibraryGeometry {
 
 pub const PAGE_SCROLL_SIZE: usize = 20;
 pub const SCROLL_WHEEL_STEPS: usize = 6;
-pub const SEEK_STEP_SECS: i64 = 5;
-pub const VOLUME_STEP: f32 = 0.05;
+pub use blackbird_client_shared::{SEEK_STEP_SECS, VOLUME_STEP};
 
 // ── Log view ────────────────────────────────────────────────────────────────
 

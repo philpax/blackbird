@@ -25,12 +25,13 @@ pub fn pre_render(
     // Timeout for clearing the search buffer (from config)
     let search_timeout = Duration::from_millis(config.general.incremental_search_timeout_ms);
 
-    // Clear search query if timeout has elapsed
+    // Clear search query and deactivate if timeout has elapsed
     if let Some(last_input) = state.last_input
         && last_input.elapsed() > search_timeout
     {
         state.query.clear();
         state.last_input = None;
+        state.active = false;
     }
 
     // Get all search results
@@ -53,8 +54,8 @@ pub fn pre_render(
     // Get the currently selected track from search results
     let current_match = results.get(state.result_index).cloned();
 
-    // Capture keyboard input for incremental search
-    if can_handle_input {
+    // Capture keyboard input for incremental search (only when active)
+    if can_handle_input && state.active {
         ui.input(|i| {
             // Track if query changed (to reset index)
             let mut query_changed = false;
@@ -62,8 +63,9 @@ pub fn pre_render(
             // Handle text input (printable characters)
             for event in &i.events {
                 if let egui::Event::Text(text) = event {
-                    // Only capture single characters (ignore paste operations)
-                    if text.len() == 1 && !text.chars().all(|c| c.is_control()) {
+                    // Only capture single characters (ignore paste operations).
+                    // Also ignore '/' which is used to activate search.
+                    if text.len() == 1 && !text.chars().all(|c| c.is_control()) && text != "/" {
                         state.query.push_str(text);
                         state.last_input = Some(Instant::now());
                         query_changed = true;
@@ -72,10 +74,15 @@ pub fn pre_render(
             }
 
             // Handle backspace
-            if i.key_pressed(Key::Backspace) && !state.query.is_empty() {
-                state.query.pop();
-                state.last_input = Some(Instant::now());
-                query_changed = true;
+            if i.key_pressed(Key::Backspace) {
+                if !state.query.is_empty() {
+                    state.query.pop();
+                    state.last_input = Some(Instant::now());
+                    query_changed = true;
+                } else {
+                    // Backspace with empty query deactivates search
+                    state.active = false;
+                }
             }
 
             // Reset index when query changes
@@ -95,22 +102,23 @@ pub fn pre_render(
                 }
             }
 
-            // Handle escape to clear search
-            if i.key_pressed(Key::Escape) && !state.query.is_empty() {
+            // Handle escape to clear search and deactivate
+            if i.key_pressed(Key::Escape) {
                 state.query.clear();
                 state.last_input = None;
                 state.result_index = 0;
+                state.active = false;
             }
 
-            // Handle enter to play the matched track
-            if i.key_pressed(Key::Enter)
-                && !state.query.is_empty()
-                && let Some(track_id) = &current_match
-            {
-                logic.request_play_track(track_id);
+            // Handle enter to play the matched track and deactivate
+            if i.key_pressed(Key::Enter) {
+                if let Some(track_id) = &current_match {
+                    logic.request_play_track(track_id);
+                }
                 state.query.clear();
                 state.last_input = None;
                 state.result_index = 0;
+                state.active = false;
             }
         });
     }
@@ -126,7 +134,8 @@ pub fn pre_render(
 
 /// Post-render: Display the search overlay UI
 pub fn post_render(ui: &mut Ui, state: &IncrementalSearchState, search_results: &SearchResults) {
-    if state.query.is_empty() {
+    // Only show overlay when search is active
+    if !state.active {
         return;
     }
 
@@ -149,11 +158,13 @@ pub fn post_render(ui: &mut Ui, state: &IncrementalSearchState, search_results: 
     );
 
     // Draw the search query text with result count
-    let result_info = if search_results.results.is_empty() {
-        format!("Search: {} (no results)", state.query)
+    let display_text = if state.query.is_empty() {
+        "Search: _".to_string()
+    } else if search_results.results.is_empty() {
+        format!("Search: {}_ (no results)", state.query)
     } else {
         format!(
-            "Search: {} ({}/{})",
+            "Search: {}_ ({}/{})",
             state.query,
             state.result_index + 1,
             search_results.results.len()
@@ -162,7 +173,7 @@ pub fn post_render(ui: &mut Ui, state: &IncrementalSearchState, search_results: 
     ui.painter().text(
         pos2(overlay_rect.left() + 10.0, overlay_rect.center().y),
         Align2::LEFT_CENTER,
-        result_info,
+        display_text,
         TextStyle::Body.resolve(ui.style()),
         Color32::WHITE,
     );
