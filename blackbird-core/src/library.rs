@@ -109,33 +109,60 @@ impl Library {
 
     /// Resorts the library groups based on the given sort order and rebuilds all lookup structures.
     pub fn resort(&mut self, order: SortOrder) {
+        use std::cmp::Ordering;
+
+        /// Compare by artist name (case-insensitive, ascending).
+        fn cmp_artist(a: &Group, b: &Group) -> Ordering {
+            a.artist.to_lowercase().cmp(&b.artist.to_lowercase())
+        }
+
+        /// Compare by year (descending, newest first; None values sort last).
+        fn cmp_year_desc(a: &Group, b: &Group) -> Ordering {
+            match (a.year, b.year) {
+                (Some(y1), Some(y2)) => y2.cmp(&y1),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+        }
+
+        /// Compare by year (ascending, oldest first; None values sort last).
+        fn cmp_year_asc(a: &Group, b: &Group) -> Ordering {
+            match (a.year, b.year) {
+                (Some(y1), Some(y2)) => y1.cmp(&y2),
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            }
+        }
+
+        /// Compare by album name (case-insensitive, ascending).
+        fn cmp_album(a: &Group, b: &Group) -> Ordering {
+            a.album.to_lowercase().cmp(&b.album.to_lowercase())
+        }
+
+        /// Compare by (artist, year asc, album).
+        fn cmp_artist_year_album(a: &Group, b: &Group) -> Ordering {
+            cmp_artist(a, b)
+                .then_with(|| cmp_year_asc(a, b))
+                .then_with(|| cmp_album(a, b))
+        }
+
         match order {
             SortOrder::Alphabetical => {
-                // Sort by artist name (case-insensitive), then album name.
-                self.groups.sort_by(|a, b| {
-                    a.artist
-                        .to_lowercase()
-                        .cmp(&b.artist.to_lowercase())
-                        .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
-                });
+                // Sort by (artist, year desc, album).
+                self.groups.sort_by(|a, b| cmp_artist_year_album(a, b));
             }
             SortOrder::NewestFirst => {
-                // Sort by year descending (newest first), with None years at the end.
-                // Within the same year, sort alphabetically by artist then album.
+                // Sort by (year desc, artist, album).
                 self.groups.sort_by(|a, b| {
-                    match (a.year, b.year) {
-                        (Some(y1), Some(y2)) => y2.cmp(&y1), // Descending by year
-                        (Some(_), None) => std::cmp::Ordering::Less,
-                        (None, Some(_)) => std::cmp::Ordering::Greater,
-                        (None, None) => std::cmp::Ordering::Equal,
-                    }
-                    .then_with(|| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
-                    .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+                    cmp_year_desc(a, b)
+                        .then_with(|| cmp_artist(a, b))
+                        .then_with(|| cmp_album(a, b))
                 });
             }
             SortOrder::RecentlyAdded => {
-                // Sort by created date descending (most recently added first).
-                // ISO 8601 dates sort correctly as strings.
+                // Sort by (added desc, artist, year desc, album).
                 let albums = &self.albums;
                 self.groups.sort_by(|a, b| {
                     let created_a = albums.get(&a.album_id).map(|album| album.created.as_str());
@@ -143,8 +170,7 @@ impl Library {
                     // Reverse comparison for descending order (most recent first).
                     created_b
                         .cmp(&created_a)
-                        .then_with(|| a.artist.to_lowercase().cmp(&b.artist.to_lowercase()))
-                        .then_with(|| a.album.to_lowercase().cmp(&b.album.to_lowercase()))
+                        .then_with(|| cmp_artist_year_album(a, b))
                 });
             }
         }
