@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use blackbird_core::{self as bc, PlaybackToLogicMessage};
 
@@ -39,6 +39,9 @@ pub struct App {
     pub mouse_position: Option<(u16, u16)>,
     pub album_art_overlay: Option<AlbumArtOverlay>,
 
+    // Config auto-reload
+    last_config_check: Instant,
+
     // Per-view state (owned by their respective modules)
     pub library: LibraryState,
     pub search: SearchState,
@@ -63,6 +66,8 @@ impl App {
             playback_to_logic_rx,
             lyrics_loaded_rx,
             library_populated_rx,
+
+            last_config_check: Instant::now(),
 
             focused_panel: FocusedPanel::Library,
             volume_editing: false,
@@ -128,6 +133,16 @@ impl App {
             } else {
                 // Track not in library yet, re-queue.
                 self.library.scroll_to_track = Some(track_id);
+            }
+        }
+
+        // Reload config from disk if changed (check once per second).
+        if self.last_config_check.elapsed() >= Duration::from_secs(1) {
+            self.last_config_check = Instant::now();
+            let new_config = Config::load();
+            if new_config != self.config {
+                self.config = new_config;
+                self.config.save();
             }
         }
 
