@@ -215,14 +215,25 @@ impl TrayMenu {
 
 /// Initialize platform-specific requirements for tray icon support.
 ///
-/// On Linux, this initializes GTK on the main thread and spawns the GTK
-/// event loop in a background thread. On other platforms this is a no-op.
+/// On Linux, this initializes GTK on the main thread. On other platforms
+/// this is a no-op.
 pub fn init_platform() {
     #[cfg(target_os = "linux")]
     {
         gtk::init().expect("failed to initialize gtk");
-        std::thread::spawn(|| {
-            gtk::main();
-        });
+    }
+}
+
+/// Process pending platform events without blocking.
+///
+/// On Linux, this pumps the GTK event loop (non-blocking). Must be called
+/// periodically from the main thread to keep the tray icon responsive.
+/// On other platforms this is a no-op.
+pub fn pump_platform_events() {
+    #[cfg(target_os = "linux")]
+    {
+        while gtk::events_pending() {
+            gtk::main_iteration_do(false);
+        }
     }
 }
