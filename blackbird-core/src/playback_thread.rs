@@ -8,8 +8,11 @@ use crate::app_state::TrackAndPosition;
 use std::collections::VecDeque;
 
 pub struct PlaybackThread {
-    logic_to_playback_tx: PlaybackThreadSendHandle,
-    _playback_thread_handle: std::thread::JoinHandle<()>,
+    /// Wrapped in `Option` so that `Drop` can close the channel before joining
+    /// the thread.
+    logic_to_playback_tx: Option<PlaybackThreadSendHandle>,
+    /// Wrapped in `Option` so that `Drop` can join the thread.
+    playback_thread_handle: Option<std::thread::JoinHandle<()>>,
     playback_to_logic_rx: PlaybackToLogicRx,
 }
 
@@ -32,6 +35,10 @@ pub enum LogicToPlaybackMessage {
     StopPlayback,
     Seek(Duration),
     SetVolume(f32),
+    /// Sent during shutdown to exit the playback loop immediately. Needed
+    /// because cloned `PlaybackThreadSendHandle`s in tokio tasks keep the
+    /// channel open, so disconnect alone is not reliable.
+    Shutdown,
 }
 
 pub type PlaybackToLogicRx = tokio::sync::broadcast::Receiver<PlaybackToLogicMessage>;
@@ -51,6 +58,21 @@ pub enum PlaybackState {
     Stopped,
 }
 
+impl Drop for PlaybackThread {
+    fn drop(&mut self) {
+        // Send an explicit shutdown message. We can't rely on channel disconnect
+        // because cloned PlaybackThreadSendHandles in tokio tasks keep the
+        // channel open until those tasks complete.
+        if let Some(tx) = self.logic_to_playback_tx.take() {
+            let _ = tx.0.send(LogicToPlaybackMessage::Shutdown);
+        }
+        // Join the thread so audio stops before the process exits.
+        if let Some(handle) = self.playback_thread_handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
 impl PlaybackThread {
     pub fn new(volume: f32) -> Self {
         let (logic_to_playback_tx, logic_to_playback_rx) =
@@ -63,18 +85,22 @@ impl PlaybackThread {
         });
 
         Self {
-            logic_to_playback_tx: PlaybackThreadSendHandle(logic_to_playback_tx),
-            _playback_thread_handle: playback_thread_handle,
+            logic_to_playback_tx: Some(PlaybackThreadSendHandle(logic_to_playback_tx)),
+            playback_thread_handle: Some(playback_thread_handle),
             playback_to_logic_rx,
         }
     }
 
     pub fn send(&self, message: LogicToPlaybackMessage) {
-        self.logic_to_playback_tx.send(message);
+        if let Some(tx) = &self.logic_to_playback_tx {
+            tx.send(message);
+        }
     }
 
     pub fn send_handle(&self) -> PlaybackThreadSendHandle {
-        self.logic_to_playback_tx.clone()
+        self.logic_to_playback_tx
+            .clone()
+            .expect("playback thread is alive")
     }
 
     pub fn subscribe(&self) -> PlaybackToLogicRx {
@@ -90,7 +116,8 @@ impl PlaybackThread {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
 
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
+        let mut stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
+        stream_handle.log_on_drop(false);
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(volume * volume);
 
@@ -259,6 +286,7 @@ impl PlaybackThread {
                     LTPM::SetVolume(volume) => {
                         sink.set_volume(volume * volume);
                     }
+                    LTPM::Shutdown => return,
                 }
             }
 

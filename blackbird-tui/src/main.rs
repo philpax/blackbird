@@ -138,6 +138,18 @@ fn main() -> anyhow::Result<()> {
     // Save state on exit
     app.save_state();
 
+    // TrayIcon::drop calls app_indicator_set_status(Passive) which does a
+    // synchronous D-Bus/GLib call that deadlocks when the GLib main context
+    // isn't being actively iterated. Skip the drop entirely — the icon
+    // disappears when the process exits and the D-Bus connection closes.
+    #[cfg(feature = "tray-icon")]
+    {
+        std::mem::forget(tray_icon);
+        drop(tray_menu);
+    }
+    #[cfg(feature = "media-controls")]
+    drop(media_controls);
+
     result
 }
 

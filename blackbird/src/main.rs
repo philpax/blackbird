@@ -93,12 +93,21 @@ fn main() {
 }
 
 pub struct App {
+    // TrayIcon::drop calls app_indicator_set_status(Passive) which does a
+    // synchronous D-Bus/GLib call that deadlocks when the GLib main context
+    // isn't being actively iterated. Wrap in ManuallyDrop to skip the drop —
+    // the icon disappears when the process exits and the D-Bus connection closes.
+    #[cfg(feature = "tray-icon")]
+    tray_menu: blackbird_client_shared::tray::TrayMenu,
+    #[cfg(feature = "tray-icon")]
+    tray_icon: std::mem::ManuallyDrop<blackbird_client_shared::tray::TrayIcon>,
+    #[cfg(feature = "media-controls")]
+    controls: controls::Controls,
+
     config: Arc<RwLock<Config>>,
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
     playback_to_logic_rx: bc::PlaybackToLogicRx,
-    #[cfg(feature = "media-controls")]
-    controls: controls::Controls,
     logic: bc::Logic,
     cover_art_cache: cover_art_cache::CoverArtCache,
     lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
@@ -107,10 +116,6 @@ pub struct App {
     current_window_size: Option<(u32, u32)>,
     pub(crate) ui_state: ui::UiState,
     shutdown_initiated: bool,
-    #[cfg(feature = "tray-icon")]
-    tray_icon: blackbird_client_shared::tray::TrayIcon,
-    #[cfg(feature = "tray-icon")]
-    tray_menu: blackbird_client_shared::tray::TrayMenu,
     _global_hotkey_manager: GlobalHotKeyManager,
     search_hotkey: HotKey,
     mini_library_hotkey: HotKey,
@@ -211,12 +216,17 @@ impl App {
             .expect("Failed to register global mini-library hotkey");
 
         App {
+            #[cfg(feature = "tray-icon")]
+            tray_menu,
+            #[cfg(feature = "tray-icon")]
+            tray_icon: std::mem::ManuallyDrop::new(tray_icon),
+            #[cfg(feature = "media-controls")]
+            controls,
+
             config,
             _config_reload_thread,
             _repaint_thread,
             playback_to_logic_rx: logic.subscribe_to_playback_events(),
-            #[cfg(feature = "media-controls")]
-            controls,
             logic,
             cover_art_cache,
             lyrics_loaded_rx,
@@ -225,10 +235,6 @@ impl App {
             current_window_size: None,
             ui_state,
             shutdown_initiated: false,
-            #[cfg(feature = "tray-icon")]
-            tray_icon,
-            #[cfg(feature = "tray-icon")]
-            tray_menu,
             _global_hotkey_manager: global_hotkey_manager,
             search_hotkey,
             mini_library_hotkey,
@@ -298,6 +304,7 @@ impl eframe::App for App {
         // Preload album art for tracks surrounding the next track in queue
         self.cover_art_cache
             .preload_next_track_surrounding_art(&self.logic);
+        self.cover_art_cache.tick_prefetch(&self.logic);
 
         // Update tray menu
         #[cfg(feature = "tray-icon")]
