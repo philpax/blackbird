@@ -82,6 +82,8 @@ impl App {
     pub fn tick(&mut self) {
         self.logic.update();
         self.cover_art_cache.update();
+        self.cover_art_cache
+            .preload_next_track_surrounding_art(&self.logic);
 
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {

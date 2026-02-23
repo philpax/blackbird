@@ -286,6 +286,11 @@ impl CoverArtCache {
         (ArtColorGrid::empty(cols, rows), true)
     }
 
+    /// Preload album art for albums surrounding the next track in the queue.
+    pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
+        self.inner.preload_next_track_surrounding_art(logic);
+    }
+
     /// Returns the aspect ratio (height / width) of the source image, or 1.0
     /// if the image is not in the cache or the dimensions are unknown.
     pub fn get_aspect_ratio(&mut self, cover_art_id: Option<&CoverArtId>) -> f64 {
