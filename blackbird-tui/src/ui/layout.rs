@@ -119,24 +119,27 @@ pub const OVERLAY_MIN_WIDTH: u16 = 10;
 pub const OVERLAY_BORDER_OVERHEAD: u16 = 2;
 pub const OVERLAY_X_BUTTON_OFFSET: u16 = 4;
 
-/// Default character cell width-to-height ratio used when the terminal
-/// does not report pixel dimensions.
-const DEFAULT_CELL_RATIO: f64 = 10.0 / 13.0;
+/// Default half-block pixel aspect ratio (width / height) used when the
+/// terminal does not report pixel dimensions. Empirically tuned for Windows
+/// Terminal with Iosevka.
+const DEFAULT_HALF_BLOCK_RATIO: f64 = 10.0 / 13.0;
 
-/// Correction factor for non-square terminal character cells when rendering
-/// half-block art. A character cell is typically taller than it is wide, so
-/// a grid of half-block pixels with equal columns and rows appears taller
-/// than it is wide. This factor scales the pixel-row count down to compensate.
+/// Aspect ratio of a single half-block pixel (width / height) for the current
+/// terminal. A half-block pixel occupies one column and half a character cell
+/// row, so its dimensions are `char_width × (char_height / 2)`. This ratio is
+/// used to convert between column counts and half-block row counts so that art
+/// appears with correct proportions regardless of the terminal font.
 pub(crate) fn half_block_correction() -> f64 {
     let Ok(ws) = crossterm::terminal::window_size() else {
-        return DEFAULT_CELL_RATIO;
+        return DEFAULT_HALF_BLOCK_RATIO;
     };
     if ws.width == 0 || ws.height == 0 || ws.columns == 0 || ws.rows == 0 {
-        return DEFAULT_CELL_RATIO;
+        return DEFAULT_HALF_BLOCK_RATIO;
     }
     let char_width = ws.width as f64 / ws.columns as f64;
     let char_height = ws.height as f64 / ws.rows as f64;
-    char_width / char_height
+    // Each half-block pixel is char_width wide and char_height/2 tall.
+    2.0 * char_width / char_height
 }
 
 /// Computes the overlay rectangle, preserving the source image's aspect ratio
