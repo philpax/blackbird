@@ -72,4 +72,12 @@ impl CoverArtCache {
     pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
         self.inner.preload_next_track_surrounding_art(logic);
     }
+
+    pub fn populate_prefetch_queue(&mut self, cover_art_ids: Vec<CoverArtId>) {
+        self.inner.populate_prefetch_queue(cover_art_ids);
+    }
+
+    pub fn tick_prefetch(&mut self, logic: &Logic) {
+        self.inner.tick_prefetch(logic);
+    }
 }

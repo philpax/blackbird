@@ -291,6 +291,16 @@ impl CoverArtCache {
         self.inner.preload_next_track_surrounding_art(logic);
     }
 
+    /// Populate the background prefetch queue with cover art IDs.
+    pub fn populate_prefetch_queue(&mut self, cover_art_ids: Vec<CoverArtId>) {
+        self.inner.populate_prefetch_queue(cover_art_ids);
+    }
+
+    /// Advance the background prefetcher by one tick.
+    pub fn tick_prefetch(&mut self, logic: &Logic) {
+        self.inner.tick_prefetch(logic);
+    }
+
     /// Returns the aspect ratio (height / width) of the source image, or 1.0
     /// if the image is not in the cache or the dimensions are unknown.
     pub fn get_aspect_ratio(&mut self, cover_art_id: Option<&CoverArtId>) -> f64 {

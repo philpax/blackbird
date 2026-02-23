@@ -89,6 +89,7 @@ impl App {
         self.cover_art_cache.update();
         self.cover_art_cache
             .preload_next_track_surrounding_art(&self.logic);
+        self.cover_art_cache.tick_prefetch(&self.logic);
 
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
@@ -122,6 +123,18 @@ impl App {
             }
             // Ensure selection is on a track, not a group header.
             self.library.ensure_selection_on_track(&self.logic);
+
+            // Populate the background art prefetch queue with all album cover art IDs.
+            let state = self.logic.get_state();
+            let state = state.read().unwrap();
+            let ids: Vec<_> = state
+                .library
+                .groups
+                .iter()
+                .filter_map(|g| g.cover_art_id.clone())
+                .collect();
+            drop(state);
+            self.cover_art_cache.populate_prefetch_queue(ids);
         }
 
         // Handle scroll-to-track.

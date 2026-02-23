@@ -1,9 +1,9 @@
 //! Cover art cache shared between the egui and TUI clients.
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
@@ -31,6 +31,7 @@ pub struct CoverArtCache<T: ClientData> {
     cache_dir: PathBuf,
     max_cache_size: usize,
     cache_entry_timeout: Duration,
+    prefetcher: BackgroundPrefetcher,
 }
 
 /// Priority levels for cache entries, from highest to lowest.
@@ -39,7 +40,6 @@ pub struct CoverArtCache<T: ClientData> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CachePriority {
     /// Transient art loaded while scrolling - evicted first when cache is full
-    #[allow(dead_code)]
     Transient = 0,
     /// Art for albums surrounding/including the next track in queue - evicted second when cache is full
     NextTrack = 1,
@@ -110,6 +110,7 @@ impl<T: ClientData> CoverArtCache<T> {
             cache_dir,
             max_cache_size,
             cache_entry_timeout,
+            prefetcher: BackgroundPrefetcher::new(),
         }
     }
 
@@ -299,6 +300,115 @@ impl<T: ClientData> CoverArtCache<T> {
             // Use get with NextTrack priority to trigger loading
             self.get(logic, Some(cover_art_id), CachePriority::NextTrack);
         }
+    }
+
+    /// Populate the background prefetch queue with cover art IDs, filtering
+    /// out any that already exist in the on-disk cache or in-memory cache.
+    pub fn populate_prefetch_queue(&mut self, cover_art_ids: Vec<CoverArtId>) {
+        let ids: Vec<CoverArtId> = cover_art_ids
+            .into_iter()
+            .filter(|id| {
+                // Skip IDs already in the in-memory cache (already requested or loaded).
+                if self.cache.contains_key(id) {
+                    return false;
+                }
+                // Skip IDs already in the on-disk cache.
+                let safe_filename =
+                    id.0.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+                let cache_path = self.cache_dir.join(format!("{safe_filename}.png"));
+                !cache_path.exists()
+            })
+            .collect();
+        self.prefetcher.populate(ids);
+    }
+
+    /// Advance the background prefetcher by one tick, fetching at most one
+    /// cover art ID if enough time has elapsed since the last request.
+    pub fn tick_prefetch(&mut self, logic: &Logic) {
+        let Some(id) = self.prefetcher.tick() else {
+            return;
+        };
+
+        // Create a cache entry so that `update()` can match the incoming
+        // response and save it to the disk cache. Request immediately,
+        // bypassing the normal `TIME_BEFORE_LOAD_ATTEMPT` delay that
+        // `get()` uses for on-demand requests.
+        let cache_entry = self.cache.entry(id.clone()).or_insert(CacheEntry {
+            first_requested: std::time::Instant::now(),
+            last_requested: std::time::Instant::now(),
+            state: CacheEntryState::Unloaded,
+            priority: CachePriority::Transient,
+        });
+
+        if let CacheEntryState::Unloaded = cache_entry.state {
+            logic.request_cover_art(&id, self.target_size);
+            cache_entry.state = CacheEntryState::Loading;
+        }
+    }
+}
+
+const PREFETCH_INTERVAL: Duration = Duration::from_millis(100);
+
+struct BackgroundPrefetcher {
+    queue: VecDeque<CoverArtId>,
+    total: usize,
+    last_request: Instant,
+    next_milestone: usize,
+    active: bool,
+}
+
+impl BackgroundPrefetcher {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            total: 0,
+            last_request: Instant::now(),
+            next_milestone: 10,
+            active: false,
+        }
+    }
+
+    fn populate(&mut self, ids: Vec<CoverArtId>) {
+        if ids.is_empty() {
+            return;
+        }
+        tracing::info!("Background art prefetch: starting ({} albums)", ids.len());
+        self.queue = ids.into();
+        self.total = self.queue.len();
+        self.next_milestone = 10;
+        self.active = true;
+    }
+
+    /// Returns the next ID to fetch if enough time has passed, or `None`.
+    fn tick(&mut self) -> Option<CoverArtId> {
+        if !self.active {
+            return None;
+        }
+
+        if self.last_request.elapsed() < PREFETCH_INTERVAL {
+            return None;
+        }
+
+        let id = match self.queue.pop_front() {
+            Some(id) => id,
+            None => {
+                tracing::info!("Background art prefetch: complete ({} albums)", self.total);
+                self.active = false;
+                return None;
+            }
+        };
+
+        self.last_request = Instant::now();
+
+        // Log at 10% milestones.
+        let done = self.total - self.queue.len();
+        let pct = done * 100 / self.total;
+        if pct >= self.next_milestone {
+            tracing::info!("Background art prefetch: {done}/{} ({pct}%)", self.total);
+            self.next_milestone = pct / 10 * 10 + 10;
+        }
+
+        Some(id)
     }
 }
 

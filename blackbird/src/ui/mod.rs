@@ -281,6 +281,18 @@ impl App {
                 .mini_library
                 .library_view
                 .invalidate_library_scroll();
+
+            // Populate the background art prefetch queue with all album cover art IDs.
+            let state = logic.get_state();
+            let state = state.read().unwrap();
+            let ids: Vec<_> = state
+                .library
+                .groups
+                .iter()
+                .filter_map(|g| g.cover_art_id.clone())
+                .collect();
+            drop(state);
+            self.cover_art_cache.populate_prefetch_queue(ids);
         }
 
         if self.ui_state.search.open {
