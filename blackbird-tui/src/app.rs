@@ -35,6 +35,7 @@ pub struct App {
     pub volume_editing: bool,
     pub quit_confirming: bool,
     pub should_quit: bool,
+    pub needs_redraw: bool,
     pub mouse_position: Option<(u16, u16)>,
     pub album_art_overlay: Option<AlbumArtOverlay>,
 
@@ -67,6 +68,7 @@ impl App {
             volume_editing: false,
             quit_confirming: false,
             should_quit: false,
+            needs_redraw: true,
             mouse_position: None,
             album_art_overlay: None,
 
@@ -130,6 +132,9 @@ impl App {
         if self.logic.should_shutdown() {
             self.should_quit = true;
         }
+
+        // Tick processes playback updates, scrub bar advancement, etc.
+        self.needs_redraw = true;
     }
 
     pub fn toggle_search(&mut self) {

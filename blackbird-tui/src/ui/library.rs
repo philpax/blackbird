@@ -8,10 +8,10 @@ use blackbird_core::{
 };
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -274,7 +274,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Copy values we need before borrowing entries.
-    let scroll_offset = app.library.scroll_offset;
     let selected_index = app.library.selected_index;
     let playing_track_id = app.logic.get_playing_track_id();
 
@@ -288,18 +287,61 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    // Calculate visible range to only pre-compute colors for visible group headers.
+    // Calculate total content height in lines to determine if scrollbar is needed.
+    let total_lines = total_entry_lines(&entries);
+    let sort_order = app.logic.get_sort_order();
+    let indicator_width = scroll_indicator_width(sort_order);
     let visible_height = inner.height as usize;
-    let visible_start = scroll_offset;
-    let visible_end = (scroll_offset + visible_height + 5).min(entries.len()); // +5 for buffer
+
+    let geo = super::layout::library_geometry(inner, total_lines, indicator_width);
+    let has_scrollbar = geo.has_scrollbar;
+    let list_width = geo.list_width;
+
+    // Calculate the line offset for center-scroll.
+    // GroupHeaders take 2 lines, Tracks take 1 line.
+    let mut line_offset = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        if i >= selected_index {
+            break;
+        }
+        line_offset += entry.height();
+    }
+
+    // Center the selected item in the visible area.
+    let half_height = (geo.visible_height / 2).saturating_sub(1);
+    let centered_offset = line_offset.saturating_sub(half_height);
+
+    // Convert line offset back to item offset for ListState.
+    let mut item_offset = 0usize;
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        if current_line >= centered_offset {
+            item_offset = i;
+            break;
+        }
+        current_line += entry.height();
+        item_offset = i + 1;
+    }
+    item_offset = item_offset.min(entries.len().saturating_sub(1));
+
+    // Determine the visible item range: walk forward from item_offset until we
+    // exceed the visible height (plus a small buffer for partially visible items).
+    let buffer_items = 5;
+    let mut visible_item_end = item_offset;
+    let mut accumulated_height = 0usize;
+    let height_limit = visible_height + buffer_items;
+    for entry in entries.iter().skip(item_offset) {
+        if accumulated_height >= height_limit {
+            break;
+        }
+        accumulated_height += entry.height();
+        visible_item_end += 1;
+    }
+    visible_item_end = visible_item_end.min(entries.len());
 
     // Pre-compute quadrant colors only for visible group headers.
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
-    for entry in entries
-        .iter()
-        .skip(visible_start)
-        .take(visible_end - visible_start)
-    {
+    for entry in &entries[item_offset..visible_item_end] {
         if let LibraryEntry::GroupHeader {
             cover_art_id: Some(id),
             ..
@@ -311,19 +353,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Calculate total content height in lines to determine if scrollbar is needed.
-    let total_lines = total_entry_lines(&entries);
-    let sort_order = app.logic.get_sort_order();
-    let indicator_width = scroll_indicator_width(sort_order);
-
-    let geo = super::layout::library_geometry(inner, total_lines, indicator_width);
-    let has_scrollbar = geo.has_scrollbar;
-    let list_width = geo.list_width;
-
-    let items: Vec<ListItem> = entries
+    // Build ListItems only for the visible range.
+    let items: Vec<ListItem> = entries[item_offset..visible_item_end]
         .iter()
         .enumerate()
-        .map(|(i, entry)| {
+        .map(|(vi, entry)| {
+            let i = item_offset + vi;
             let is_selected = i == selected_index;
             match entry {
                 LibraryEntry::GroupHeader {
@@ -526,43 +561,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items);
 
-    // Use a ListState to manage selection/scrolling with center-scroll behavior.
+    // Use a ListState with offset 0 since we only built visible items.
     let mut state = ListState::default();
-    state.select(Some(selected_index));
-
-    // Calculate the line offset for center-scroll.
-    // GroupHeaders take 2 lines, Tracks take 1 line.
-    let mut line_offset = 0usize;
-    for (i, entry) in entries.iter().enumerate() {
-        if i >= selected_index {
-            break;
-        }
-        line_offset += entry.height();
-    }
-
-    // Center the selected item in the visible area.
-    let half_height = (geo.visible_height / 2).saturating_sub(1);
-    let centered_offset = line_offset.saturating_sub(half_height);
-
-    // Convert line offset back to item offset for ListState.
-    // We need to find which item index corresponds to this line offset.
-    let mut item_offset = 0usize;
-    let mut current_line = 0usize;
-    for (i, entry) in entries.iter().enumerate() {
-        if current_line >= centered_offset {
-            item_offset = i;
-            break;
-        }
-        current_line += entry.height();
-        item_offset = i + 1;
-    }
-
-    *state.offset_mut() = item_offset.min(entries.len().saturating_sub(1));
+    let relative_selection = selected_index.saturating_sub(item_offset);
+    state.select(Some(relative_selection));
+    *state.offset_mut() = 0;
 
     frame.render_stateful_widget(list, inner, &mut state);
 
-    // Save the offset for use by keyboard navigation.
-    app.library.scroll_offset = state.offset();
+    // Save the item_offset for use by keyboard navigation and mouse hit-testing.
+    app.library.scroll_offset = item_offset;
 
     // Render combined scrollbar + library indicator on the right column.
     render_scrollbar_with_library_indicator(
@@ -733,6 +741,7 @@ fn render_scrollbar_with_library_indicator(
 
     // Rightmost position for right-aligned labels.
     let right_edge = area.x + area.width;
+    let buf = frame.buffer_mut();
 
     for row in 0..area.height {
         let is_thumb = thumb_range
@@ -740,9 +749,8 @@ fn render_scrollbar_with_library_indicator(
             .unwrap_or(false);
         let label = label_at_row.get(&row);
 
-        // Render label or scrollbar indicator, right-aligned.
+        // Write label or scrollbar indicator directly to the buffer.
         if let Some(lbl) = label {
-            // Right-align label at the edge.
             let label_width = lbl.len() as u16;
             let label_x = right_edge.saturating_sub(label_width);
             let style = if is_thumb {
@@ -750,25 +758,32 @@ fn render_scrollbar_with_library_indicator(
             } else {
                 Style::default().fg(text_color)
             };
-            let label_rect = Rect::new(label_x, area.y + row, label_width.min(area.width), 1);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(*lbl, style))),
-                label_rect,
-            );
+            for (ci, ch) in lbl.chars().enumerate() {
+                let x = label_x + ci as u16;
+                let y = area.y + row;
+                let pos = Position::new(x, y);
+                if area.contains(pos) {
+                    let cell = &mut buf[pos];
+                    cell.set_char(ch);
+                    cell.set_style(style);
+                }
+            }
         } else {
-            // Scrollbar indicator (thumb or track) at rightmost column.
-            let scrollbar_content = match (is_thumb, has_scrollbar) {
-                (true, _) => "█",
-                (false, true) => "│",
-                (false, false) => continue,
+            let (ch, should_render) = match (is_thumb, has_scrollbar) {
+                (true, _) => ('█', true),
+                (false, true) => ('│', true),
+                (false, false) => (' ', false),
             };
-            let scrollbar_style = Style::default().fg(text_color);
-            let scrollbar_x = right_edge.saturating_sub(1);
-            let scrollbar_rect = Rect::new(scrollbar_x, area.y + row, 1, 1);
-            frame.render_widget(
-                Paragraph::new(Line::from(Span::styled(scrollbar_content, scrollbar_style))),
-                scrollbar_rect,
-            );
+            if should_render {
+                let x = right_edge.saturating_sub(1);
+                let y = area.y + row;
+                let pos = Position::new(x, y);
+                if area.contains(pos) {
+                    let cell = &mut buf[pos];
+                    cell.set_char(ch);
+                    cell.set_style(Style::default().fg(text_color));
+                }
+            }
         }
     }
 }

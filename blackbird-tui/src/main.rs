@@ -154,20 +154,51 @@ fn run_app(
     let mut last_tick = Instant::now();
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, app))?;
+        if app.needs_redraw {
+            terminal.draw(|frame| ui::draw(frame, app))?;
+            app.needs_redraw = false;
+        }
         let term_size = terminal.size()?;
         let size = Rect::new(0, 0, term_size.width, term_size.height);
 
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
-            match event::read()? {
+            let mut scroll_delta: i32 = 0;
+
+            // Process the first event, then drain all remaining queued events.
+            let mut process_event = |evt: Event, app: &mut App| match evt {
                 Event::Key(key) if key.kind == event::KeyEventKind::Press => {
                     handle_key_event(app, &key);
+                    app.needs_redraw = true;
                 }
-                Event::Mouse(mouse) => {
-                    handle_mouse_event(app, &mouse, size);
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        scroll_delta -= 1;
+                        app.needs_redraw = true;
+                    }
+                    MouseEventKind::ScrollDown => {
+                        scroll_delta += 1;
+                        app.needs_redraw = true;
+                    }
+                    _ => {
+                        handle_mouse_event(app, &mouse, size);
+                        app.needs_redraw = true;
+                    }
+                },
+                Event::Resize(_, _) => {
+                    app.needs_redraw = true;
                 }
                 _ => {}
+            };
+
+            process_event(event::read()?, app);
+            while event::poll(Duration::ZERO)? {
+                process_event(event::read()?, app);
+            }
+
+            // Apply coalesced scroll as a single operation.
+            if scroll_delta != 0 {
+                apply_scroll(app, scroll_delta);
             }
         }
 
@@ -388,6 +419,36 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         _ => {}
+    }
+}
+
+/// Applies a coalesced scroll delta to the currently focused panel.
+fn apply_scroll(app: &mut App, scroll_delta: i32) {
+    let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
+    let direction = scroll_delta.signum();
+
+    match app.focused_panel {
+        FocusedPanel::Library => {
+            ui::library::handle_scroll(app, direction, steps);
+        }
+        FocusedPanel::Lyrics => {
+            ui::lyrics::move_selection(
+                &mut app.lyrics,
+                app.logic.get_playing_position(),
+                direction * steps as i32,
+            );
+        }
+        FocusedPanel::Logs => {
+            if direction < 0 {
+                app.logs.scroll_offset = app.logs.scroll_offset.saturating_sub(steps);
+            } else {
+                let log_len = app.logs.log_buffer.len();
+                if log_len > 0 {
+                    app.logs.scroll_offset = (app.logs.scroll_offset + steps).min(log_len - 1);
+                }
+            }
+        }
+        FocusedPanel::Search => {}
     }
 }
 
