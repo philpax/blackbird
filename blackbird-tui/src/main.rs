@@ -222,6 +222,7 @@ fn run_app(
                 // Drain icon events to prevent accumulation.
                 let _ = tray_menu.handle_icon_events();
                 tray_menu.update(&app.logic, tray_icon);
+                blackbird_client_shared::tray::pump_platform_events();
             }
             last_tick = Instant::now();
         }
