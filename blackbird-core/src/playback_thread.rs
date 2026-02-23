@@ -114,8 +114,14 @@ impl PlaybackThread {
         }
 
         loop {
-            // Process all available messages without blocking
-            while let Ok(msg) = playback_rx.try_recv() {
+            // Process all available messages without blocking.
+            // Detect channel disconnect to exit when the sender is dropped.
+            loop {
+                let msg = match playback_rx.try_recv() {
+                    Ok(msg) => msg,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
+                };
                 match msg {
                     LTPM::PlayTrack(track_id, data) => {
                         let decoder = rodio::decoder::DecoderBuilder::new()
