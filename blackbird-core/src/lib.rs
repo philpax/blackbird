@@ -251,11 +251,22 @@ impl Logic {
                     st.current_track_and_position = Some(track_and_position.clone());
                     st.started_loading_track = None;
 
-                    // Sync current_target with the actual current track
-                    // This is important for detecting pending track changes in gapless logic
+                    // Sync current_target with the actual current track.
+                    // This is important for detecting pending track changes in gapless logic.
                     st.queue.current_target = Some(track_and_position.track_id.clone());
 
-                    // Reset next track append tracking for gapless playback
+                    // Advance current_index if this was a gapless transition (the
+                    // playback thread moved to the next track without going through
+                    // schedule_next_track, so the index is stale).
+                    let ordered = &st.queue.ordered_tracks;
+                    if !ordered.is_empty() {
+                        let next_index = (st.queue.current_index + 1) % ordered.len();
+                        if ordered[next_index] == track_and_position.track_id {
+                            st.queue.current_index = next_index;
+                        }
+                    }
+
+                    // Reset next track append tracking for gapless playback.
                     st.queue.next_track_appended = None;
 
                     // Reset scrobble state for new track
