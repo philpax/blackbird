@@ -37,6 +37,17 @@
 - Always use the Oxford comma.
 - Don't omit articles ("a", "an", "the"). Write "the file has a newer version" not "file has newer version".
 
+## Development environment
+
+A `shell.nix` is provided for Linux development. Use `nix-shell` to get a shell with all required system dependencies (ALSA, GTK, D-Bus, Wayland, etc.). The `--all-features` checks below require these dependencies, so run them inside `nix-shell`:
+
+```sh
+nix-shell --run "cargo clippy --all-targets --all-features -- -D warnings"
+nix-shell --run "cargo test --workspace"
+```
+
+The `--no-default-features` checks do not require system libraries and can be run outside of `nix-shell`.
+
 ## Code style
 
 ### Rust edition and linting
@@ -44,9 +55,9 @@
 - Use Rust 2024 edition.
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo fmt --all -- --check`
-  - `cargo clippy --all-targets --all-features -- -D warnings`
+  - `nix-shell --run "cargo clippy --all-targets --all-features -- -D warnings"`
   - `cargo clippy --all-targets --no-default-features -- -D warnings`
-  - `cargo test --workspace`
+  - `nix-shell --run "cargo test --workspace"`
   - `cargo test --workspace --no-default-features`
 
 ### Type system patterns
