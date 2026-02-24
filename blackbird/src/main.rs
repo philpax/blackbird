@@ -16,8 +16,19 @@ fn main() {
     #[cfg(feature = "tray-icon")]
     blackbird_client_shared::tray::init_platform();
 
+    // Log to a file so that shutdown diagnostics are visible even when the
+    // GUI window has closed.
+    let file_layer = std::fs::File::create("blackbird-gui.log")
+        .map(|f| {
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::sync::Mutex::new(f))
+                .with_ansi(false)
+        })
+        .ok();
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
+        .with(file_layer)
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blackbird=info")),
@@ -93,22 +104,25 @@ fn main() {
 }
 
 pub struct App {
-    // TrayIcon::drop calls app_indicator_set_status(Passive) which does a
-    // synchronous D-Bus/GLib call that deadlocks when the GLib main context
-    // isn't being actively iterated. Wrap in ManuallyDrop to skip the drop —
-    // the icon disappears when the process exits and the D-Bus connection closes.
+    // Logic must be declared (and thus dropped) before the background threads
+    // so that the playback thread receives its Shutdown message promptly.
+    logic: bc::Logic,
+
+    // TrayIcon/TrayMenu/Controls destructors do synchronous D-Bus/GLib calls
+    // that block for tens of seconds when the GLib main context isn't being
+    // actively iterated. Wrap in ManuallyDrop to skip their destructors — the
+    // process exit handles cleanup.
     #[cfg(feature = "tray-icon")]
-    tray_menu: blackbird_client_shared::tray::TrayMenu,
+    tray_menu: std::mem::ManuallyDrop<blackbird_client_shared::tray::TrayMenu>,
     #[cfg(feature = "tray-icon")]
     tray_icon: std::mem::ManuallyDrop<blackbird_client_shared::tray::TrayIcon>,
     #[cfg(feature = "media-controls")]
-    controls: controls::Controls,
+    controls: std::mem::ManuallyDrop<controls::Controls>,
 
     config: Arc<RwLock<Config>>,
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
     playback_to_logic_rx: bc::PlaybackToLogicRx,
-    logic: bc::Logic,
     cover_art_cache: cover_art_cache::CoverArtCache,
     lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
     library_populated_rx: std::sync::mpsc::Receiver<()>,
@@ -217,11 +231,11 @@ impl App {
 
         App {
             #[cfg(feature = "tray-icon")]
-            tray_menu,
+            tray_menu: std::mem::ManuallyDrop::new(tray_menu),
             #[cfg(feature = "tray-icon")]
             tray_icon: std::mem::ManuallyDrop::new(tray_icon),
             #[cfg(feature = "media-controls")]
-            controls,
+            controls: std::mem::ManuallyDrop::new(controls),
 
             config,
             _config_reload_thread,

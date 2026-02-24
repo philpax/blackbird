@@ -2,3 +2,5 @@
 /config.toml
 /spotcheck-output
 /album-art-cache
+/blackbird-tui.log
+/blackbird-gui.log

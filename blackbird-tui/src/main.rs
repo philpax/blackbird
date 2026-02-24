@@ -30,8 +30,15 @@ fn main() -> anyhow::Result<()> {
     // Create log buffer for TUI display instead of stdout.
     let log_buffer = LogBuffer::new();
 
+    // Also log to a file for debugging (especially shutdown issues).
+    let log_file = std::fs::File::create("blackbird-tui.log")?;
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::sync::Mutex::new(log_file))
+        .with_ansi(false);
+
     tracing_subscriber::registry()
         .with(LogBufferLayer::new(log_buffer.clone()))
+        .with(file_layer)
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("blackbird=info")),
@@ -135,20 +142,24 @@ fn main() -> anyhow::Result<()> {
     )?;
     terminal.show_cursor()?;
 
-    // Save state on exit
+    // Save state on exit.
     app.save_state();
 
-    // TrayIcon::drop calls app_indicator_set_status(Passive) which does a
-    // synchronous D-Bus/GLib call that deadlocks when the GLib main context
-    // isn't being actively iterated. Skip the drop entirely — the icon
-    // disappears when the process exits and the D-Bus connection closes.
+    // Drop app first — this drops Logic, which sends Shutdown to the playback
+    // thread and stops audio. Must happen before tray/media_controls, whose
+    // destructors block for tens of seconds on D-Bus/GLib cleanup.
+    drop(app);
+
+    // TrayIcon/TrayMenu/Controls destructors do synchronous D-Bus/GLib calls
+    // that block when the GLib main context isn't being actively iterated.
+    // Skip all their destructors — the process exit handles cleanup.
     #[cfg(feature = "tray-icon")]
     {
         std::mem::forget(tray_icon);
-        drop(tray_menu);
+        std::mem::forget(tray_menu);
     }
     #[cfg(feature = "media-controls")]
-    drop(media_controls);
+    std::mem::forget(media_controls);
 
     result
 }
