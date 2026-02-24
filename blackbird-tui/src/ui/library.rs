@@ -804,6 +804,8 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
+        Action::NextGroup => app.logic.next_group(),
+        Action::PreviousGroup => app.logic.previous_group(),
         Action::Stop => app.logic.stop_current(),
         Action::CyclePlaybackMode => app.cycle_playback_mode(),
         Action::ToggleSortOrder => {

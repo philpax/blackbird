@@ -55,6 +55,16 @@ pub enum PlaybackMode {
 }
 
 impl PlaybackMode {
+    /// Returns whether this mode organizes playback by groups (albums).
+    pub fn is_group_mode(&self) -> bool {
+        matches!(
+            self,
+            PlaybackMode::GroupRepeat
+                | PlaybackMode::GroupShuffle
+                | PlaybackMode::LikedGroupShuffle
+        )
+    }
+
     /// Returns a human-readable name for the mode.
     pub fn as_str(&self) -> &'static str {
         match self {

@@ -193,6 +193,30 @@ impl Logic {
         });
     }
 
+    pub(super) fn schedule_next_group(&self) {
+        let target = {
+            let st = self.read_state();
+            find_next_group_start(&st).map(|idx| (idx, st.queue.ordered_tracks[idx].clone()))
+        };
+        self.play_group_target("next", target);
+    }
+
+    pub(super) fn schedule_previous_group(&self) {
+        let target = {
+            let st = self.read_state();
+            find_previous_group_start(&st).map(|idx| (idx, st.queue.ordered_tracks[idx].clone()))
+        };
+        self.play_group_target("previous", target);
+    }
+
+    fn play_group_target(&self, direction: &str, target: Option<(usize, TrackId)>) {
+        if let Some((idx, track_id)) = target {
+            tracing::debug!("Advancing to {direction} group, track {}", track_id.0);
+            self.write_state().queue.current_index = idx;
+            self.schedule_play_track(&track_id);
+        }
+    }
+
     pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
         let ordered = &st.queue.ordered_tracks;
@@ -483,6 +507,58 @@ fn compute_full_ordering(
                 .flat_map(|idx| library.groups[idx].tracks.iter().cloned())
                 .collect()
         }
+    }
+}
+
+/// Returns the group index for the track at `idx` in `ordered_tracks`, if available.
+fn group_at(st: &AppState, idx: usize) -> Option<usize> {
+    st.library
+        .track_to_group_index
+        .get(&st.queue.ordered_tracks[idx])
+        .copied()
+}
+
+/// Scans from `from` in `direction` (+1 forward, -1 backward), wrapping around
+/// `ordered_tracks`, and returns the first index whose group differs from the
+/// group at `from`. Returns `None` if the entire queue is a single group.
+fn scan_to_group_boundary(st: &AppState, from: usize, direction: isize) -> Option<usize> {
+    let len = st.queue.ordered_tracks.len();
+    let start_group = group_at(st, from);
+    for offset in 1..len {
+        let idx = (from as isize + direction * offset as isize).rem_euclid(len as isize) as usize;
+        if group_at(st, idx) != start_group {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Scans forward from `current_index` to find the first track in a different group.
+/// Returns `None` if the entire queue is one group.
+fn find_next_group_start(st: &AppState) -> Option<usize> {
+    scan_to_group_boundary(st, st.queue.current_index, 1)
+}
+
+/// Finds the first track of the previous group relative to `current_index`.
+/// If the current position is not at the start of its group, returns the start
+/// of the current group. Otherwise, returns the start of the preceding group.
+fn find_previous_group_start(st: &AppState) -> Option<usize> {
+    let len = st.queue.ordered_tracks.len();
+    let current_idx = st.queue.current_index;
+
+    // Scan backward: the boundary is the last track of the previous group.
+    // One step forward from there is the start of the current group.
+    let prev_group_end = scan_to_group_boundary(st, current_idx, -1)?;
+    let start_of_current = (prev_group_end + 1) % len;
+
+    if start_of_current != current_idx {
+        // Not at the start of the current group — go there.
+        Some(start_of_current)
+    } else {
+        // Already at the start — scan backward from the previous group's last track
+        // to find where that group begins.
+        let prev_prev_end = scan_to_group_boundary(st, prev_group_end, -1)?;
+        Some((prev_prev_end + 1) % len)
     }
 }
 

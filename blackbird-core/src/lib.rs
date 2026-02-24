@@ -62,6 +62,8 @@ pub enum LogicRequestMessage {
     SeekBy { seconds: i64 },
     Next,
     Previous,
+    NextGroup,
+    PreviousGroup,
 }
 #[derive(Clone)]
 pub struct LogicRequestHandle(std::sync::mpsc::Sender<LogicRequestMessage>);
@@ -352,6 +354,14 @@ impl Logic {
                     tracing::debug!("User requested Previous");
                     self.previous()
                 }
+                LogicRequestMessage::NextGroup => {
+                    tracing::debug!("User requested NextGroup");
+                    self.next_group()
+                }
+                LogicRequestMessage::PreviousGroup => {
+                    tracing::debug!("User requested PreviousGroup");
+                    self.previous_group()
+                }
             }
         }
 
@@ -425,6 +435,14 @@ impl Logic {
             return;
         }
         self.schedule_previous_track();
+    }
+
+    pub fn next_group(&self) {
+        self.schedule_next_group();
+    }
+
+    pub fn previous_group(&self) {
+        self.schedule_previous_group();
     }
 }
 impl Logic {

@@ -28,6 +28,8 @@ pub enum Action {
     Stop,
     Next,
     Previous,
+    NextGroup,
+    PreviousGroup,
     CyclePlaybackMode,
     ToggleSortOrder,
     Star,
@@ -49,6 +51,8 @@ impl Action {
             Action::Stop => KEY_STOP,
             Action::Next => KEY_NEXT,
             Action::Previous => KEY_PREVIOUS,
+            Action::NextGroup => KEY_NEXT,
+            Action::PreviousGroup => KEY_PREVIOUS,
             Action::CyclePlaybackMode => KEY_CYCLE_MODE,
             Action::ToggleSortOrder => KEY_TOGGLE_SORT,
             Action::Star => KEY_STAR,
@@ -64,18 +68,23 @@ impl Action {
     }
 
     /// Returns the key label and description for display in the help bar.
-    pub fn help_label(&self, logic: &bc::Logic) -> (Cow<'static, str>, Cow<'static, str>) {
+    /// Returns `None` for actions that shouldn't appear in the current context.
+    pub fn help_label(&self, logic: &bc::Logic) -> Option<(Cow<'static, str>, Cow<'static, str>)> {
+        // Group skip actions are only shown in group modes.
+        if matches!(self, Action::NextGroup | Action::PreviousGroup)
+            && !logic.get_playback_mode().is_group_mode()
+        {
+            return None;
+        }
+
         let key_label: Cow<'static, str> = match self {
             // Star is Shift+8, so we display '*' instead of '8'.
             Action::Star => "*".into(),
-            _ => {
-                let s = self.key().symbol_or_name();
-                if s.chars().any(|c| c.is_uppercase()) {
-                    s.to_lowercase().into()
-                } else {
-                    s.into()
-                }
+            // Shifted actions: display the key in uppercase.
+            Action::NextGroup | Action::PreviousGroup => {
+                self.key().symbol_or_name().to_string().into()
             }
+            _ => self.key().symbol_or_name().to_lowercase().into(),
         };
 
         let description: Cow<'static, str> = match self {
@@ -89,6 +98,8 @@ impl Action {
             Action::Stop => "stop".into(),
             Action::Next => "next".into(),
             Action::Previous => "prev".into(),
+            Action::NextGroup => "next group".into(),
+            Action::PreviousGroup => "prev group".into(),
             Action::CyclePlaybackMode => {
                 format!("mode ({})", logic.get_playback_mode().as_str()).into()
             }
@@ -104,7 +115,7 @@ impl Action {
             Action::VolumeDown => "vol-".into(),
         };
 
-        (key_label, description)
+        Some((key_label, description))
     }
 }
 
@@ -113,6 +124,8 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::PlayPause,
     Action::Next,
     Action::Previous,
+    Action::NextGroup,
+    Action::PreviousGroup,
     Action::Stop,
     Action::SeekBackward,
     Action::SeekForward,
@@ -133,7 +146,9 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
     match key {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_STOP => Some(Action::Stop),
+        KEY_NEXT if shift => Some(Action::NextGroup),
         KEY_NEXT => Some(Action::Next),
+        KEY_PREVIOUS if shift => Some(Action::PreviousGroup),
         KEY_PREVIOUS => Some(Action::Previous),
         KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
         KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),

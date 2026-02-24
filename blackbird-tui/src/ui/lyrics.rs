@@ -210,6 +210,8 @@ pub fn handle_key(
         Action::PlayPause => logic.toggle_current(),
         Action::Next => logic.next(),
         Action::Previous => logic.previous(),
+        Action::NextGroup => logic.next_group(),
+        Action::PreviousGroup => logic.previous_group(),
         _ => {}
     }
     None

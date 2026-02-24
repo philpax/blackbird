@@ -10,6 +10,8 @@ pub enum Action {
     Stop,
     Next,
     Previous,
+    NextGroup,
+    PreviousGroup,
     CyclePlaybackMode,
     ToggleSortOrder,
     Search,
@@ -43,6 +45,8 @@ pub const KEY_PLAY_PAUSE: KeyCode = KeyCode::Char(' ');
 pub const KEY_STOP: KeyCode = KeyCode::Char('s');
 pub const KEY_NEXT: KeyCode = KeyCode::Char('n');
 pub const KEY_PREVIOUS: KeyCode = KeyCode::Char('p');
+pub const KEY_NEXT_GROUP: KeyCode = KeyCode::Char('N');
+pub const KEY_PREVIOUS_GROUP: KeyCode = KeyCode::Char('P');
 pub const KEY_CYCLE_MODE: KeyCode = KeyCode::Char('m');
 pub const KEY_TOGGLE_SORT: KeyCode = KeyCode::Char('o');
 pub const KEY_SEARCH: KeyCode = KeyCode::Char('/');
@@ -87,6 +91,12 @@ impl Action {
             Action::Stop => (KEY_STOP, "stop".into()),
             Action::Next => (KEY_NEXT, "next".into()),
             Action::Previous => (KEY_PREVIOUS, "prev".into()),
+            Action::NextGroup if logic.get_playback_mode().is_group_mode() => {
+                (KEY_NEXT_GROUP, "next group".into())
+            }
+            Action::PreviousGroup if logic.get_playback_mode().is_group_mode() => {
+                (KEY_PREVIOUS_GROUP, "prev group".into())
+            }
             Action::Search => (KEY_SEARCH, "search".into()),
             Action::Lyrics => (KEY_LYRICS, "lyrics".into()),
             Action::Logs => (KEY_LOGS, "logs".into()),
@@ -108,7 +118,13 @@ impl Action {
             }
             _ => return None,
         };
-        let key_str: SmolStr = key.to_smolstr().to_lowercase().into();
+        let key_str: SmolStr = match key {
+            // Printable non-whitespace characters are already in the correct case.
+            KeyCode::Char(c) if !c.is_whitespace() => SmolStr::new(c.to_string()),
+            // Everything else (Space, Enter, Esc, PageUp, etc.) uses title case
+            // in crossterm's Display impl; lowercase it for the help bar.
+            other => other.to_smolstr().to_lowercase().into(),
+        };
         Some((key_str, desc))
     }
 }
@@ -120,6 +136,8 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS => Some(Action::Previous),
+        KEY_NEXT_GROUP => Some(Action::NextGroup),
+        KEY_PREVIOUS_GROUP => Some(Action::PreviousGroup),
         KEY_STOP => Some(Action::Stop),
         KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
         KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),
@@ -176,6 +194,8 @@ pub fn lyrics_action(key: &KeyEvent) -> Option<Action> {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS => Some(Action::Previous),
+        KEY_NEXT_GROUP => Some(Action::NextGroup),
+        KEY_PREVIOUS_GROUP => Some(Action::PreviousGroup),
         _ => None,
     }
 }
@@ -211,6 +231,8 @@ pub fn queue_action(key: &KeyEvent) -> Option<Action> {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS => Some(Action::Previous),
+        KEY_NEXT_GROUP => Some(Action::NextGroup),
+        KEY_PREVIOUS_GROUP => Some(Action::PreviousGroup),
         KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
         _ => None,
     }
@@ -236,6 +258,8 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::PlayPause,
     Action::Next,
     Action::Previous,
+    Action::NextGroup,
+    Action::PreviousGroup,
     Action::Stop,
     Action::SeekBackward,
     Action::SeekForward,
@@ -269,6 +293,8 @@ pub const LYRICS_HELP: &[Action] = &[
     Action::PlayPause,
     Action::Next,
     Action::Previous,
+    Action::NextGroup,
+    Action::PreviousGroup,
 ];
 
 /// Ordered list of actions to show in the queue help bar.
@@ -280,6 +306,8 @@ pub const QUEUE_HELP: &[Action] = &[
     Action::PlayPause,
     Action::Next,
     Action::Previous,
+    Action::NextGroup,
+    Action::PreviousGroup,
     Action::CyclePlaybackMode,
 ];
 

@@ -487,6 +487,8 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
+        Action::NextGroup => app.logic.next_group(),
+        Action::PreviousGroup => app.logic.previous_group(),
         Action::Stop => app.logic.stop_current(),
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),

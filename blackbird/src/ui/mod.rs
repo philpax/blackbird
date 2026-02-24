@@ -203,6 +203,8 @@ impl App {
                         keys::Action::Stop => logic.stop_current(),
                         keys::Action::Next => logic.next(),
                         keys::Action::Previous => logic.previous(),
+                        keys::Action::NextGroup => logic.next_group(),
+                        keys::Action::PreviousGroup => logic.previous_group(),
                         keys::Action::CyclePlaybackMode => {
                             let next = blackbird_client_shared::next_playback_mode(
                                 logic.get_playback_mode(),
@@ -370,8 +372,10 @@ impl App {
 
                 ui.horizontal(|ui| {
                     for action in keys::LIBRARY_HELP {
+                        let Some((key, label)) = action.help_label(logic) else {
+                            continue;
+                        };
                         let mut job = LayoutJob::default();
-                        let (key, label) = action.help_label(logic);
 
                         job.append(
                             &key,
