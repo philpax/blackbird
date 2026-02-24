@@ -110,6 +110,14 @@ impl LibraryState {
         self.flat_library_dirty = true;
     }
 
+    /// Returns the track ID of the currently selected entry, if it is a track.
+    pub fn selected_track_id(&self) -> Option<&TrackId> {
+        match self.cached_flat_library.get(self.selected_index)? {
+            LibraryEntry::Track { id, .. } => Some(id),
+            LibraryEntry::GroupHeader { .. } => None,
+        }
+    }
+
     /// Returns the cached flat library, rebuilding if needed.
     pub fn get_flat_library(&mut self, logic: &bc::Logic) -> &[LibraryEntry] {
         if self.flat_library_dirty {
@@ -799,9 +807,11 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Stop => app.logic.stop_current(),
         Action::CyclePlaybackMode => app.cycle_playback_mode(),
         Action::ToggleSortOrder => {
+            let scroll_target = app.library.selected_track_id().cloned();
             let next = blackbird_client_shared::toggle_sort_order(app.logic.get_sort_order());
             app.logic.set_sort_order(next);
             app.library.mark_dirty();
+            app.library.scroll_to_track = scroll_target;
         }
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),

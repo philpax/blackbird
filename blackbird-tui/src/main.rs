@@ -516,9 +516,11 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
         }
         Action::CyclePlaybackMode => app.cycle_playback_mode(),
         Action::ToggleSortOrder => {
+            let scroll_target = app.library.selected_track_id().cloned();
             let next = blackbird_client_shared::toggle_sort_order(app.logic.get_sort_order());
             app.logic.set_sort_order(next);
             app.library.mark_dirty();
+            app.library.scroll_to_track = scroll_target;
         }
         Action::Select => {
             if app.focused_panel == FocusedPanel::Library {

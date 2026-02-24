@@ -218,6 +218,14 @@ impl App {
                                 .mini_library
                                 .library_view
                                 .invalidate_library_scroll();
+                            // Re-center on the playing track after re-sorting.
+                            if let Some(track_id) = logic.get_playing_track_id() {
+                                logic
+                                    .get_state()
+                                    .write()
+                                    .unwrap()
+                                    .last_requested_track_for_ui_scroll = Some(track_id);
+                            }
                         }
                         keys::Action::SeekBackward => {
                             seek_relative(logic, -blackbird_client_shared::SEEK_STEP_SECS);
