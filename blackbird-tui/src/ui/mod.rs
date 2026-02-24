@@ -313,7 +313,7 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
     }
 }
 
-fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
 
     let help_actions: &[keys::Action] = match app.focused_panel {
@@ -325,23 +325,27 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     let mut spans: Vec<Span> = Vec::new();
+    let mut x_pos = area.x + 1; // Account for the leading space.
     spans.push(Span::raw(" "));
 
+    app.help_bar_items.clear();
+
     for action in help_actions {
-        if let Some((key, label)) = action.help_label() {
-            // For sort order, show the current value instead of static label.
-            let label: std::borrow::Cow<'static, str> = if *action == keys::Action::ToggleSortOrder
-            {
-                app.logic.get_sort_order().as_str().into()
-            } else {
-                label.into()
-            };
+        if let Some((key, label)) = action.help_label(&app.logic) {
+            let key_str = String::from(key);
+            let label_str = format!(":{label} ");
+            let item_width = key_str.len() as u16 + label_str.len() as u16;
+
+            app.help_bar_items
+                .push((x_pos, x_pos + item_width, *action));
 
             spans.push(Span::styled(
-                String::from(key),
+                key_str,
                 Style::default().fg(style.track_name_playing_color()),
             ));
-            spans.push(Span::raw(format!(":{label} ")));
+            spans.push(Span::raw(label_str));
+
+            x_pos += item_width;
         }
     }
 

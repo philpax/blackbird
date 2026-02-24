@@ -363,15 +363,7 @@ impl App {
                 ui.horizontal(|ui| {
                     for action in keys::LIBRARY_HELP {
                         let mut job = LayoutJob::default();
-                        let (key, label) = action.help_label();
-
-                        // For sort order, show the current value instead of static label.
-                        let label: std::borrow::Cow<'static, str> =
-                            if *action == keys::Action::ToggleSortOrder {
-                                logic.get_sort_order().as_str().into()
-                            } else {
-                                label.into()
-                            };
+                        let (key, label) = action.help_label(logic);
 
                         job.append(
                             &key,

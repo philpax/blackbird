@@ -3,7 +3,7 @@ use std::time::Duration;
 use blackbird_state::{AlbumId, CoverArtId, TrackId};
 use serde::{Deserialize, Serialize};
 
-use crate::{Library, TrackDisplayDetails, queue::QueueState};
+use crate::{Library, PlaybackState, TrackDisplayDetails, queue::QueueState};
 
 /// The sort order for displaying albums in the library.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -58,13 +58,13 @@ impl PlaybackMode {
     /// Returns a human-readable name for the mode.
     pub fn as_str(&self) -> &'static str {
         match self {
-            PlaybackMode::Sequential => "Sequential",
-            PlaybackMode::RepeatOne => "Repeat One",
-            PlaybackMode::GroupRepeat => "Group Repeat",
-            PlaybackMode::Shuffle => "Shuffle",
-            PlaybackMode::LikedShuffle => "Liked Shuffle",
-            PlaybackMode::GroupShuffle => "Group Shuffle",
-            PlaybackMode::LikedGroupShuffle => "Liked Group Shuffle",
+            PlaybackMode::Sequential => "sequential",
+            PlaybackMode::RepeatOne => "repeat one",
+            PlaybackMode::GroupRepeat => "group repeat",
+            PlaybackMode::Shuffle => "shuffle",
+            PlaybackMode::LikedShuffle => "liked shuffle",
+            PlaybackMode::GroupShuffle => "group shuffle",
+            PlaybackMode::LikedGroupShuffle => "liked group shuffle",
         }
     }
 }
@@ -82,6 +82,7 @@ pub struct AppState {
     pub started_loading_track: Option<std::time::Instant>,
     // bit ugly but cbf plumbing it better
     pub last_requested_track_for_ui_scroll: Option<TrackId>,
+    pub playback_state: PlaybackState,
     pub playback_mode: PlaybackMode,
     pub sort_order: SortOrder,
     pub queue: QueueState,
@@ -99,6 +100,7 @@ impl Default for AppState {
             current_track_and_position: None,
             started_loading_track: None,
             last_requested_track_for_ui_scroll: None,
+            playback_state: PlaybackState::Stopped,
             playback_mode: PlaybackMode::default(),
             sort_order: SortOrder::default(),
             queue: QueueState::new(),

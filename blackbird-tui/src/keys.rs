@@ -1,3 +1,4 @@
+use blackbird_core as bc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use smol_str::{SmolStr, ToSmolStr};
 
@@ -72,29 +73,43 @@ pub const KEY_CONFIRM_NO: KeyCode = KeyCode::Char('n');
 impl Action {
     /// Label shown in the help bar. Returns `None` for actions that
     /// shouldn't appear (navigation, text input, etc.).
-    pub fn help_label(&self) -> Option<(SmolStr, &'static str)> {
-        let (key, desc) = match self {
-            Action::Quit => (KEY_QUIT, "quit"),
-            Action::PlayPause => (KEY_PLAY_PAUSE, "play"),
-            Action::Stop => (KEY_STOP, "stop"),
-            Action::Next => (KEY_NEXT, "next"),
-            Action::Previous => (KEY_PREVIOUS, "prev"),
-            Action::Search => (KEY_SEARCH, "search"),
-            Action::Lyrics => (KEY_LYRICS, "lyrics"),
-            Action::Logs => (KEY_LOGS, "logs"),
-            Action::Queue => (KEY_QUEUE, "queue"),
-            Action::VolumeMode => (KEY_VOLUME, "vol"),
-            Action::Star => (KEY_STAR, "star"),
-            Action::SeekForward => (KEY_SEEK_FWD, "seek+"),
-            Action::SeekBackward => (KEY_SEEK_BACK, "seek-"),
-            Action::GotoPlaying => (KEY_GOTO_PLAYING, "goto"),
-            Action::Select => (KEY_SELECT, "play"),
-            Action::Back => (KEY_BACK, "close"),
-            Action::CyclePlaybackMode => (KEY_CYCLE_MODE, "mode"),
-            Action::ToggleSortOrder => (KEY_TOGGLE_SORT, "order"),
+    pub fn help_label(&self, logic: &bc::Logic) -> Option<(SmolStr, SmolStr)> {
+        let (key, desc): (KeyCode, SmolStr) = match self {
+            Action::Quit => (KEY_QUIT, "quit".into()),
+            Action::PlayPause => {
+                let label = if logic.get_playback_state() == bc::PlaybackState::Playing {
+                    "pause"
+                } else {
+                    "play"
+                };
+                (KEY_PLAY_PAUSE, label.into())
+            }
+            Action::Stop => (KEY_STOP, "stop".into()),
+            Action::Next => (KEY_NEXT, "next".into()),
+            Action::Previous => (KEY_PREVIOUS, "prev".into()),
+            Action::Search => (KEY_SEARCH, "search".into()),
+            Action::Lyrics => (KEY_LYRICS, "lyrics".into()),
+            Action::Logs => (KEY_LOGS, "logs".into()),
+            Action::Queue => (KEY_QUEUE, "queue".into()),
+            Action::VolumeMode => (KEY_VOLUME, "vol".into()),
+            Action::Star => (KEY_STAR, "star".into()),
+            Action::SeekForward => (KEY_SEEK_FWD, "seek+".into()),
+            Action::SeekBackward => (KEY_SEEK_BACK, "seek-".into()),
+            Action::GotoPlaying => (KEY_GOTO_PLAYING, "goto".into()),
+            Action::Select => (KEY_SELECT, "play".into()),
+            Action::Back => (KEY_BACK, "close".into()),
+            Action::CyclePlaybackMode => {
+                let mode = logic.get_playback_mode().as_str();
+                (KEY_CYCLE_MODE, format!("mode ({mode})").into())
+            }
+            Action::ToggleSortOrder => {
+                let order = logic.get_sort_order().as_str();
+                (KEY_TOGGLE_SORT, format!("sort ({order})").into())
+            }
             _ => return None,
         };
-        Some((key.to_smolstr(), desc))
+        let key_str: SmolStr = key.to_smolstr().to_lowercase().into();
+        Some((key_str, desc))
     }
 }
 

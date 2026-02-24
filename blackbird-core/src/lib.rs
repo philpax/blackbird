@@ -312,7 +312,9 @@ impl Logic {
                         Some(AppStateError::DecodeTrackFailed { track_id, error });
                     self.schedule_next_track();
                 }
-                PlaybackToLogicMessage::PlaybackStateChanged(_s) => {}
+                PlaybackToLogicMessage::PlaybackStateChanged(s) => {
+                    self.write_state().playback_state = s;
+                }
             }
         }
 
@@ -674,6 +676,10 @@ impl Logic {
         if current_track_id.is_some() {
             self.ensure_cache_window();
         }
+    }
+
+    pub fn get_playback_state(&self) -> PlaybackState {
+        self.read_state().playback_state
     }
 
     pub fn get_playback_mode(&self) -> PlaybackMode {

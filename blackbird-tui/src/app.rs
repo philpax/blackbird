@@ -5,6 +5,7 @@ use blackbird_core::{self as bc, PlaybackToLogicMessage};
 use crate::{
     config::Config,
     cover_art::CoverArtCache,
+    keys,
     log_buffer::LogBuffer,
     ui::{
         album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
@@ -39,6 +40,8 @@ pub struct App {
     pub needs_redraw: bool,
     pub mouse_position: Option<(u16, u16)>,
     pub album_art_overlay: Option<AlbumArtOverlay>,
+    /// Clickable regions in the help bar: (x_start, x_end, action).
+    pub help_bar_items: Vec<(u16, u16, keys::Action)>,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -78,6 +81,7 @@ impl App {
             needs_redraw: true,
             mouse_position: None,
             album_art_overlay: None,
+            help_bar_items: Vec::new(),
 
             library: LibraryState::new(),
             search: SearchState::new(),

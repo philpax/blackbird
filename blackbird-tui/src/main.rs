@@ -342,6 +342,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     let now_playing_area = main.now_playing;
     let scrub_area = main.scrub_bar;
     let library_area = main.content;
+    let help_bar_area = main.help_bar;
 
     let x = mouse.column;
     let y = mouse.row;
@@ -398,6 +399,12 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 } else if app.focused_panel == FocusedPanel::Queue {
                     ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
                 }
+                return;
+            }
+
+            // --- Help bar area ---
+            if y >= help_bar_area.y && y < help_bar_area.y + help_bar_area.height {
+                handle_help_bar_click(app, x);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -460,6 +467,67 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     app.logs.scroll_offset =
                         (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
                 }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn handle_help_bar_click(app: &mut App, x: u16) {
+    let Some(&(_, _, action)) = app
+        .help_bar_items
+        .iter()
+        .find(|(x_start, x_end, _)| x >= *x_start && x < *x_end)
+    else {
+        return;
+    };
+
+    match action {
+        Action::Quit => app.quit_confirming = true,
+        Action::PlayPause => app.logic.toggle_current(),
+        Action::Next => app.logic.next(),
+        Action::Previous => app.logic.previous(),
+        Action::Stop => app.logic.stop_current(),
+        Action::Search => app.toggle_search(),
+        Action::Lyrics => app.toggle_lyrics(),
+        Action::Queue => app.toggle_queue(),
+        Action::Logs => app.toggle_logs(),
+        Action::VolumeMode => app.volume_editing = !app.volume_editing,
+        Action::Star => {
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                let state = app.logic.get_state();
+                let starred = state
+                    .read()
+                    .unwrap()
+                    .library
+                    .track_map
+                    .get(&track_id)
+                    .is_some_and(|t| t.starred);
+                app.logic.set_track_starred(&track_id, !starred);
+            }
+        }
+        Action::SeekForward => app.seek_relative(ui::layout::SEEK_STEP_SECS),
+        Action::SeekBackward => app.seek_relative(-ui::layout::SEEK_STEP_SECS),
+        Action::GotoPlaying => {
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                app.logic.set_scroll_target(&track_id);
+                app.library.scroll_to_track = Some(track_id);
+            }
+        }
+        Action::CyclePlaybackMode => app.cycle_playback_mode(),
+        Action::ToggleSortOrder => {
+            let next = blackbird_client_shared::toggle_sort_order(app.logic.get_sort_order());
+            app.logic.set_sort_order(next);
+            app.library.mark_dirty();
+        }
+        Action::Select => {
+            if app.focused_panel == FocusedPanel::Library {
+                ui::library::handle_key(app, Action::Select);
+            }
+        }
+        Action::Back => {
+            if app.focused_panel != FocusedPanel::Library {
+                app.focused_panel = FocusedPanel::Library;
             }
         }
         _ => {}

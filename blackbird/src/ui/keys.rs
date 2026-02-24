@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use blackbird_core as bc;
 use egui::Key;
 
 // ── Key constants ───────────────────────────────────────────────────
@@ -63,29 +64,44 @@ impl Action {
     }
 
     /// Returns the key label and description for display in the help bar.
-    pub fn help_label(&self) -> (Cow<'static, str>, &'static str) {
-        let key_label = match self {
+    pub fn help_label(&self, logic: &bc::Logic) -> (Cow<'static, str>, Cow<'static, str>) {
+        let key_label: Cow<'static, str> = match self {
             // Star is Shift+8, so we display '*' instead of '8'.
-            Action::Star => Cow::Borrowed("*"),
-            _ => Cow::Borrowed(self.key().symbol_or_name()),
+            Action::Star => "*".into(),
+            _ => {
+                let s = self.key().symbol_or_name();
+                if s.chars().any(|c| c.is_uppercase()) {
+                    s.to_lowercase().into()
+                } else {
+                    s.into()
+                }
+            }
         };
 
-        let description = match self {
-            Action::PlayPause => "play",
-            Action::Stop => "stop",
-            Action::Next => "next",
-            Action::Previous => "prev",
-            Action::CyclePlaybackMode => "mode",
-            Action::ToggleSortOrder => "order",
-            Action::Star => "star",
-            Action::SeekForward => "seek+",
-            Action::SeekBackward => "seek-",
-            Action::GotoPlaying => "goto",
-            Action::SearchInline => "search",
-            Action::Lyrics => "lyrics",
-            Action::Queue => "queue",
-            Action::VolumeUp => "vol+",
-            Action::VolumeDown => "vol-",
+        let description: Cow<'static, str> = match self {
+            Action::PlayPause => {
+                if logic.get_playback_state() == bc::PlaybackState::Playing {
+                    "pause".into()
+                } else {
+                    "play".into()
+                }
+            }
+            Action::Stop => "stop".into(),
+            Action::Next => "next".into(),
+            Action::Previous => "prev".into(),
+            Action::CyclePlaybackMode => {
+                format!("mode ({})", logic.get_playback_mode().as_str()).into()
+            }
+            Action::ToggleSortOrder => format!("sort ({})", logic.get_sort_order().as_str()).into(),
+            Action::Star => "star".into(),
+            Action::SeekForward => "seek+".into(),
+            Action::SeekBackward => "seek-".into(),
+            Action::GotoPlaying => "goto".into(),
+            Action::SearchInline => "search".into(),
+            Action::Lyrics => "lyrics".into(),
+            Action::Queue => "queue".into(),
+            Action::VolumeUp => "vol+".into(),
+            Action::VolumeDown => "vol-".into(),
         };
 
         (key_label, description)
