@@ -11,8 +11,9 @@ pub struct PlaybackThread {
     /// Wrapped in `Option` so that `Drop` can close the channel before joining
     /// the thread.
     logic_to_playback_tx: Option<PlaybackThreadSendHandle>,
-    /// Wrapped in `Option` so that `Drop` can join the thread.
-    playback_thread_handle: Option<std::thread::JoinHandle<()>>,
+    /// Kept to prevent the thread from being detached until the struct is
+    /// dropped (at which point the process is exiting anyway).
+    _playback_thread_handle: Option<std::thread::JoinHandle<()>>,
     playback_to_logic_rx: PlaybackToLogicRx,
 }
 
@@ -66,10 +67,9 @@ impl Drop for PlaybackThread {
         if let Some(tx) = self.logic_to_playback_tx.take() {
             let _ = tx.0.send(LogicToPlaybackMessage::Shutdown);
         }
-        // Join the thread so audio stops before the process exits.
-        if let Some(handle) = self.playback_thread_handle.take() {
-            let _ = handle.join();
-        }
+        // Don't join — rodio's Sink/OutputStream cleanup can block while audio
+        // buffers drain, which stalls the main thread and keeps audio playing.
+        // The process exit will kill the thread and close audio devices immediately.
     }
 }
 
@@ -86,7 +86,7 @@ impl PlaybackThread {
 
         Self {
             logic_to_playback_tx: Some(PlaybackThreadSendHandle(logic_to_playback_tx)),
-            playback_thread_handle: Some(playback_thread_handle),
+            _playback_thread_handle: Some(playback_thread_handle),
             playback_to_logic_rx,
         }
     }
