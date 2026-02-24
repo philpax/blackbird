@@ -31,9 +31,14 @@ mod library;
 pub use library::Library;
 
 pub struct Logic {
+    // N.B. `playback_thread` must be declared before `tokio_thread` so that it
+    // drops first. `TokioThread` drop blocks while spawned tasks (which hold
+    // `PlaybackThreadSendHandle` clones) complete; if that runs before
+    // `PlaybackThread::Drop` sends `Shutdown`, audio keeps playing until the
+    // runtime finishes shutting down.
+    playback_thread: PlaybackThread,
     tokio_thread: TokioThread,
 
-    playback_thread: PlaybackThread,
     playback_to_logic_rx: PlaybackToLogicRx,
 
     logic_request_tx: LogicRequestHandle,
