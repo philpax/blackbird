@@ -360,10 +360,20 @@ pub fn recompute_queue_on_state(st: &mut AppState, current_track: Option<&TrackI
         compute_full_ordering(&st.library, st.playback_mode, &st.queue, current_track);
 
     // Set current_index to the position of current_track (or 0 if not found).
+    // If the current track isn't in the ordering (e.g. switching to LikedGroupShuffle
+    // from a track not in any liked group), prepend it so that the queue accurately
+    // reflects what's playing. It naturally falls behind once the user advances.
     let current = current_track.or(st.current_track_and_position.as_ref().map(|t| &t.track_id));
-    st.queue.current_index = current
-        .and_then(|tid| st.queue.ordered_tracks.iter().position(|t| t == tid))
-        .unwrap_or(0);
+    if let Some(tid) = current {
+        if let Some(pos) = st.queue.ordered_tracks.iter().position(|t| t == tid) {
+            st.queue.current_index = pos;
+        } else {
+            st.queue.ordered_tracks.insert(0, tid.clone());
+            st.queue.current_index = 0;
+        }
+    } else {
+        st.queue.current_index = 0;
+    }
 
     tracing::debug!(
         "Queue recomputed: {} tracks, current_index={}",
@@ -768,6 +778,32 @@ mod tests {
         recompute_queue_on_state(&mut st, Some(&target));
 
         assert_eq!(st.queue.ordered_tracks[st.queue.current_index], target);
+    }
+
+    #[test]
+    fn out_of_mode_track_prepended_to_queue() {
+        let library = make_library(6, 2);
+        let mut st = AppState {
+            library,
+            playback_mode: PlaybackMode::LikedGroupShuffle,
+            ..AppState::default()
+        };
+        st.queue.shuffle_seed = 42;
+        st.queue.group_shuffle_seed = 99;
+
+        // Unstar all groups so LikedGroupShuffle produces an empty ordering.
+        for group in &mut st.library.groups {
+            Arc::make_mut(group).starred = false;
+        }
+
+        // Pretend we're playing a track that won't appear in the filtered ordering.
+        let playing = st.library.track_ids[0].clone();
+        recompute_queue_on_state(&mut st, Some(&playing));
+
+        // The playing track should be prepended as the sole entry.
+        assert_eq!(st.queue.ordered_tracks.len(), 1);
+        assert_eq!(st.queue.ordered_tracks[0], playing);
+        assert_eq!(st.queue.current_index, 0);
     }
 
     #[test]
