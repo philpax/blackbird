@@ -1,6 +1,5 @@
 use std::{
-    cmp::Reverse,
-    collections::{BinaryHeap, HashMap, hash_map::DefaultHasher},
+    collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
@@ -16,7 +15,7 @@ use crate::{
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
 
-// Queue-specific state stored under AppState
+// Queue-specific state stored under AppState.
 pub struct QueueState {
     pub shuffle_seed: u64,
     pub audio_cache: HashMap<TrackId, Vec<u8>>,
@@ -27,6 +26,11 @@ pub struct QueueState {
     pub pending_skip_after_error: bool,
     pub group_shuffle_seed: u64,
     pub next_track_appended: Option<TrackId>,
+
+    /// The precomputed full playback ordering for the current mode.
+    pub ordered_tracks: Vec<TrackId>,
+    /// The index of the currently playing track within `ordered_tracks`.
+    pub current_index: usize,
 }
 
 impl Default for QueueState {
@@ -51,6 +55,8 @@ impl QueueState {
             current_target_request_id: None,
             pending_skip_after_error: false,
             next_track_appended: None,
+            ordered_tracks: vec![],
+            current_index: 0,
         }
     }
 }
@@ -75,6 +81,14 @@ impl Logic {
     pub(super) fn schedule_next_track(&self) {
         if let Some(next) = self.compute_next_track_id() {
             tracing::debug!("Advancing to next track {}", next.0);
+            // Advance the index before scheduling.
+            {
+                let mut st = self.write_state();
+                let len = st.queue.ordered_tracks.len();
+                if len > 0 {
+                    st.queue.current_index = (st.queue.current_index + 1) % len;
+                }
+            }
             self.schedule_play_track(&next);
         } else {
             tracing::warn!("No next track available to advance to");
@@ -84,6 +98,14 @@ impl Logic {
     pub(super) fn schedule_previous_track(&self) {
         if let Some(prev) = self.compute_previous_track_id() {
             tracing::debug!("Advancing to previous track {}", prev.0);
+            // Decrement the index before scheduling.
+            {
+                let mut st = self.write_state();
+                let len = st.queue.ordered_tracks.len();
+                if len > 0 {
+                    st.queue.current_index = (st.queue.current_index + len - 1) % len;
+                }
+            }
             self.schedule_play_track(&prev);
         } else {
             tracing::warn!("No previous track available to advance to");
@@ -93,7 +115,7 @@ impl Logic {
     pub(super) fn schedule_play_track(&self, track_id: &TrackId) {
         self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
 
-        // Set target and show loading indicator
+        // Set target and show loading indicator.
         let req_id = {
             let mut st = self.write_state();
             st.started_loading_track = Some(std::time::Instant::now());
@@ -103,14 +125,14 @@ impl Logic {
             let req_id = st.queue.request_counter;
             st.queue.current_target_request_id = Some(req_id);
 
-            // Reset gapless playback state since we're manually changing tracks
+            // Reset gapless playback state since we're manually changing tracks.
             st.queue.next_track_appended = None;
 
             tracing::debug!("Scheduling track {} (req_id={})", track_id.0, req_id);
             req_id
         };
 
-        // If already cached, play immediately
+        // If already cached, play immediately.
         let cached_track = self.read_state().queue.audio_cache.get(track_id).cloned();
         if let Some(data) = cached_track {
             tracing::debug!("Playing from cache: {}", track_id.0);
@@ -122,8 +144,8 @@ impl Logic {
             self.load_track_internal(track_id.clone(), req_id, true);
         }
 
-        // Also ensure nearby cache is populated
-        self.ensure_cache_window(track_id);
+        // Also ensure nearby cache is populated.
+        self.ensure_cache_window();
     }
 
     pub(super) fn load_track_internal(
@@ -182,7 +204,6 @@ impl Logic {
                         .audio_cache
                         .insert(track_id.clone(), data.clone());
 
-                    // If this request was for immediate playback and is still the current target, play it
                     if for_playback && is_current_target {
                         tracing::debug!(
                             "Load complete and current: playing {} (req_id={})",
@@ -233,30 +254,29 @@ impl Logic {
 
     pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
-        compute_neighbour(
-            &st.library,
-            &st.queue,
-            st.playback_mode,
-            &st.current_track_and_position.as_ref()?.track_id,
-            Neighbour::Next,
-        )
+        let ordered = &st.queue.ordered_tracks;
+        if ordered.is_empty() {
+            return None;
+        }
+        let next_index = (st.queue.current_index + 1) % ordered.len();
+        Some(ordered[next_index].clone())
     }
 
     pub(super) fn compute_previous_track_id(&self) -> Option<TrackId> {
         let st = self.read_state();
-        compute_neighbour(
-            &st.library,
-            &st.queue,
-            st.playback_mode,
-            &st.current_track_and_position.as_ref()?.track_id,
-            Neighbour::Prev,
-        )
+        let ordered = &st.queue.ordered_tracks;
+        if ordered.is_empty() {
+            return None;
+        }
+        let prev_index = (st.queue.current_index + ordered.len() - 1) % ordered.len();
+        Some(ordered[prev_index].clone())
     }
 
-    pub(super) fn ensure_cache_window(&self, center: &TrackId) {
+    /// Ensures that the audio cache contains tracks surrounding the current queue position.
+    pub(super) fn ensure_cache_window(&self) {
         let window = {
             let st = self.read_state();
-            compute_window(&st.library, &st.queue, st.playback_mode, center, 2)
+            compute_window_from_queue(&st.queue, 2)
         };
 
         self.write_state()
@@ -264,13 +284,13 @@ impl Logic {
             .audio_cache
             .retain(|key, _| window.contains(key));
 
-        // Prefetch in window order (center first)
+        // Prefetch in window order.
         let mut scheduled = 0usize;
-        for sid in window {
+        for sid in &window {
             let already = {
                 let st = self.read_state();
-                st.queue.audio_cache.contains_key(&sid)
-                    || st.queue.pending_audio_requests.contains_key(&sid)
+                st.queue.audio_cache.contains_key(sid)
+                    || st.queue.pending_audio_requests.contains_key(sid)
             };
             if !already {
                 let req_id = {
@@ -278,26 +298,199 @@ impl Logic {
                     st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
                     st.queue.request_counter
                 };
-                self.load_track_internal(sid, req_id, false);
+                self.load_track_internal(sid.clone(), req_id, false);
                 scheduled += 1;
             }
         }
         tracing::debug!(
-            "Cache window ensured around {}: scheduled={}",
-            center.0,
+            "Cache window ensured around index {}: scheduled={}",
+            self.read_state().queue.current_index,
             scheduled
         );
     }
+
+    /// Recomputes the playback queue ordering for the current mode
+    /// and sets `current_index` to the position of `current_track` (or 0 if not found).
+    pub fn recompute_queue(&self, current_track: Option<&TrackId>) {
+        let mut st = self.write_state();
+        recompute_queue_on_state(&mut st, current_track);
+    }
+
+    /// Returns (tracks_before, current_track, tracks_after) by slicing `ordered_tracks`
+    /// around `current_index`, limited to `radius` entries in each direction.
+    pub fn get_queue_window(&self, radius: usize) -> (Vec<TrackId>, Option<TrackId>, Vec<TrackId>) {
+        let st = self.read_state();
+        let ordered = &st.queue.ordered_tracks;
+        if ordered.is_empty() {
+            return (vec![], None, vec![]);
+        }
+
+        let idx = st.queue.current_index.min(ordered.len() - 1);
+        let current = Some(ordered[idx].clone());
+
+        let len = ordered.len();
+        let mut before = Vec::with_capacity(radius);
+        let mut after = Vec::with_capacity(radius);
+
+        for i in 1..=radius {
+            if i >= len {
+                break;
+            }
+            let prev_idx = (idx + len - i) % len;
+            before.push(ordered[prev_idx].clone());
+        }
+        before.reverse();
+
+        for i in 1..=radius {
+            if i >= len {
+                break;
+            }
+            let next_idx = (idx + i) % len;
+            after.push(ordered[next_idx].clone());
+        }
+
+        (before, current, after)
+    }
 }
 
-// Deterministic shuffle key based on seed and id
+/// Recomputes the queue ordering on a mutable `AppState` reference.
+/// Useful when the state write lock is already held (e.g. during `initial_fetch`).
+pub fn recompute_queue_on_state(st: &mut AppState, current_track: Option<&TrackId>) {
+    st.queue.ordered_tracks =
+        compute_full_ordering(&st.library, st.playback_mode, &st.queue, current_track);
+
+    // Set current_index to the position of current_track (or 0 if not found).
+    let current = current_track.or(st.current_track_and_position.as_ref().map(|t| &t.track_id));
+    st.queue.current_index = current
+        .and_then(|tid| st.queue.ordered_tracks.iter().position(|t| t == tid))
+        .unwrap_or(0);
+
+    tracing::debug!(
+        "Queue recomputed: {} tracks, current_index={}",
+        st.queue.ordered_tracks.len(),
+        st.queue.current_index,
+    );
+}
+
+/// Computes the full playback ordering for a given mode.
+fn compute_full_ordering(
+    library: &Library,
+    mode: PlaybackMode,
+    queue: &QueueState,
+    current_track: Option<&TrackId>,
+) -> Vec<TrackId> {
+    match mode {
+        PlaybackMode::Sequential => library.track_ids.clone(),
+
+        PlaybackMode::RepeatOne => {
+            // The current track, or an empty queue if nothing is playing.
+            let track = current_track.cloned();
+            match track {
+                Some(t) => vec![t],
+                None => vec![],
+            }
+        }
+
+        PlaybackMode::GroupRepeat => {
+            // All tracks in the current track's group, or empty if nothing playing.
+            let Some(tid) = current_track else {
+                return vec![];
+            };
+            let Some(&group_idx) = library.track_to_group_index.get(tid) else {
+                return vec![];
+            };
+            match library.groups.get(group_idx) {
+                Some(group) => group.tracks.clone(),
+                None => vec![],
+            }
+        }
+
+        PlaybackMode::Shuffle => {
+            let mut tracks = library.track_ids.clone();
+            tracks.sort_by_key(|tid| shuffle_key(tid, queue.shuffle_seed));
+            tracks
+        }
+
+        PlaybackMode::LikedShuffle => {
+            let mut tracks: Vec<TrackId> = library
+                .track_ids
+                .iter()
+                .filter(|tid| library.track_map.get(tid).is_some_and(|t| t.starred))
+                .cloned()
+                .collect();
+            tracks.sort_by_key(|tid| shuffle_key(tid, queue.shuffle_seed));
+            tracks
+        }
+
+        PlaybackMode::GroupShuffle => {
+            // Sort group indices by shuffle key, then flatten each group's tracks.
+            let mut group_indices: Vec<usize> = (0..library.groups.len()).collect();
+            group_indices.sort_by_key(|&idx| shuffle_key(idx, queue.group_shuffle_seed));
+            group_indices
+                .into_iter()
+                .flat_map(|idx| library.groups[idx].tracks.iter().cloned())
+                .collect()
+        }
+
+        PlaybackMode::LikedGroupShuffle => {
+            // Same as GroupShuffle but filtered to starred groups.
+            let mut group_indices: Vec<usize> = library
+                .groups
+                .iter()
+                .enumerate()
+                .filter(|(_, g)| g.starred)
+                .map(|(idx, _)| idx)
+                .collect();
+            group_indices.sort_by_key(|&idx| shuffle_key(idx, queue.group_shuffle_seed));
+            group_indices
+                .into_iter()
+                .flat_map(|idx| library.groups[idx].tracks.iter().cloned())
+                .collect()
+        }
+    }
+}
+
+/// Computes a cache window of track IDs around `current_index` in the precomputed queue.
+fn compute_window_from_queue(queue: &QueueState, radius: usize) -> Vec<TrackId> {
+    let ordered = &queue.ordered_tracks;
+    if ordered.is_empty() {
+        return vec![];
+    }
+
+    let idx = queue.current_index.min(ordered.len() - 1);
+    let len = ordered.len();
+    let mut out = Vec::with_capacity(1 + radius * 2);
+
+    // Center.
+    out.push(ordered[idx].clone());
+
+    // Previous tracks.
+    for i in 1..=radius {
+        if i >= len {
+            break;
+        }
+        out.push(ordered[(idx + len - i) % len].clone());
+    }
+
+    // Next tracks.
+    for i in 1..=radius {
+        if i >= len {
+            break;
+        }
+        out.push(ordered[(idx + i) % len].clone());
+    }
+
+    out
+}
+
+// Deterministic shuffle key based on seed and id.
 fn shuffle_key(id: impl Hash, seed: u64) -> u64 {
     let mut hasher = DefaultHasher::new();
     id.hash(&mut hasher);
     let id_hash = hasher.finish();
 
-    // Use a strong mixing function (murmurhash3 finalizer)
-    // This provides excellent avalanche properties ensuring diverse shuffle orderings
+    // Use a strong mixing function (murmurhash3 finalizer).
+    // This provides excellent avalanche properties ensuring diverse shuffle orderings.
     let mut x = id_hash ^ seed;
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51afd7ed558ccd);
@@ -308,8 +501,8 @@ fn shuffle_key(id: impl Hash, seed: u64) -> u64 {
 }
 
 fn next_seed(seed: u64) -> u64 {
-    // Use murmurhash3 finalizer for strong seed progression
-    let mut x = seed.wrapping_add(0x9e3779b97f4a7c15); // Add golden ratio to avoid trivial cycles
+    // Use murmurhash3 finalizer for strong seed progression.
+    let mut x = seed.wrapping_add(0x9e3779b97f4a7c15); // Add golden ratio to avoid trivial cycles.
     x ^= x >> 33;
     x = x.wrapping_mul(0xff51afd7ed558ccd);
     x ^= x >> 33;
@@ -318,499 +511,287 @@ fn next_seed(seed: u64) -> u64 {
     x
 }
 
-fn compute_window(
-    library: &Library,
-    queue: &QueueState,
-    mode: PlaybackMode,
-    center: &TrackId,
-    radius: usize,
-) -> Vec<TrackId> {
-    let mut out = Vec::with_capacity(1 + radius * 2);
-    out.push(center.clone());
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
 
-    // Collect neighbours in each direction in a single pass when possible
-    out.extend(compute_neighbours(
-        library,
-        queue,
-        mode,
-        center,
-        Neighbour::Prev,
-        radius,
-    ));
-    out.extend(compute_neighbours(
-        library,
-        queue,
-        mode,
-        center,
-        Neighbour::Next,
-        radius,
-    ));
+    use blackbird_state::{AlbumId, Group, Track, TrackId};
+    use smol_str::SmolStr;
 
-    out
-}
+    use super::*;
+    use crate::{Library, SortOrder};
 
-#[derive(Clone, Copy)]
-enum Neighbour {
-    Prev,
-    Next,
-}
-#[allow(clippy::too_many_arguments)]
-fn compute_neighbour(
-    library: &Library,
-    queue: &QueueState,
-    mode: PlaybackMode,
-    center: &TrackId,
-    dir: Neighbour,
-) -> Option<TrackId> {
-    compute_neighbours(library, queue, mode, center, dir, 1)
-        .first()
-        .cloned()
-}
-fn compute_neighbours(
-    Library {
-        track_ids,
-        groups,
-        track_to_group_index,
-        track_to_group_track_index,
-        track_map,
-        ..
-    }: &Library,
-    queue: &QueueState,
-    mode: PlaybackMode,
-    center: &TrackId,
-    dir: Neighbour,
-    count: usize,
-) -> Vec<TrackId> {
-    match mode {
-        PlaybackMode::RepeatOne => vec![center.clone()],
-        PlaybackMode::GroupRepeat => {
-            let (current_group_idx, current_track_idx) = {
-                let group_idx = track_to_group_index.get(center).copied();
-                let track_idx = track_to_group_track_index.get(center).copied();
+    fn make_track(idx: usize) -> Track {
+        Track {
+            id: TrackId(format!("t{idx}")),
+            title: SmolStr::new(format!("Track {idx}")),
+            artist: None,
+            track: None,
+            year: None,
+            _genre: None,
+            duration: Some(180),
+            disc_number: None,
+            starred: idx % 3 == 0, // every 3rd track is starred
+            play_count: None,
+            album_id: None,
+        }
+    }
 
-                let Some(group_idx) = group_idx else {
-                    tracing::warn!("Center track {center} not found in group index map");
-                    return vec![];
-                };
-                (group_idx, track_idx.unwrap_or(0))
+    fn make_group(g: usize, track_ids: Vec<TrackId>) -> Arc<Group> {
+        Arc::new(Group {
+            album_id: AlbumId(SmolStr::new(format!("album{g}"))),
+            album: SmolStr::new(format!("Album {g}")),
+            artist: SmolStr::new(format!("Artist {g}")),
+            sort_artist: SmolStr::new(format!("Artist {g}")),
+            year: None,
+            duration: 0,
+            tracks: track_ids,
+            cover_art_id: None,
+            starred: g % 2 == 0, // every other group is starred
+        })
+    }
+
+    /// Creates a minimal library with `n` tracks spread across `group_count` groups.
+    fn make_library(n: usize, group_count: usize) -> Library {
+        let mut library = Library::default();
+        let mut track_map = HashMap::new();
+        let mut groups = Vec::new();
+
+        let tracks_per_group = n / group_count.max(1);
+        let mut track_idx = 0;
+
+        for g in 0..group_count {
+            let mut group_tracks = Vec::new();
+            let count = if g == group_count - 1 {
+                n - track_idx
+            } else {
+                tracks_per_group
             };
-
-            let Some(current_group) = groups
-                .get(current_group_idx)
-                .filter(|g| !g.tracks.is_empty() && g.tracks.len() > 1)
-            else {
-                return vec![center.clone()];
-            };
-
-            match dir {
-                Neighbour::Next => {
-                    let start_idx = (current_track_idx + 1) % current_group.tracks.len();
-                    current_group
-                        .tracks
-                        .iter()
-                        .cycle()
-                        .skip(start_idx)
-                        .take(count)
-                        .cloned()
-                        .collect()
-                }
-                Neighbour::Prev => {
-                    let len = current_group.tracks.len();
-                    (1..=count)
-                        .map(|i| {
-                            let idx = (current_track_idx + len - i) % len;
-                            current_group.tracks[idx].clone()
-                        })
-                        .collect()
-                }
+            for _ in 0..count {
+                let track = make_track(track_idx);
+                let tid = track.id.clone();
+                track_map.insert(tid.clone(), track);
+                group_tracks.push(tid);
+                track_idx += 1;
             }
+            groups.push(make_group(g, group_tracks));
         }
-        PlaybackMode::Sequential => {
-            let Some(idx) = track_ids.iter().position(|s| s == center) else {
-                tracing::warn!("Center track {center} not found in ordered tracks");
-                return vec![];
-            };
 
-            if track_ids.len() <= 1 {
-                return vec![];
-            }
-
-            match dir {
-                Neighbour::Prev => {
-                    (0..count)
-                        .map(|i| {
-                            let pos = if idx > i {
-                                idx - i - 1
-                            } else {
-                                // Wrap around: go to end and count backwards
-                                track_ids.len() - (i + 1 - idx)
-                            };
-                            track_ids[pos].clone()
-                        })
-                        .collect()
-                }
-                Neighbour::Next => (1..=count)
-                    .map(|i| {
-                        let pos = (idx + i) % track_ids.len();
-                        track_ids[pos].clone()
-                    })
-                    .collect(),
-            }
-        }
-        PlaybackMode::Shuffle => {
-            match dir {
-                Neighbour::Prev => get_tracks_shuffle_order(
-                    track_ids,
-                    center,
-                    queue.shuffle_seed,
-                    count,
-                    Reverse,                  // reverse mapping for descending order
-                    |k, cur_key| k < cur_key, // filter: keys below current
-                ),
-                Neighbour::Next => get_tracks_shuffle_order(
-                    track_ids,
-                    center,
-                    queue.shuffle_seed,
-                    count,
-                    |k| k,                    // identity mapping
-                    |k, cur_key| k > cur_key, // filter: keys above current
-                ),
-            }
-        }
-        PlaybackMode::LikedShuffle => {
-            // Filter to only include starred (liked) tracks
-            let liked_track_ids: Vec<TrackId> = track_ids
-                .iter()
-                .filter(|tid| track_map.get(tid).is_some_and(|t| t.starred))
-                .cloned()
-                .collect();
-
-            match dir {
-                Neighbour::Prev => get_tracks_shuffle_order(
-                    &liked_track_ids,
-                    center,
-                    queue.shuffle_seed,
-                    count,
-                    Reverse,                  // reverse mapping for descending order
-                    |k, cur_key| k < cur_key, // filter: keys below current
-                ),
-                Neighbour::Next => get_tracks_shuffle_order(
-                    &liked_track_ids,
-                    center,
-                    queue.shuffle_seed,
-                    count,
-                    |k| k,                    // identity mapping
-                    |k, cur_key| k > cur_key, // filter: keys above current
-                ),
-            }
-        }
-        PlaybackMode::GroupShuffle => compute_group_shuffle_neighbours(
+        library.populate(
+            vec![],
+            track_map,
             groups,
-            track_to_group_index,
-            track_to_group_track_index,
-            center,
-            queue.group_shuffle_seed,
-            dir,
-            count,
-            None, // No filter, use all groups
-        ),
-        PlaybackMode::LikedGroupShuffle => {
-            // Filter to only include starred (liked) groups
-            let liked_group_indices: Vec<usize> = groups
-                .iter()
-                .enumerate()
-                .filter(|(_, g)| g.starred)
-                .map(|(idx, _)| idx)
-                .collect();
-
-            compute_group_shuffle_neighbours(
-                groups,
-                track_to_group_index,
-                track_to_group_track_index,
-                center,
-                queue.group_shuffle_seed,
-                dir,
-                count,
-                Some(&liked_group_indices),
-            )
-        }
-    }
-}
-
-// Helper function to compute group shuffle neighbors with optional filtering
-#[allow(clippy::too_many_arguments)]
-fn compute_group_shuffle_neighbours(
-    groups: &[Arc<blackbird_state::Group>],
-    track_to_group_index: &HashMap<TrackId, usize>,
-    track_to_group_track_index: &HashMap<TrackId, usize>,
-    center: &TrackId,
-    seed: u64,
-    dir: Neighbour,
-    count: usize,
-    filtered_group_indices: Option<&[usize]>,
-) -> Vec<TrackId> {
-    let (current_group_idx, current_track_idx) = {
-        let group_idx = track_to_group_index.get(center).copied();
-        let track_idx = track_to_group_track_index.get(center).copied();
-
-        let Some(group_idx) = group_idx else {
-            tracing::warn!("Center track {center} not found in group index map");
-            return vec![];
-        };
-        (group_idx, track_idx.unwrap_or(0))
-    };
-
-    if current_group_idx >= groups.len() {
-        return vec![];
+            HashMap::new(),
+            SortOrder::Alphabetical,
+        );
+        library
     }
 
-    let current_group = &groups[current_group_idx];
-    let mut result = Vec::new();
-    let mut remaining = count;
+    fn make_queue() -> QueueState {
+        let mut q = QueueState::new();
+        // Use fixed seeds for determinism.
+        q.shuffle_seed = 42;
+        q.group_shuffle_seed = 99;
+        q
+    }
 
-    // Check if current group is in the filtered set (if filtering is enabled)
-    let current_group_in_filter =
-        filtered_group_indices.is_none_or(|indices| indices.contains(&current_group_idx));
+    #[test]
+    fn sequential_ordering_matches_library_order() {
+        let library = make_library(5, 1);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::Sequential, &queue, None);
+        assert_eq!(ordering, library.track_ids);
+    }
 
-    match dir {
-        Neighbour::Next => {
-            // Try to get next track in current group first (if in filter)
-            if current_group_in_filter && current_track_idx + 1 < current_group.tracks.len() {
-                result.push(current_group.tracks[current_track_idx + 1].clone());
-                remaining -= 1;
-            }
+    #[test]
+    fn repeat_one_single_track() {
+        let library = make_library(5, 1);
+        let queue = make_queue();
+        let current = library.track_ids[2].clone();
+        let ordering =
+            compute_full_ordering(&library, PlaybackMode::RepeatOne, &queue, Some(&current));
+        assert_eq!(ordering, vec![current]);
+    }
 
-            // If we need more tracks, get next groups using shuffle-like ordering
-            if remaining > 0 {
-                let next_groups = match filtered_group_indices {
-                    Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
-                        indices,
-                        current_group_idx,
-                        seed,
-                        remaining,
-                        |k| k,                    // identity mapping
-                        |k, cur_key| k > cur_key, // filter: keys above current
-                    ),
-                    None if groups.len() > 1 => get_groups_shuffle_order(
-                        groups.len(),
-                        current_group_idx,
-                        seed,
-                        remaining,
-                        |k| k,                    // identity mapping
-                        |k, cur_key| k > cur_key, // filter: keys above current
-                    ),
-                    _ => vec![],
-                };
+    #[test]
+    fn repeat_one_no_current_track() {
+        let library = make_library(5, 1);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::RepeatOne, &queue, None);
+        assert!(ordering.is_empty());
+    }
 
-                for next_group_idx in next_groups {
-                    if next_group_idx < groups.len() && !groups[next_group_idx].tracks.is_empty() {
-                        result.push(groups[next_group_idx].tracks[0].clone());
-                        remaining -= 1;
-                        if remaining == 0 {
-                            break;
-                        }
-                    }
-                }
+    #[test]
+    fn group_repeat_scoped_to_group() {
+        let library = make_library(6, 2);
+        let queue = make_queue();
+        // Pick a track from the second group.
+        let current = library.track_ids[4].clone();
+        let ordering =
+            compute_full_ordering(&library, PlaybackMode::GroupRepeat, &queue, Some(&current));
+        // Should contain only tracks from the same group.
+        let group_idx = library.track_to_group_index[&current];
+        assert_eq!(ordering, library.groups[group_idx].tracks);
+    }
 
-                // If we still need more tracks, wrap around to the beginning
-                if remaining > 0 {
-                    let wrap_groups = match filtered_group_indices {
-                        Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
-                            indices,
-                            current_group_idx,
-                            seed,
-                            remaining,
-                            |k| k,       // identity mapping for ascending (smallest keys)
-                            |_, _| true, // accept all groups (no relative filtering)
-                        ),
-                        None if groups.len() > 1 => get_groups_shuffle_order(
-                            groups.len(),
-                            current_group_idx,
-                            seed,
-                            remaining,
-                            |k| k,       // identity mapping for ascending (smallest keys)
-                            |_, _| true, // accept all groups (no relative filtering)
-                        ),
-                        _ => vec![],
-                    };
+    #[test]
+    fn shuffle_deterministic_with_same_seed() {
+        let library = make_library(10, 2);
+        let queue = make_queue();
+        let ord1 = compute_full_ordering(&library, PlaybackMode::Shuffle, &queue, None);
+        let ord2 = compute_full_ordering(&library, PlaybackMode::Shuffle, &queue, None);
+        assert_eq!(ord1, ord2);
+    }
 
-                    for wrap_group_idx in wrap_groups {
-                        if wrap_group_idx < groups.len()
-                            && !groups[wrap_group_idx].tracks.is_empty()
-                        {
-                            result.push(groups[wrap_group_idx].tracks[0].clone());
-                            remaining -= 1;
-                            if remaining == 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        Neighbour::Prev => {
-            // Try to get previous track in current group first (if in filter)
-            if current_group_in_filter && current_track_idx > 0 {
-                result.push(current_group.tracks[current_track_idx - 1].clone());
-                remaining -= 1;
-            }
-
-            // If we need more tracks, get previous groups using shuffle-like ordering
-            if remaining > 0 {
-                let prev_groups = match filtered_group_indices {
-                    Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
-                        indices,
-                        current_group_idx,
-                        seed,
-                        remaining,
-                        Reverse,                  // reverse mapping for descending order
-                        |k, cur_key| k < cur_key, // filter: keys below current
-                    ),
-                    None if groups.len() > 1 => get_groups_shuffle_order(
-                        groups.len(),
-                        current_group_idx,
-                        seed,
-                        remaining,
-                        Reverse,                  // reverse mapping for descending order
-                        |k, cur_key| k < cur_key, // filter: keys below current
-                    ),
-                    _ => vec![],
-                };
-
-                for prev_group_idx in prev_groups {
-                    if prev_group_idx < groups.len() && !groups[prev_group_idx].tracks.is_empty() {
-                        let last_track_idx = groups[prev_group_idx].tracks.len() - 1;
-                        result.push(groups[prev_group_idx].tracks[last_track_idx].clone());
-                        remaining -= 1;
-                        if remaining == 0 {
-                            break;
-                        }
-                    }
-                }
-
-                // If we still need more tracks, wrap around to the end
-                if remaining > 0 {
-                    let wrap_groups = match filtered_group_indices {
-                        Some(indices) if indices.len() > 1 => get_liked_groups_shuffle_order(
-                            indices,
-                            current_group_idx,
-                            seed,
-                            remaining,
-                            Reverse,     // reverse mapping for descending (largest keys)
-                            |_, _| true, // accept all groups (no relative filtering)
-                        ),
-                        None if groups.len() > 1 => get_groups_shuffle_order(
-                            groups.len(),
-                            current_group_idx,
-                            seed,
-                            remaining,
-                            Reverse,     // reverse mapping for descending (largest keys)
-                            |_, _| true, // accept all groups (no relative filtering)
-                        ),
-                        _ => vec![],
-                    };
-
-                    for wrap_group_idx in wrap_groups {
-                        if wrap_group_idx < groups.len()
-                            && !groups[wrap_group_idx].tracks.is_empty()
-                        {
-                            let last_track_idx = groups[wrap_group_idx].tracks.len() - 1;
-                            result.push(groups[wrap_group_idx].tracks[last_track_idx].clone());
-                            remaining -= 1;
-                            if remaining == 0 {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
+    #[test]
+    fn shuffle_contains_all_tracks() {
+        let library = make_library(10, 2);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::Shuffle, &queue, None);
+        assert_eq!(ordering.len(), library.track_ids.len());
+        for tid in &library.track_ids {
+            assert!(ordering.contains(tid));
         }
     }
 
-    result
-}
-
-fn get_tracks_shuffle_order<K: Ord + Copy>(
-    track_ids: &[TrackId],
-    center: &TrackId,
-    seed: u64,
-    count: usize,
-    key_mapper: impl Fn(u64) -> K,
-    key_filter: impl Fn(u64, u64) -> bool,
-) -> Vec<TrackId> {
-    get_shuffle_order_impl(
-        track_ids.iter().filter(|&track| track != center).cloned(),
-        shuffle_key(center, seed),
-        count,
-        |track| shuffle_key(track, seed),
-        key_mapper,
-        key_filter,
-    )
-}
-
-fn get_groups_shuffle_order<K: Ord + Copy>(
-    total_groups: usize,
-    current_group_idx: usize,
-    seed: u64,
-    count: usize,
-    key_mapper: impl Fn(u64) -> K,
-    key_filter: impl Fn(u64, u64) -> bool,
-) -> Vec<usize> {
-    get_shuffle_order_impl(
-        (0..total_groups).filter(|&group_idx| group_idx != current_group_idx),
-        shuffle_key(current_group_idx, seed),
-        count,
-        |group_idx| shuffle_key(*group_idx, seed),
-        key_mapper,
-        key_filter,
-    )
-}
-
-fn get_liked_groups_shuffle_order<K: Ord + Copy>(
-    liked_group_indices: &[usize],
-    current_group_idx: usize,
-    seed: u64,
-    count: usize,
-    key_mapper: impl Fn(u64) -> K,
-    key_filter: impl Fn(u64, u64) -> bool,
-) -> Vec<usize> {
-    get_shuffle_order_impl(
-        liked_group_indices
+    #[test]
+    fn liked_shuffle_filters_to_starred() {
+        let library = make_library(10, 2);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::LikedShuffle, &queue, None);
+        for tid in &ordering {
+            assert!(library.track_map[tid].starred);
+        }
+        let expected_count = library
+            .track_ids
             .iter()
-            .copied()
-            .filter(|&group_idx| group_idx != current_group_idx),
-        shuffle_key(current_group_idx, seed),
-        count,
-        |group_idx| shuffle_key(*group_idx, seed),
-        key_mapper,
-        key_filter,
-    )
-}
+            .filter(|tid| library.track_map[tid].starred)
+            .count();
+        assert_eq!(ordering.len(), expected_count);
+    }
 
-// Common implementation for shuffle ordering of any items using BinaryHeap
-fn get_shuffle_order_impl<T: Ord + Clone, K: Ord + Copy>(
-    items: impl Iterator<Item = T>,
-    center_key: u64,
-    count: usize,
-    item_to_key: impl Fn(&T) -> u64,
-    key_mapper: impl Fn(u64) -> K,
-    key_filter: impl Fn(u64, u64) -> bool,
-) -> Vec<T> {
-    // Use heap to keep only the top-k items, avoiding full allocation
-    let mut heap: BinaryHeap<(K, T)> = BinaryHeap::new();
-    for item in items {
-        let k = item_to_key(&item);
-        if key_filter(k, center_key) {
-            heap.push((key_mapper(k), item));
-            // Keep only the closest `count` items
-            if heap.len() > count {
-                heap.pop();
-            }
+    #[test]
+    fn liked_shuffle_empty_when_none_liked() {
+        let mut library = make_library(5, 1);
+        for track in library.track_map.values_mut() {
+            track.starred = false;
+        }
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::LikedShuffle, &queue, None);
+        assert!(ordering.is_empty());
+    }
+
+    #[test]
+    fn group_shuffle_contains_all_tracks() {
+        let library = make_library(10, 3);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::GroupShuffle, &queue, None);
+        assert_eq!(ordering.len(), library.track_ids.len());
+        for tid in &library.track_ids {
+            assert!(ordering.contains(tid));
         }
     }
 
-    // Extract items and sort by key (heap gives us max-first, we want sorted order)
-    let mut items: Vec<(K, T)> = heap.into_iter().collect();
-    items.sort_by_key(|(k, _)| *k);
-    items.into_iter().map(|(_, item)| item).collect()
+    #[test]
+    fn liked_group_shuffle_filters_to_starred_groups() {
+        let library = make_library(10, 4);
+        let queue = make_queue();
+        let ordering =
+            compute_full_ordering(&library, PlaybackMode::LikedGroupShuffle, &queue, None);
+        for tid in &ordering {
+            let group_idx = library.track_to_group_index[tid];
+            assert!(library.groups[group_idx].starred);
+        }
+    }
+
+    #[test]
+    fn empty_library_produces_empty_ordering() {
+        let library = Library::default();
+        let queue = make_queue();
+        for mode in [
+            PlaybackMode::Sequential,
+            PlaybackMode::Shuffle,
+            PlaybackMode::GroupShuffle,
+            PlaybackMode::LikedShuffle,
+            PlaybackMode::LikedGroupShuffle,
+        ] {
+            let ordering = compute_full_ordering(&library, mode, &queue, None);
+            assert!(
+                ordering.is_empty(),
+                "mode {mode:?} should produce empty ordering"
+            );
+        }
+    }
+
+    #[test]
+    fn single_track_library() {
+        let library = make_library(1, 1);
+        let queue = make_queue();
+        let current = library.track_ids[0].clone();
+        for mode in [
+            PlaybackMode::Sequential,
+            PlaybackMode::RepeatOne,
+            PlaybackMode::GroupRepeat,
+            PlaybackMode::Shuffle,
+        ] {
+            let ordering = compute_full_ordering(&library, mode, &queue, Some(&current));
+            assert_eq!(ordering.len(), 1, "mode {mode:?} with single track");
+            assert_eq!(ordering[0], current);
+        }
+    }
+
+    #[test]
+    fn wrapping_next_previous() {
+        let library = make_library(3, 1);
+        let queue = make_queue();
+        let ordering = compute_full_ordering(&library, PlaybackMode::Sequential, &queue, None);
+
+        let last_idx = ordering.len() - 1;
+        let next_idx = (last_idx + 1) % ordering.len();
+        assert_eq!(next_idx, 0);
+
+        let prev_idx = (0 + ordering.len() - 1) % ordering.len();
+        assert_eq!(prev_idx, last_idx);
+    }
+
+    #[test]
+    fn recompute_queue_sets_current_index() {
+        let library = make_library(5, 1);
+        let mut st = AppState {
+            library,
+            ..AppState::default()
+        };
+        st.queue.shuffle_seed = 42;
+        st.queue.group_shuffle_seed = 99;
+
+        let target = st.library.track_ids[3].clone();
+        recompute_queue_on_state(&mut st, Some(&target));
+
+        assert_eq!(st.queue.ordered_tracks[st.queue.current_index], target);
+    }
+
+    #[test]
+    fn compute_window_from_queue_basic() {
+        let mut queue = make_queue();
+        queue.ordered_tracks = vec![
+            TrackId("a".to_string()),
+            TrackId("b".to_string()),
+            TrackId("c".to_string()),
+            TrackId("d".to_string()),
+            TrackId("e".to_string()),
+        ];
+        queue.current_index = 2; // "c"
+
+        let window = compute_window_from_queue(&queue, 2);
+        // Should contain c (center), a, b (prev), d, e (next).
+        assert_eq!(window.len(), 5);
+        assert_eq!(window[0], TrackId("c".to_string())); // center
+    }
+
+    #[test]
+    fn compute_window_from_queue_empty() {
+        let queue = make_queue();
+        let window = compute_window_from_queue(&queue, 2);
+        assert!(window.is_empty());
+    }
 }

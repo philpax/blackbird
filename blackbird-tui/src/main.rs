@@ -326,6 +326,16 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
                 }
             }
         }
+        FocusedPanel::Queue => {
+            if let Some(action) = keys::queue_action(key)
+                && let Some(qa) = ui::queue::handle_key(&mut app.queue, &app.logic, action)
+            {
+                match qa {
+                    ui::queue::QueueAction::ToggleQueue => app.toggle_queue(),
+                    ui::queue::QueueAction::Quit => app.should_quit = true,
+                }
+            }
+        }
     }
 }
 
@@ -389,6 +399,8 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     ui::library::handle_mouse_click(app, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Lyrics {
                     ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Queue {
+                    ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
                 }
             }
         }
@@ -418,6 +430,12 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     app.logic.get_playing_position(),
                     -(ui::layout::SCROLL_WHEEL_STEPS as i32),
                 );
+            } else if app.focused_panel == FocusedPanel::Queue {
+                ui::queue::scroll_selection(
+                    &mut app.queue,
+                    &app.logic,
+                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
+                );
             } else if app.focused_panel == FocusedPanel::Logs {
                 app.logs.scroll_offset = app
                     .logs
@@ -432,6 +450,12 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 ui::lyrics::move_selection(
                     &mut app.lyrics,
                     app.logic.get_playing_position(),
+                    ui::layout::SCROLL_WHEEL_STEPS as i32,
+                );
+            } else if app.focused_panel == FocusedPanel::Queue {
+                ui::queue::scroll_selection(
+                    &mut app.queue,
+                    &app.logic,
                     ui::layout::SCROLL_WHEEL_STEPS as i32,
                 );
             } else if app.focused_panel == FocusedPanel::Logs {
@@ -461,6 +485,9 @@ fn apply_scroll(app: &mut App, scroll_delta: i32) {
                 app.logic.get_playing_position(),
                 direction * steps as i32,
             );
+        }
+        FocusedPanel::Queue => {
+            ui::queue::scroll_selection(&mut app.queue, &app.logic, direction * steps as i32);
         }
         FocusedPanel::Logs => {
             if direction < 0 {

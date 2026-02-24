@@ -14,6 +14,7 @@ pub enum Action {
     Search,
     Lyrics,
     Logs,
+    Queue,
     VolumeMode,
     VolumeUp,
     VolumeDown,
@@ -46,6 +47,7 @@ pub const KEY_TOGGLE_SORT: KeyCode = KeyCode::Char('o');
 pub const KEY_SEARCH: KeyCode = KeyCode::Char('/');
 pub const KEY_LYRICS: KeyCode = KeyCode::Char('l');
 pub const KEY_LOGS: KeyCode = KeyCode::Char('L');
+pub const KEY_QUEUE: KeyCode = KeyCode::Char('u');
 pub const KEY_VOLUME: KeyCode = KeyCode::Char('v');
 pub const KEY_GOTO_PLAYING: KeyCode = KeyCode::Char('g');
 pub const KEY_SEEK_BACK: KeyCode = KeyCode::Char('<');
@@ -80,6 +82,7 @@ impl Action {
             Action::Search => (KEY_SEARCH, "search"),
             Action::Lyrics => (KEY_LYRICS, "lyrics"),
             Action::Logs => (KEY_LOGS, "logs"),
+            Action::Queue => (KEY_QUEUE, "queue"),
             Action::VolumeMode => (KEY_VOLUME, "vol"),
             Action::Star => (KEY_STAR, "star"),
             Action::SeekForward => (KEY_SEEK_FWD, "seek+"),
@@ -108,6 +111,7 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_SEARCH => Some(Action::Search),
         KEY_LYRICS => Some(Action::Lyrics),
         KEY_LOGS => Some(Action::Logs),
+        KEY_QUEUE => Some(Action::Queue),
         KEY_VOLUME => Some(Action::VolumeMode),
         KEY_GOTO_PLAYING => Some(Action::GotoPlaying),
         KEY_SEEK_BACK | KEY_SEEK_BACK_ALT => Some(Action::SeekBackward),
@@ -180,6 +184,22 @@ pub fn quit_confirm_action(key: &KeyEvent) -> Action {
     }
 }
 
+/// Resolve a key event into an action in queue context.
+pub fn queue_action(key: &KeyEvent) -> Option<Action> {
+    match key.code {
+        KEY_BACK | KEY_QUEUE | KEY_QUIT => Some(Action::Back),
+        KEY_UP => Some(Action::MoveUp),
+        KEY_DOWN => Some(Action::MoveDown),
+        KEY_PAGE_UP => Some(Action::PageUp),
+        KEY_PAGE_DOWN => Some(Action::PageDown),
+        KEY_SELECT => Some(Action::Select),
+        KEY_PLAY_PAUSE => Some(Action::PlayPause),
+        KEY_NEXT => Some(Action::Next),
+        KEY_PREVIOUS => Some(Action::Previous),
+        _ => None,
+    }
+}
+
 /// Resolve a key event into an action in logs context.
 pub fn logs_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
@@ -207,6 +227,7 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::GotoPlaying,
     Action::Search,
     Action::Lyrics,
+    Action::Queue,
     Action::VolumeMode,
     Action::Select,
     Action::CyclePlaybackMode,
@@ -229,6 +250,17 @@ pub const LYRICS_HELP: &[Action] = &[
     Action::Select,
     Action::SeekBackward,
     Action::SeekForward,
+    Action::PlayPause,
+    Action::Next,
+    Action::Previous,
+];
+
+/// Ordered list of actions to show in the queue help bar.
+pub const QUEUE_HELP: &[Action] = &[
+    Action::Back,
+    Action::MoveUp,
+    Action::MoveDown,
+    Action::Select,
     Action::PlayPause,
     Action::Next,
     Action::Previous,

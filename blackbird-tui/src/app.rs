@@ -8,7 +8,7 @@ use crate::{
     log_buffer::LogBuffer,
     ui::{
         album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
-        lyrics::LyricsState, search::SearchState,
+        lyrics::LyricsState, queue::QueueState, search::SearchState,
     },
 };
 
@@ -19,6 +19,7 @@ pub enum FocusedPanel {
     Search,
     Lyrics,
     Logs,
+    Queue,
 }
 
 pub struct App {
@@ -47,6 +48,7 @@ pub struct App {
     pub search: SearchState,
     pub lyrics: LyricsState,
     pub logs: LogsState,
+    pub queue: QueueState,
 }
 
 impl App {
@@ -81,6 +83,7 @@ impl App {
             search: SearchState::new(),
             lyrics: LyricsState::new(),
             logs: LogsState::new(log_buffer),
+            queue: QueueState::new(),
         }
     }
 
@@ -196,6 +199,15 @@ impl App {
         } else {
             self.focused_panel = FocusedPanel::Logs;
             self.logs.scroll_to_end();
+        }
+    }
+
+    pub fn toggle_queue(&mut self) {
+        if self.focused_panel == FocusedPanel::Queue {
+            self.focused_panel = FocusedPanel::Library;
+        } else {
+            self.focused_panel = FocusedPanel::Queue;
+            self.queue.reset();
         }
     }
 

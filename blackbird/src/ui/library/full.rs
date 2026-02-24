@@ -11,6 +11,7 @@ use super::shared::{LibraryViewConfig, render_library_view};
 pub struct FullLibraryState {
     pub search_open: bool,
     pub lyrics_open: bool,
+    pub queue_open: bool,
 }
 
 /// Main library UI
@@ -27,7 +28,8 @@ pub fn ui(
     ui_state: &FullLibraryState,
 ) {
     // Only capture keyboard input if search modal and lyrics window are not open
-    let can_handle_incremental_search = !ui_state.search_open && !ui_state.lyrics_open;
+    let can_handle_incremental_search =
+        !ui_state.search_open && !ui_state.lyrics_open && !ui_state.queue_open;
 
     render_library_view(
         ui,

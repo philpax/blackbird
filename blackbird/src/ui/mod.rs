@@ -5,6 +5,7 @@ mod keys;
 mod library;
 mod lyrics;
 mod playing_track;
+mod queue;
 mod scrub_bar;
 mod search;
 mod style;
@@ -36,9 +37,15 @@ pub struct LyricsState {
 }
 
 #[derive(Default)]
+pub struct QueueState {
+    pub(crate) open: bool,
+}
+
+#[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
+    pub queue: QueueState,
     pub library_view: library::LibraryViewState,
     pub mini_library: library::MiniLibraryState,
 }
@@ -166,8 +173,10 @@ impl App {
 
         // Handle keyboard shortcuts when no modal is consuming input
         let search_active = self.ui_state.library_view.incremental_search.active;
-        let can_handle_shortcuts =
-            !self.ui_state.search.open && !self.ui_state.lyrics.open && !search_active;
+        let can_handle_shortcuts = !self.ui_state.search.open
+            && !self.ui_state.lyrics.open
+            && !self.ui_state.queue.open
+            && !search_active;
 
         if can_handle_shortcuts {
             ctx.input(|i| {
@@ -236,6 +245,9 @@ impl App {
                                 self.ui_state.lyrics.auto_scroll = true;
                                 logic.request_lyrics(&track_id);
                             }
+                        }
+                        keys::Action::Queue => {
+                            self.ui_state.queue.open = !self.ui_state.queue.open;
                         }
                         keys::Action::Star => {
                             let Some(track_id) = logic.get_playing_track_id() else {
@@ -315,6 +327,10 @@ impl App {
                 &mut self.ui_state.lyrics.loading,
                 &mut self.ui_state.lyrics.auto_scroll,
             );
+        }
+
+        if self.ui_state.queue.open {
+            queue::ui(logic, ctx, &config.style, &mut self.ui_state.queue.open);
         }
 
         let margin = 8;
@@ -414,6 +430,7 @@ impl App {
                     &library::full::FullLibraryState {
                         search_open: self.ui_state.search.open,
                         lyrics_open: self.ui_state.lyrics.open,
+                        queue_open: self.ui_state.queue.open,
                     },
                 );
             });

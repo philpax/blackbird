@@ -4,6 +4,7 @@ pub(crate) mod library;
 pub(crate) mod logs;
 pub(crate) mod lyrics;
 pub(crate) mod now_playing;
+pub(crate) mod queue;
 pub(crate) mod search;
 
 use blackbird_client_shared::style as shared_style;
@@ -176,6 +177,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             main.content,
         ),
         FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, main.content),
+        FocusedPanel::Queue => queue::draw(
+            frame,
+            &app.queue,
+            &app.config.style,
+            &app.logic,
+            main.content,
+        ),
     }
 
     draw_help_bar(frame, app, main.help_bar);
@@ -313,6 +321,7 @@ fn draw_help_bar(frame: &mut Frame, app: &App, area: Rect) {
         FocusedPanel::Search => keys::SEARCH_HELP,
         FocusedPanel::Lyrics => keys::LYRICS_HELP,
         FocusedPanel::Logs => keys::LOGS_HELP,
+        FocusedPanel::Queue => keys::QUEUE_HELP,
     };
 
     let mut spans: Vec<Span> = Vec::new();

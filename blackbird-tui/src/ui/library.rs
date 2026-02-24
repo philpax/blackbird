@@ -806,6 +806,7 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),
         Action::Logs => app.toggle_logs(),
+        Action::Queue => app.toggle_queue(),
         Action::VolumeMode => app.volume_editing = true,
         Action::GotoPlaying => {
             if let Some(track_id) = app.logic.get_playing_track_id() {

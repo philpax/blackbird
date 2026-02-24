@@ -20,7 +20,7 @@ pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogic
 mod tokio_thread;
 use tokio_thread::TokioThread;
 
-mod queue;
+pub(crate) mod queue;
 
 mod app_state;
 pub use app_state::{
@@ -245,7 +245,7 @@ impl Logic {
                             &self.state.read().unwrap(),
                         )
                     );
-                    self.ensure_cache_window(&track_and_position.track_id);
+                    self.ensure_cache_window();
 
                     let mut st = self.write_state();
                     st.current_track_and_position = Some(track_and_position.clone());
@@ -447,11 +447,18 @@ impl Logic {
         self.tokio_thread.spawn(async move {
             // Immediately update the track in the UI to avoid latency, and assume
             // the server will confirm the operation.
-            let old_starred = state
-                .write()
-                .unwrap()
-                .library
-                .set_track_starred(&track_id, starred);
+            let old_starred = {
+                let mut st = state.write().unwrap();
+                let old = st.library.set_track_starred(&track_id, starred);
+                // Recompute the queue if the current mode depends on liked status.
+                if matches!(
+                    st.playback_mode,
+                    PlaybackMode::LikedShuffle | PlaybackMode::LikedGroupShuffle
+                ) {
+                    queue::recompute_queue_on_state(&mut st, None);
+                }
+                old
+            };
 
             let operation = if starred {
                 client.star([track_id.0.clone()], [], []).await
@@ -490,11 +497,18 @@ impl Logic {
         self.tokio_thread.spawn(async move {
             // Immediately update the album in the UI to avoid latency, and assume
             // the server will confirm the operation.
-            let old_starred = state
-                .write()
-                .unwrap()
-                .library
-                .set_album_starred(&album_id, starred);
+            let old_starred = {
+                let mut st = state.write().unwrap();
+                let old = st.library.set_album_starred(&album_id, starred);
+                // Recompute the queue if the current mode depends on liked status.
+                if matches!(
+                    st.playback_mode,
+                    PlaybackMode::LikedShuffle | PlaybackMode::LikedGroupShuffle
+                ) {
+                    queue::recompute_queue_on_state(&mut st, None);
+                }
+                old
+            };
             let operation = if starred {
                 client.star([], [album_id.0.to_string()], []).await
             } else {
@@ -629,13 +643,15 @@ impl Logic {
                 .map(|t| t.track_id.clone())
         };
 
-        // Clear any queued next track by marking it for skip, so the new mode takes effect immediately
-        // The marked track will be skipped when it transitions to current, triggering playback based on new mode
+        // Clear any queued next track by marking it for skip, so the new mode takes effect immediately.
+        // The marked track will be skipped when it transitions to current, triggering playback based on new mode.
         self.playback_thread
             .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
 
-        if let Some(track_id) = current_track_id {
-            self.ensure_cache_window(&track_id);
+        self.recompute_queue(current_track_id.as_ref());
+
+        if current_track_id.is_some() {
+            self.ensure_cache_window();
         }
     }
 
@@ -645,9 +661,15 @@ impl Logic {
 
     pub fn set_sort_order(&self, order: SortOrder) {
         tracing::debug!("Sort order set to {order:?}");
-        let mut st = self.write_state();
-        st.sort_order = order;
-        st.library.resort(order);
+        let current_track = {
+            let mut st = self.write_state();
+            st.sort_order = order;
+            st.library.resort(order);
+            st.current_track_and_position
+                .as_ref()
+                .map(|t| t.track_id.clone())
+        };
+        self.recompute_queue(current_track.as_ref());
     }
 
     pub fn get_sort_order(&self) -> SortOrder {
@@ -703,8 +725,9 @@ impl Logic {
 }
 impl Logic {
     pub fn request_play_track(&self, track_id: &TrackId) {
-        // Public API used by UI: keep current playing until new track is ready
+        // Public API used by UI: keep current playing until new track is ready.
         self.schedule_play_track(track_id);
+        self.recompute_queue(Some(track_id));
     }
 
     /// Updates the scrobble state based on current playback position.
@@ -878,6 +901,7 @@ impl Logic {
                         result.albums,
                         sort_order,
                     );
+                    queue::recompute_queue_on_state(&mut st, None);
                     drop(st);
 
                     // Signal that library population is complete

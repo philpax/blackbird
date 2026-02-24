@@ -14,6 +14,7 @@ pub const KEY_SEEK_FWD: Key = Key::Period;
 pub const KEY_GOTO_PLAYING: Key = Key::G;
 pub const KEY_SEARCH_INLINE: Key = Key::Slash;
 pub const KEY_LYRICS: Key = Key::L;
+pub const KEY_QUEUE: Key = Key::Q;
 pub const KEY_STAR: Key = Key::Num8; // '*' is Shift+8
 pub const KEY_VOLUME_UP: Key = Key::ArrowUp;
 pub const KEY_VOLUME_DOWN: Key = Key::ArrowDown;
@@ -34,6 +35,7 @@ pub enum Action {
     GotoPlaying,
     SearchInline,
     Lyrics,
+    Queue,
     VolumeUp,
     VolumeDown,
 }
@@ -54,6 +56,7 @@ impl Action {
             Action::GotoPlaying => KEY_GOTO_PLAYING,
             Action::SearchInline => KEY_SEARCH_INLINE,
             Action::Lyrics => KEY_LYRICS,
+            Action::Queue => KEY_QUEUE,
             Action::VolumeUp => KEY_VOLUME_UP,
             Action::VolumeDown => KEY_VOLUME_DOWN,
         }
@@ -80,6 +83,7 @@ impl Action {
             Action::GotoPlaying => "goto",
             Action::SearchInline => "search",
             Action::Lyrics => "lyrics",
+            Action::Queue => "queue",
             Action::VolumeUp => "vol+",
             Action::VolumeDown => "vol-",
         };
@@ -100,6 +104,7 @@ pub const LIBRARY_HELP: &[Action] = &[
     Action::GotoPlaying,
     Action::SearchInline,
     Action::Lyrics,
+    Action::Queue,
     Action::VolumeUp,
     Action::VolumeDown,
     Action::CyclePlaybackMode,
@@ -121,6 +126,7 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
         KEY_GOTO_PLAYING => Some(Action::GotoPlaying),
         KEY_SEARCH_INLINE => Some(Action::SearchInline),
         KEY_LYRICS => Some(Action::Lyrics),
+        KEY_QUEUE => Some(Action::Queue),
         // '*' is Shift+8.
         KEY_STAR if shift => Some(Action::Star),
         KEY_VOLUME_UP => Some(Action::VolumeUp),
