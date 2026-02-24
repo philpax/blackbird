@@ -1,4 +1,4 @@
-use blackbird_client_shared::style as shared_style;
+use blackbird_client_shared::{self, style as shared_style};
 use blackbird_core::{self as bc, TrackDisplayDetails, blackbird_state::TrackId};
 use ratatui::{
     Frame,
@@ -47,8 +47,9 @@ pub fn draw(
     logic: &bc::Logic,
     area: Rect,
 ) {
+    let mode = logic.get_playback_mode();
     let block = Block::default()
-        .title(" Queue ")
+        .title(format!(" Queue [{}] ", mode))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(style.album_color()));
 
@@ -189,6 +190,10 @@ pub fn handle_key(
         Action::PlayPause => logic.toggle_current(),
         Action::Next => logic.next(),
         Action::Previous => logic.previous(),
+        Action::CyclePlaybackMode => {
+            let next = blackbird_client_shared::next_playback_mode(logic.get_playback_mode());
+            logic.set_playback_mode(next);
+        }
         _ => {}
     }
     None

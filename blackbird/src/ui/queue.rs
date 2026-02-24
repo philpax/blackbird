@@ -2,6 +2,8 @@ use egui::{
     Align, Align2, Color32, Context, Label, RichText, ScrollArea, Sense, Vec2, Vec2b, Window,
 };
 
+use blackbird_client_shared::next_playback_mode;
+
 use crate::{
     bc,
     ui::{style, style::StyleExt},
@@ -11,6 +13,25 @@ use crate::{
 const QUEUE_RADIUS: usize = 50;
 
 pub fn ui(logic: &mut bc::Logic, ctx: &Context, style: &style::Style, queue_open: &mut bool) {
+    // Handle mode cycling while the queue window is open.
+    ctx.input(|i| {
+        for event in &i.events {
+            if let egui::Event::Key {
+                key: egui::Key::M,
+                pressed: true,
+                modifiers,
+                ..
+            } = event
+                && !modifiers.command
+                && !modifiers.alt
+                && !modifiers.ctrl
+            {
+                let next = next_playback_mode(logic.get_playback_mode());
+                logic.set_playback_mode(next);
+            }
+        }
+    });
+
     // Gather queue data before rendering to avoid holding the state lock during UI rendering.
     let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
 
@@ -60,7 +81,8 @@ pub fn ui(logic: &mut bc::Logic, ctx: &Context, style: &style::Style, queue_open
     let current_list_index = before.len();
     let mut clicked_track = None;
 
-    Window::new("Queue")
+    let mode = logic.get_playback_mode();
+    Window::new(format!("Queue [{}]", mode))
         .open(queue_open)
         .default_pos(ctx.screen_rect().center())
         .default_size(ctx.screen_rect().size() * Vec2::new(0.4, 0.6))

@@ -196,6 +196,7 @@ pub fn queue_action(key: &KeyEvent) -> Option<Action> {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS => Some(Action::Previous),
+        KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
         _ => None,
     }
 }
@@ -264,6 +265,7 @@ pub const QUEUE_HELP: &[Action] = &[
     Action::PlayPause,
     Action::Next,
     Action::Previous,
+    Action::CyclePlaybackMode,
 ];
 
 /// Ordered list of actions to show in the logs help bar.
