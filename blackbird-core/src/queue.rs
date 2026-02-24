@@ -2,18 +2,28 @@ use std::{
     collections::{HashMap, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::{Arc, RwLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use blackbird_state::TrackId;
 use blackbird_subsonic::ClientResult;
 
 use crate::{
-    AppState, Logic, PlaybackMode,
+    AppState, Logic, PlaybackMode, TrackLoadMode,
     app_state::AppStateError,
     library::Library,
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
+
+/// How a loaded track should be handled after streaming.
+pub(crate) enum TrackLoadBehavior {
+    /// Play the track immediately.
+    Play,
+    /// Cache only, don't send to the playback thread.
+    CacheOnly,
+    /// Load into the playback thread paused at the given position.
+    Paused(Duration),
+}
 
 // Queue-specific state stored under AppState.
 pub struct QueueState {
@@ -138,10 +148,14 @@ impl Logic {
             tracing::debug!("Playing from cache: {}", track_id.0);
             self.playback_thread
                 .send_handle()
-                .send(LogicToPlaybackMessage::PlayTrack(track_id.clone(), data));
+                .send(LogicToPlaybackMessage::LoadTrack(
+                    track_id.clone(),
+                    data,
+                    TrackLoadMode::Play,
+                ));
         } else {
             tracing::debug!("Loading track {} (req_id={})", track_id.0, req_id);
-            self.load_track_internal(track_id.clone(), req_id, true);
+            self.load_track_internal(track_id.clone(), req_id, TrackLoadBehavior::Play);
         }
 
         // Also ensure nearby cache is populated.
@@ -152,7 +166,7 @@ impl Logic {
         &self,
         track_id: TrackId,
         request_id: u64,
-        for_playback: bool,
+        behavior: TrackLoadBehavior,
     ) {
         let client = self.client.clone();
         let state = self.state.clone();
@@ -175,81 +189,8 @@ impl Logic {
             let response = client
                 .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
                 .await;
-            handle_load_response(
-                response,
-                state,
-                playback_tx,
-                track_id,
-                request_id,
-                for_playback,
-            );
+            handle_load_response(response, state, playback_tx, track_id, request_id, behavior);
         });
-
-        fn handle_load_response(
-            response: ClientResult<Vec<u8>>,
-            state: Arc<RwLock<AppState>>,
-            playback_tx: PlaybackThreadSendHandle,
-            track_id: TrackId,
-            request_id: u64,
-            for_playback: bool,
-        ) {
-            match response {
-                Ok(data) => {
-                    let is_current_target =
-                        state.read().unwrap().queue.current_target.as_ref() == Some(&track_id);
-                    state
-                        .write()
-                        .unwrap()
-                        .queue
-                        .audio_cache
-                        .insert(track_id.clone(), data.clone());
-
-                    if for_playback && is_current_target {
-                        tracing::debug!(
-                            "Load complete and current: playing {} (req_id={})",
-                            track_id.0,
-                            request_id
-                        );
-                        playback_tx.send(LogicToPlaybackMessage::PlayTrack(track_id.clone(), data));
-                    } else {
-                        tracing::debug!(
-                            "Load complete but not current (for_playback={for_playback}) for {track_id} (req_id={request_id})"
-                        );
-                    }
-
-                    state
-                        .write()
-                        .unwrap()
-                        .queue
-                        .pending_audio_requests
-                        .remove(&track_id);
-                }
-                Err(e) => {
-                    let mut st = state.write().unwrap();
-                    let is_current = st
-                        .queue
-                        .current_target_request_id
-                        .is_some_and(|rid| rid == request_id)
-                        && st.queue.current_target.as_ref() == Some(&track_id);
-
-                    if is_current {
-                        tracing::warn!(
-                            "Load error for current target {track_id} (req_id={request_id}): {}",
-                            e.to_string()
-                        );
-                        st.error = Some(AppStateError::LoadTrackFailed {
-                            track_id,
-                            error: e.to_string(),
-                        });
-                        st.queue.pending_skip_after_error = true;
-                    } else {
-                        tracing::debug!(
-                            "Load error for stale/non-current {track_id} (req_id={request_id}): {e}"
-                        );
-                    }
-                }
-            }
-        }
     }
 
     pub(super) fn compute_next_track_id(&self) -> Option<TrackId> {
@@ -298,7 +239,7 @@ impl Logic {
                     st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
                     st.queue.request_counter
                 };
-                self.load_track_internal(sid.clone(), req_id, false);
+                self.load_track_internal(sid.clone(), req_id, TrackLoadBehavior::CacheOnly);
                 scheduled += 1;
             }
         }
@@ -350,6 +291,91 @@ impl Logic {
         }
 
         (before, current, after)
+    }
+}
+
+pub(crate) fn handle_load_response(
+    response: ClientResult<Vec<u8>>,
+    state: Arc<RwLock<AppState>>,
+    playback_tx: PlaybackThreadSendHandle,
+    track_id: TrackId,
+    request_id: u64,
+    behavior: TrackLoadBehavior,
+) {
+    match response {
+        Ok(data) => {
+            let is_current_target =
+                state.read().unwrap().queue.current_target.as_ref() == Some(&track_id);
+            state
+                .write()
+                .unwrap()
+                .queue
+                .audio_cache
+                .insert(track_id.clone(), data.clone());
+
+            match behavior {
+                TrackLoadBehavior::Play if is_current_target => {
+                    tracing::debug!(
+                        "Load complete and current: playing {} (req_id={})",
+                        track_id.0,
+                        request_id
+                    );
+                    playback_tx.send(LogicToPlaybackMessage::LoadTrack(
+                        track_id.clone(),
+                        data,
+                        TrackLoadMode::Play,
+                    ));
+                }
+                TrackLoadBehavior::Paused(position) if is_current_target => {
+                    tracing::debug!(
+                        "Load complete and current: loading paused {} (req_id={})",
+                        track_id.0,
+                        request_id
+                    );
+                    playback_tx.send(LogicToPlaybackMessage::LoadTrack(
+                        track_id.clone(),
+                        data,
+                        TrackLoadMode::Paused(position),
+                    ));
+                }
+                _ => {
+                    tracing::debug!(
+                        "Load complete but not sending to playback for {track_id} (req_id={request_id})"
+                    );
+                }
+            }
+
+            state
+                .write()
+                .unwrap()
+                .queue
+                .pending_audio_requests
+                .remove(&track_id);
+        }
+        Err(e) => {
+            let mut st = state.write().unwrap();
+            let is_current = st
+                .queue
+                .current_target_request_id
+                .is_some_and(|rid| rid == request_id)
+                && st.queue.current_target.as_ref() == Some(&track_id);
+
+            if is_current {
+                tracing::warn!(
+                    "Load error for current target {track_id} (req_id={request_id}): {}",
+                    e.to_string()
+                );
+                st.error = Some(AppStateError::LoadTrackFailed {
+                    track_id,
+                    error: e.to_string(),
+                });
+                st.queue.pending_skip_after_error = true;
+            } else {
+                tracing::debug!(
+                    "Load error for stale/non-current {track_id} (req_id={request_id}): {e}"
+                );
+            }
+        }
     }
 }
 

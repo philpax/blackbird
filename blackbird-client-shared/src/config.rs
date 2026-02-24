@@ -1,4 +1,6 @@
 /// Configuration types shared between the egui and TUI clients.
+use std::time::Duration;
+
 use blackbird_core::{PlaybackMode, SortOrder, blackbird_state::TrackId};
 use serde::{Deserialize, Serialize};
 
@@ -42,6 +44,15 @@ pub struct LastPlayback {
     pub playback_mode: PlaybackMode,
     /// The library sort order that was active.
     pub sort_order: SortOrder,
+}
+impl LastPlayback {
+    /// Returns the track ID and position if a track was saved, suitable for
+    /// passing to `LogicArgs::last_playback`.
+    pub fn as_track_and_position(&self) -> Option<(TrackId, Duration)> {
+        self.track_id
+            .clone()
+            .map(|id| (id, Duration::from_secs_f64(self.track_position_secs)))
+    }
 }
 impl Default for LastPlayback {
     fn default() -> Self {

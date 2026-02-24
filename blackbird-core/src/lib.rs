@@ -14,7 +14,7 @@ mod render;
 pub use render::VisibleGroupSet;
 
 mod playback_thread;
-use playback_thread::{LogicToPlaybackMessage, PlaybackThread};
+use playback_thread::{LogicToPlaybackMessage, PlaybackThread, TrackLoadMode};
 pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogicRx};
 
 mod tokio_thread;
@@ -51,7 +51,6 @@ pub struct Logic {
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
     transcode: bool,
-    restore_track: Option<(TrackId, Duration)>,
 }
 #[derive(Debug, Clone)]
 pub enum LogicRequestMessage {
@@ -240,9 +239,8 @@ impl Logic {
             state,
             client,
             transcode,
-            restore_track: last_playback,
         };
-        logic.initial_fetch();
+        logic.initial_fetch(last_playback);
         logic
     }
 
@@ -899,11 +897,10 @@ impl Logic {
     }
 }
 impl Logic {
-    fn initial_fetch(&self) {
+    fn initial_fetch(&self, restore_track: Option<(TrackId, Duration)>) {
         let client = self.client.clone();
         let state = self.state.clone();
         let library_populated_tx = self.library_populated_tx.clone();
-        let restore_track = self.restore_track.clone();
         let playback_tx = self.playback_thread.send_handle();
         let transcode = self.transcode;
         self.tokio_thread.spawn(async move {
@@ -919,6 +916,7 @@ impl Logic {
                     })
                     .await?;
 
+                    let req_id;
                     {
                         let mut st = state.write().unwrap();
                         let sort_order = st.sort_order;
@@ -942,6 +940,8 @@ impl Logic {
                             st.queue.current_target = Some(tid.clone());
                             st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
                         }
+
+                        req_id = st.queue.request_counter;
                     }
 
                     // Signal that library population is complete.
@@ -956,25 +956,17 @@ impl Logic {
                             track_id.0,
                             position.as_secs_f64()
                         );
-                        match client
+                        let response = client
                             .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
-                            .await
-                        {
-                            Ok(data) => {
-                                state
-                                    .write()
-                                    .unwrap()
-                                    .queue
-                                    .audio_cache
-                                    .insert(track_id.clone(), data.clone());
-                                playback_tx.send(LogicToPlaybackMessage::LoadTrackPaused(
-                                    track_id, data, position,
-                                ));
-                            }
-                            Err(e) => {
-                                tracing::warn!("Failed to restore last track {}: {e}", track_id.0,);
-                            }
-                        }
+                            .await;
+                        queue::handle_load_response(
+                            response,
+                            state,
+                            playback_tx,
+                            track_id,
+                            req_id,
+                            queue::TrackLoadBehavior::Paused(position),
+                        );
                     }
 
                     bs::ClientResult::Ok(())

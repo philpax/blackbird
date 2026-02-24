@@ -53,12 +53,7 @@ fn main() {
         volume: config.general.volume,
         sort_order: config.shared.last_playback.sort_order,
         playback_mode: config.shared.last_playback.playback_mode,
-        last_playback: config.shared.last_playback.track_id.clone().map(|id| {
-            (
-                id,
-                std::time::Duration::from_secs_f64(config.shared.last_playback.track_position_secs),
-            )
-        }),
+        last_playback: config.shared.last_playback.as_track_and_position(),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
