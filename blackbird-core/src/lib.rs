@@ -51,6 +51,7 @@ pub struct Logic {
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
     transcode: bool,
+    restore_track: Option<(TrackId, Duration)>,
 }
 #[derive(Debug, Clone)]
 pub enum LogicRequestMessage {
@@ -175,6 +176,8 @@ pub struct LogicArgs {
     pub transcode: bool,
     pub volume: f32,
     pub sort_order: SortOrder,
+    pub playback_mode: PlaybackMode,
+    pub last_playback: Option<(TrackId, Duration)>,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     pub library_populated_tx: std::sync::mpsc::Sender<()>,
@@ -189,6 +192,8 @@ impl Logic {
             transcode,
             volume,
             sort_order,
+            playback_mode,
+            last_playback,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             library_populated_tx,
@@ -197,6 +202,7 @@ impl Logic {
         let state = Arc::new(RwLock::new(AppState {
             volume,
             sort_order,
+            playback_mode,
             ..AppState::default()
         }));
         let client = Arc::new(bs::Client::new(
@@ -212,6 +218,11 @@ impl Logic {
 
         let (logic_request_tx, logic_request_rx) =
             std::sync::mpsc::channel::<LogicRequestMessage>();
+
+        // Set the scroll target to the last played track so the UI scrolls to it.
+        if let Some((ref track_id, _)) = last_playback {
+            state.write().unwrap().last_requested_track_for_ui_scroll = Some(track_id.clone());
+        }
 
         let logic = Logic {
             tokio_thread,
@@ -229,6 +240,7 @@ impl Logic {
             state,
             client,
             transcode,
+            restore_track: last_playback,
         };
         logic.initial_fetch();
         logic
@@ -891,8 +903,12 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let library_populated_tx = self.library_populated_tx.clone();
+        let restore_track = self.restore_track.clone();
+        let playback_tx = self.playback_thread.send_handle();
+        let transcode = self.transcode;
         self.tokio_thread.spawn(async move {
             let future = {
+                let client = client.clone();
                 let state = state.clone();
                 let library_populated_tx = library_populated_tx.clone();
                 async move {
@@ -903,20 +919,63 @@ impl Logic {
                     })
                     .await?;
 
-                    let mut st = state.write().unwrap();
-                    let sort_order = st.sort_order;
-                    st.library.populate(
-                        result.track_ids,
-                        result.track_map,
-                        result.groups,
-                        result.albums,
-                        sort_order,
-                    );
-                    queue::recompute_queue_on_state(&mut st, None);
-                    drop(st);
+                    {
+                        let mut st = state.write().unwrap();
+                        let sort_order = st.sort_order;
+                        st.library.populate(
+                            result.track_ids,
+                            result.track_map,
+                            result.groups,
+                            result.albums,
+                            sort_order,
+                        );
 
-                    // Signal that library population is complete
+                        // If restoring a track, recompute the queue with it as current
+                        // so that the queue index is correct.
+                        let restore_id = restore_track
+                            .as_ref()
+                            .filter(|(tid, _)| st.library.track_map.contains_key(tid))
+                            .map(|(tid, _)| tid);
+                        queue::recompute_queue_on_state(&mut st, restore_id);
+
+                        if let Some(tid) = restore_id {
+                            st.queue.current_target = Some(tid.clone());
+                            st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
+                        }
+                    }
+
+                    // Signal that library population is complete.
                     let _ = library_populated_tx.send(());
+
+                    // Restore the last track in a paused state.
+                    if let Some((track_id, position)) = restore_track.filter(|(tid, _)| {
+                        state.read().unwrap().library.track_map.contains_key(tid)
+                    }) {
+                        tracing::info!(
+                            "Restoring last track {} at {:.1}s",
+                            track_id.0,
+                            position.as_secs_f64()
+                        );
+                        match client
+                            .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
+                            .await
+                        {
+                            Ok(data) => {
+                                state
+                                    .write()
+                                    .unwrap()
+                                    .queue
+                                    .audio_cache
+                                    .insert(track_id.clone(), data.clone());
+                                playback_tx.send(LogicToPlaybackMessage::LoadTrackPaused(
+                                    track_id, data, position,
+                                ));
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to restore last track {}: {e}", track_id.0,);
+                            }
+                        }
+                    }
 
                     bs::ClientResult::Ok(())
                 }

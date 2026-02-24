@@ -28,6 +28,9 @@ impl PlaybackThreadSendHandle {
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     PlayTrack(TrackId, Vec<u8>),
+    /// Load a track in a paused state and seek to the given position.
+    /// Used to restore the last playing track on startup.
+    LoadTrackPaused(TrackId, Vec<u8>, Duration),
     AppendNextTrack(TrackId, Vec<u8>),
     ClearQueuedNextTracks,
     TogglePlayback,
@@ -199,6 +202,55 @@ impl PlaybackThread {
                             position: Duration::from_secs(0),
                         }));
                         update_and_send_state(&logic_tx, &mut state, PlaybackState::Playing);
+                    }
+                    LTPM::LoadTrackPaused(track_id, data, position) => {
+                        let decoder = rodio::decoder::DecoderBuilder::new()
+                            .with_byte_len(data.len() as u64)
+                            .with_data(std::io::Cursor::new(data))
+                            .build();
+
+                        let decoder = match decoder {
+                            Ok(decoder) => decoder,
+                            Err(err) => {
+                                let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
+                                    track_id: track_id.clone(),
+                                    position: Duration::from_secs(0),
+                                }));
+                                update_and_send_state(
+                                    &logic_tx,
+                                    &mut state,
+                                    PlaybackState::Stopped,
+                                );
+                                let _ = logic_tx
+                                    .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
+                                continue;
+                            }
+                        };
+
+                        // Pause the sink *before* appending so that playback
+                        // does not start automatically.
+                        sink.pause();
+                        sink.append(decoder);
+
+                        // Skip all old tracks (everything except the one we just appended).
+                        let tracks_to_skip = queued_tracks.len();
+                        for _ in 0..tracks_to_skip {
+                            sink.skip_one();
+                        }
+
+                        // Seek to the saved position.
+                        if let Err(e) = sink.try_seek(position) {
+                            tracing::warn!("Failed to seek restored track to {position:?}: {e}");
+                        }
+
+                        queued_tracks.clear();
+                        queued_tracks.push_back(track_id.clone());
+                        skip_next_track = None;
+
+                        last_track_id = Some(track_id.clone());
+                        let _ = logic_tx
+                            .send(PTLM::TrackStarted(TrackAndPosition { track_id, position }));
+                        update_and_send_state(&logic_tx, &mut state, PlaybackState::Paused);
                     }
                     LTPM::AppendNextTrack(track_id, data) => {
                         let decoder = rodio::decoder::DecoderBuilder::new()

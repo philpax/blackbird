@@ -52,18 +52,17 @@ fn main() {
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
         sort_order: config.shared.last_playback.sort_order,
+        playback_mode: config.shared.last_playback.playback_mode,
+        last_playback: config.shared.last_playback.track_id.clone().map(|id| {
+            (
+                id,
+                std::time::Duration::from_secs_f64(config.shared.last_playback.track_position_secs),
+            )
+        }),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
     });
-
-    // Restore last playback mode.
-    logic.set_playback_mode(config.shared.last_playback.playback_mode);
-
-    // Set the scroll target to the last played track.
-    if let Some(track_id) = &config.shared.last_playback.track_id {
-        logic.set_scroll_target(track_id);
-    }
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

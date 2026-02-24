@@ -58,16 +58,17 @@ fn main() -> anyhow::Result<()> {
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
         sort_order: config.shared.last_playback.sort_order,
+        playback_mode: config.shared.last_playback.playback_mode,
+        last_playback: config.shared.last_playback.track_id.clone().map(|id| {
+            (
+                id,
+                Duration::from_secs_f64(config.shared.last_playback.track_position_secs),
+            )
+        }),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
     });
-
-    // Restore last playback state.
-    logic.set_playback_mode(config.shared.last_playback.playback_mode);
-    if let Some(track_id) = &config.shared.last_playback.track_id {
-        logic.set_scroll_target(track_id);
-    }
 
     // Initialize platform-specific tray icon requirements (GTK on Linux).
     #[cfg(feature = "tray-icon")]
