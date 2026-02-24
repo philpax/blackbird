@@ -1,0 +1,6 @@
+# Disable autocrlf; this repo uses LF line endings everywhere.
+* text=auto eol=lf
+
+# Binary files that should not be touched.
+*.png binary
+*.ttf binary
