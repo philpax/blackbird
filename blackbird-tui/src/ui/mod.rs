@@ -316,7 +316,7 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
 fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
 
-    let help_actions: &[keys::Action] = match app.focused_panel {
+    let help_entries: &[keys::HelpEntry] = match app.focused_panel {
         FocusedPanel::Library => keys::LIBRARY_HELP,
         FocusedPanel::Search => keys::SEARCH_HELP,
         FocusedPanel::Lyrics => keys::LYRICS_HELP,
@@ -328,24 +328,76 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let mut x_pos = area.x + 1; // Account for the leading space.
     spans.push(Span::raw(" "));
 
+    let highlight = Style::default().fg(style.track_name_playing_color());
+
     app.help_bar_items.clear();
 
-    for action in help_actions {
-        if let Some((key, label)) = action.help_label(&app.logic) {
-            let key_str = String::from(key);
-            let label_str = format!(":{label} ");
-            let item_width = key_str.len() as u16 + label_str.len() as u16;
+    for entry in help_entries {
+        match entry {
+            keys::HelpEntry::Single(action) => {
+                let Some((key, label)) = action.help_label(&app.logic) else {
+                    continue;
+                };
+                let key_str = String::from(key);
+                let label_str = format!(":{label} ");
+                let item_width = key_str.len() as u16 + label_str.len() as u16;
 
-            app.help_bar_items
-                .push((x_pos, x_pos + item_width, *action));
+                app.help_bar_items
+                    .push((x_pos, x_pos + item_width, *action));
 
-            spans.push(Span::styled(
-                key_str,
-                Style::default().fg(style.track_name_playing_color()),
-            ));
-            spans.push(Span::raw(label_str));
+                spans.push(Span::styled(key_str, highlight));
+                spans.push(Span::raw(label_str));
 
-            x_pos += item_width;
+                x_pos += item_width;
+            }
+            keys::HelpEntry::Pair(a, b, desc) => {
+                let la = a.help_label(&app.logic);
+                let lb = b.help_label(&app.logic);
+
+                let (key_a_str, key_b_str) = match (&la, &lb) {
+                    (Some((ka, _)), Some((kb, _))) => {
+                        (String::from(ka.as_str()), String::from(kb.as_str()))
+                    }
+                    // If only one is visible, render it as a single entry.
+                    (Some((key, desc)), None) | (None, Some((key, desc))) => {
+                        let action = if la.is_some() { *a } else { *b };
+                        let key_str = String::from(key.as_str());
+                        let label_str = format!(":{desc} ");
+                        let item_width = key_str.len() as u16 + label_str.len() as u16;
+
+                        app.help_bar_items.push((x_pos, x_pos + item_width, action));
+
+                        spans.push(Span::styled(key_str, highlight));
+                        spans.push(Span::raw(label_str));
+
+                        x_pos += item_width;
+                        continue;
+                    }
+                    (None, None) => continue,
+                };
+
+                let desc_str = format!(":{desc} ");
+
+                // Click target for first key.
+                let ka_width = key_a_str.len() as u16;
+                app.help_bar_items.push((x_pos, x_pos + ka_width, *a));
+                spans.push(Span::styled(key_a_str, highlight));
+                x_pos += ka_width;
+
+                // Separator `/` (highlighted but not clickable).
+                spans.push(Span::styled("/", highlight));
+                x_pos += 1;
+
+                // Click target for second key.
+                let kb_width = key_b_str.len() as u16;
+                app.help_bar_items.push((x_pos, x_pos + kb_width, *b));
+                spans.push(Span::styled(key_b_str, highlight));
+                x_pos += kb_width;
+
+                // Description (not clickable).
+                x_pos += desc_str.len() as u16;
+                spans.push(Span::raw(desc_str));
+            }
         }
     }
 

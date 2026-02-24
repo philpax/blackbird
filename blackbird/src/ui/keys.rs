@@ -3,6 +3,38 @@ use std::borrow::Cow;
 use blackbird_core as bc;
 use egui::Key;
 
+/// An entry in the help bar, either a single action or a merged pair.
+///
+/// For pairs, the description is provided explicitly so that shared
+/// suffixes/prefixes can be factored out (e.g. "next/prev group"
+/// instead of "next group/prev group").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpEntry {
+    Single(Action),
+    Pair(Action, Action, &'static str),
+}
+
+impl HelpEntry {
+    /// Returns the combined key label and description for this help entry.
+    /// For pairs, keys are joined with `/` and the explicit description is used.
+    pub fn help_label(&self, logic: &bc::Logic) -> Option<(Cow<'static, str>, Cow<'static, str>)> {
+        match self {
+            HelpEntry::Single(a) => a.help_label(logic),
+            HelpEntry::Pair(a, b, desc) => {
+                let la = a.help_label(logic);
+                let lb = b.help_label(logic);
+                match (la, lb) {
+                    (Some((ka, _)), Some((kb, _))) => {
+                        Some((format!("{ka}/{kb}").into(), Cow::Borrowed(desc)))
+                    }
+                    (Some(l), None) | (None, Some(l)) => Some(l),
+                    (None, None) => None,
+                }
+            }
+        }
+    }
+}
+
 // ── Key constants ───────────────────────────────────────────────────
 
 pub const KEY_PLAY_PAUSE: Key = Key::Space;
@@ -119,25 +151,21 @@ impl Action {
     }
 }
 
-/// Ordered list of actions to show in the library help bar.
-pub const LIBRARY_HELP: &[Action] = &[
-    Action::PlayPause,
-    Action::Next,
-    Action::Previous,
-    Action::NextGroup,
-    Action::PreviousGroup,
-    Action::Stop,
-    Action::SeekBackward,
-    Action::SeekForward,
-    Action::Star,
-    Action::GotoPlaying,
-    Action::SearchInline,
-    Action::Lyrics,
-    Action::Queue,
-    Action::VolumeUp,
-    Action::VolumeDown,
-    Action::CyclePlaybackMode,
-    Action::ToggleSortOrder,
+/// Ordered list of entries to show in the library help bar.
+pub const LIBRARY_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::PlayPause),
+    HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
+    HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
+    HelpEntry::Single(Action::Stop),
+    HelpEntry::Pair(Action::SeekBackward, Action::SeekForward, "seek-/+"),
+    HelpEntry::Single(Action::Star),
+    HelpEntry::Single(Action::GotoPlaying),
+    HelpEntry::Single(Action::SearchInline),
+    HelpEntry::Single(Action::Lyrics),
+    HelpEntry::Single(Action::Queue),
+    HelpEntry::Pair(Action::VolumeUp, Action::VolumeDown, "vol+/-"),
+    HelpEntry::Single(Action::CyclePlaybackMode),
+    HelpEntry::Single(Action::ToggleSortOrder),
 ];
 
 /// Maps a key press to a library action.

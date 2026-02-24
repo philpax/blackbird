@@ -2,6 +2,17 @@ use blackbird_core as bc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use smol_str::{SmolStr, ToSmolStr};
 
+/// An entry in the help bar, either a single action or a merged pair.
+///
+/// For pairs, the description is provided explicitly so that shared
+/// suffixes/prefixes can be factored out (e.g. "next/prev group"
+/// instead of "next group/prev group").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpEntry {
+    Single(Action),
+    Pair(Action, Action, &'static str),
+}
+
 /// Centrally defined key actions for the TUI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -252,64 +263,56 @@ pub fn logs_action(key: &KeyEvent) -> Option<Action> {
     }
 }
 
-/// Ordered list of actions to show in the library help bar.
-pub const LIBRARY_HELP: &[Action] = &[
-    Action::Quit,
-    Action::PlayPause,
-    Action::Next,
-    Action::Previous,
-    Action::NextGroup,
-    Action::PreviousGroup,
-    Action::Stop,
-    Action::SeekBackward,
-    Action::SeekForward,
-    Action::Star,
-    Action::GotoPlaying,
-    Action::Search,
-    Action::Lyrics,
-    Action::Queue,
-    Action::VolumeMode,
-    Action::Select,
-    Action::CyclePlaybackMode,
-    Action::ToggleSortOrder,
+/// Ordered list of entries to show in the library help bar.
+pub const LIBRARY_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Quit),
+    HelpEntry::Single(Action::PlayPause),
+    HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
+    HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
+    HelpEntry::Single(Action::Stop),
+    HelpEntry::Pair(Action::SeekBackward, Action::SeekForward, "seek-/+"),
+    HelpEntry::Single(Action::Star),
+    HelpEntry::Single(Action::GotoPlaying),
+    HelpEntry::Single(Action::Search),
+    HelpEntry::Single(Action::Lyrics),
+    HelpEntry::Single(Action::Queue),
+    HelpEntry::Single(Action::VolumeMode),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Single(Action::CyclePlaybackMode),
+    HelpEntry::Single(Action::ToggleSortOrder),
 ];
 
-/// Ordered list of actions to show in the search help bar.
-pub const SEARCH_HELP: &[Action] = &[
-    Action::Back,
-    Action::Select,
-    Action::MoveUp,
-    Action::MoveDown,
+/// Ordered list of entries to show in the search help bar.
+pub const SEARCH_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Back),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
 ];
 
-/// Ordered list of actions to show in the lyrics help bar.
-pub const LYRICS_HELP: &[Action] = &[
-    Action::Back,
-    Action::MoveUp,
-    Action::MoveDown,
-    Action::Select,
-    Action::SeekBackward,
-    Action::SeekForward,
-    Action::PlayPause,
-    Action::Next,
-    Action::Previous,
-    Action::NextGroup,
-    Action::PreviousGroup,
+/// Ordered list of entries to show in the lyrics help bar.
+pub const LYRICS_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Back),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Pair(Action::SeekBackward, Action::SeekForward, "seek-/+"),
+    HelpEntry::Single(Action::PlayPause),
+    HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
+    HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
 ];
 
-/// Ordered list of actions to show in the queue help bar.
-pub const QUEUE_HELP: &[Action] = &[
-    Action::Back,
-    Action::MoveUp,
-    Action::MoveDown,
-    Action::Select,
-    Action::PlayPause,
-    Action::Next,
-    Action::Previous,
-    Action::NextGroup,
-    Action::PreviousGroup,
-    Action::CyclePlaybackMode,
+/// Ordered list of entries to show in the queue help bar.
+pub const QUEUE_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Back),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Single(Action::PlayPause),
+    HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
+    HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
+    HelpEntry::Single(Action::CyclePlaybackMode),
 ];
 
-/// Ordered list of actions to show in the logs help bar.
-pub const LOGS_HELP: &[Action] = &[Action::Back, Action::MoveUp, Action::MoveDown];
+/// Ordered list of entries to show in the logs help bar.
+pub const LOGS_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Back),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
+];

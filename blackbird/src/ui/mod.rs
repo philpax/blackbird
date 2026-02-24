@@ -371,8 +371,8 @@ impl App {
                 let font_id = egui::TextStyle::Body.resolve(ui.style());
 
                 ui.horizontal(|ui| {
-                    for action in keys::LIBRARY_HELP {
-                        let Some((key, label)) = action.help_label(logic) else {
+                    for entry in keys::LIBRARY_HELP {
+                        let Some((key, label)) = entry.help_label(logic) else {
                             continue;
                         };
                         let mut job = LayoutJob::default();
