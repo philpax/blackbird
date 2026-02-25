@@ -102,10 +102,10 @@ impl Action {
             Action::Stop => (KEY_STOP, "stop".into()),
             Action::Next => (KEY_NEXT, "next".into()),
             Action::Previous => (KEY_PREVIOUS, "prev".into()),
-            Action::NextGroup if logic.get_playback_mode().is_group_mode() => {
+            Action::NextGroup if logic.get_playback_mode().has_group_structure() => {
                 (KEY_NEXT_GROUP, "next group".into())
             }
-            Action::PreviousGroup if logic.get_playback_mode().is_group_mode() => {
+            Action::PreviousGroup if logic.get_playback_mode().has_group_structure() => {
                 (KEY_PREVIOUS_GROUP, "prev group".into())
             }
             Action::Search => (KEY_SEARCH, "search".into()),

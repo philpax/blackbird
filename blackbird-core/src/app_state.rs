@@ -65,6 +65,19 @@ impl PlaybackMode {
         )
     }
 
+    /// Returns whether the queue has a meaningful group structure that
+    /// supports skipping between groups (albums). This includes sequential
+    /// mode (which follows the library's album ordering) and all group modes.
+    pub fn has_group_structure(&self) -> bool {
+        matches!(
+            self,
+            PlaybackMode::Sequential
+                | PlaybackMode::GroupRepeat
+                | PlaybackMode::GroupShuffle
+                | PlaybackMode::LikedGroupShuffle
+        )
+    }
+
     /// Returns a human-readable name for the mode.
     pub fn as_str(&self) -> &'static str {
         match self {
