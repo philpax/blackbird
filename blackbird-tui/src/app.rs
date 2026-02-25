@@ -42,6 +42,8 @@ pub struct App {
     pub album_art_overlay: Option<AlbumArtOverlay>,
     /// Clickable regions in the help bar: (x_start, x_end, action).
     pub help_bar_items: Vec<(u16, u16, keys::Action)>,
+    /// Monotonically increasing tick counter for animations.
+    pub tick_count: u64,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -82,6 +84,7 @@ impl App {
             mouse_position: None,
             album_art_overlay: None,
             help_bar_items: Vec::new(),
+            tick_count: 0,
 
             library: LibraryState::new(),
             search: SearchState::new(),
@@ -92,6 +95,7 @@ impl App {
     }
 
     pub fn tick(&mut self) {
+        self.tick_count = self.tick_count.wrapping_add(1);
         self.logic.update();
         self.cover_art_cache.update();
         self.cover_art_cache

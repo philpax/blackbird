@@ -130,26 +130,25 @@ fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
         .len();
     let has_loaded = app.logic.has_loaded_all_tracks();
 
-    let status = if has_loaded {
-        format!("{track_count} tracks loaded")
-    } else if track_count > 0 {
-        format!("Loading... ({track_count} tracks)")
-    } else {
-        "Loading library...".to_string()
-    };
+    let mut lines = vec![Line::from(Span::styled(
+        " blackbird",
+        Style::default()
+            .fg(style.track_name_playing_color())
+            .add_modifier(Modifier::BOLD),
+    ))];
 
-    let lines = vec![
-        Line::from(Span::styled(
-            " blackbird",
-            Style::default()
-                .fg(style.track_name_playing_color())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(Span::styled(
-            format!(" {status}"),
+    // Only show the status line once we have track information.
+    if has_loaded {
+        lines.push(Line::from(Span::styled(
+            format!(" {track_count} tracks loaded"),
             Style::default().fg(style.track_duration_color()),
-        )),
-    ];
+        )));
+    } else if track_count > 0 {
+        lines.push(Line::from(Span::styled(
+            format!(" {track_count} tracks loaded, scanning..."),
+            Style::default().fg(style.track_duration_color()),
+        )));
+    }
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, area);
 }

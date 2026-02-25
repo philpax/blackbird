@@ -275,9 +275,15 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = area;
 
     if !has_loaded {
-        let loading = ratatui::widgets::Paragraph::new("Loading library...")
-            .style(Style::default().fg(track_duration_color));
-        frame.render_widget(loading, inner);
+        let track_count = app
+            .logic
+            .get_state()
+            .read()
+            .unwrap()
+            .library
+            .track_ids
+            .len();
+        super::loading::draw(frame, app.tick_count, &app.config.style, track_count, inner);
         return;
     }
 

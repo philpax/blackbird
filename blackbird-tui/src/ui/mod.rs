@@ -1,6 +1,7 @@
 pub mod album_art_overlay;
 pub(crate) mod layout;
 pub(crate) mod library;
+pub(crate) mod loading;
 pub(crate) mod logs;
 pub(crate) mod lyrics;
 pub(crate) mod now_playing;
@@ -157,8 +158,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // Main layout matches egui: [NowPlaying] | [Scrub+Volume] | [Library/Search/Lyrics] | [Help].
     let main = layout::split_main(size);
 
-    now_playing::draw(frame, app, main.now_playing);
-    draw_scrub_bar(frame, app, main.scrub_bar);
+    let is_loading = !app.logic.has_loaded_all_tracks();
+
+    // Hide the now-playing header and scrub bar while the loading animation is active,
+    // so only the centered flock animation is visible.
+    if !is_loading {
+        now_playing::draw(frame, app, main.now_playing);
+        draw_scrub_bar(frame, app, main.scrub_bar);
+    }
 
     match app.focused_panel {
         FocusedPanel::Library => library::draw(frame, app, main.content),
