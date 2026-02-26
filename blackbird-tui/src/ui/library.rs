@@ -268,6 +268,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Determine which entry's heart is being hovered (for hover color effect).
     let hovered_heart_index = compute_hovered_heart_index(app, area);
+    // Determine which track entry is being hovered anywhere on the row.
+    let hovered_entry_index = compute_hovered_entry_index(app, area);
 
     let has_loaded = app.logic.has_loaded_all_tracks();
 
@@ -385,7 +387,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     cover_art_id,
                     ..
                 } => {
-                    let is_heart_hovered = hovered_heart_index == Some(i);
+                    let is_heart_hovered =
+                        hovered_heart_index == Some(i) || hovered_entry_index == Some(i);
                     let (heart, heart_style) = heart_to_tui(
                         blackbird_client_shared::style::HeartState::from_interaction(
                             *starred,
@@ -437,6 +440,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let mut line2_spans = vec![Span::raw(" ")];
                     line2_spans.extend(super::art_row_spans(&colors, 2, 3));
                     line2_spans.push(Span::raw(" "));
+                    // Content starts here (album name onward) — underline from this point.
+                    let content_start = line2_spans.len();
                     line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
                     line2_spans.push(Span::styled(
                         year_str,
@@ -452,6 +457,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(album_length_color),
                     ));
                     line2_spans.push(Span::styled(heart, heart_style));
+
+                    if hovered_entry_index == Some(i) {
+                        for span in &mut line2_spans[content_start..] {
+                            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                        }
+                    }
+
                     let line2 = Line::from(line2_spans);
 
                     ListItem::new(vec![line1, line2])
@@ -468,7 +480,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     play_count,
                 } => {
                     let is_playing = playing_track_id.as_ref() == Some(id);
-                    let is_heart_hovered = hovered_heart_index == Some(i);
+                    let is_heart_hovered =
+                        hovered_heart_index == Some(i) || hovered_entry_index == Some(i);
                     let (heart, heart_style) = heart_to_tui(
                         blackbird_client_shared::style::HeartState::from_interaction(
                             *starred,
@@ -565,6 +578,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::raw(" ".repeat(padding_needed)));
                     spans.extend(right_spans);
 
+                    if hovered_entry_index == Some(i) {
+                        // Skip the leading indent span.
+                        for span in &mut spans[1..] {
+                            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                        }
+                    }
+
                     let line = Line::from(spans);
 
                     ListItem::new(line)
@@ -611,7 +631,8 @@ fn heart_to_tui(
     use blackbird_client_shared::style::HeartState;
     match state {
         HeartState::Hidden => (" ", Style::default().fg(dim_color)),
-        HeartState::Preview | HeartState::Active => ("\u{2665}", Style::default().fg(Color::Red)),
+        HeartState::Preview => ("\u{2661}", Style::default().fg(Color::Red)),
+        HeartState::Active => ("\u{2665}", Style::default().fg(Color::Red)),
         HeartState::HoveredActive => ("\u{2665}", Style::default().fg(Color::White)),
     }
 }
@@ -656,6 +677,39 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
                 return None;
             }
             return Some(i);
+        }
+        line += h;
+    }
+    None
+}
+
+/// Computes which library entry is being hovered by the mouse, if any.
+/// Unlike `compute_hovered_heart_index`, this triggers on any X position within the row,
+/// not just the heart column. For group headers, only the second line (album line) counts.
+fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
+    let (mx, my) = app.mouse_position?;
+
+    // Must be within library area.
+    if my < area.y || my >= area.y + area.height || mx < area.x || mx >= area.x + area.width {
+        return None;
+    }
+
+    let scroll_offset = app.library.scroll_offset;
+    let entries = app.library.get_flat_library(&app.logic);
+
+    let inner_y = my.saturating_sub(area.y) as usize;
+
+    let mut line = 0usize;
+    for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
+        let h = entry.height();
+
+        if inner_y >= line && inner_y < line + h {
+            match entry {
+                LibraryEntry::Track { .. } => return Some(i),
+                // Only the second line (album name) triggers hover.
+                LibraryEntry::GroupHeader { .. } if inner_y - line == 1 => return Some(i),
+                _ => return None,
+            }
         }
         line += h;
     }
