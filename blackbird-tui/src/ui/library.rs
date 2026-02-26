@@ -70,6 +70,24 @@ pub fn total_entry_lines(entries: &[LibraryEntry]) -> usize {
     entries.iter().map(LibraryEntry::height).sum()
 }
 
+/// Returns the content line at which the given item offset starts.
+fn item_offset_to_line(entries: &[LibraryEntry], item_offset: usize) -> usize {
+    entries.iter().take(item_offset).map(|e| e.height()).sum()
+}
+
+/// Returns the entry index whose line span contains `target_line`, if any.
+fn entry_at_line(entries: &[LibraryEntry], target_line: usize) -> Option<usize> {
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let h = entry.height();
+        if target_line < current_line + h {
+            return Some(i);
+        }
+        current_line += h;
+    }
+    None
+}
+
 pub struct LibraryState {
     pub scroll_offset: usize,
     pub selected_index: usize,
@@ -80,6 +98,9 @@ pub struct LibraryState {
     pub click_pending: Option<(u16, u16, usize)>,
     pub dragging: bool,
     pub drag_last_y: Option<u16>,
+    pub drag_viewport_line: Option<usize>,
+    pub drag_selected_index: Option<usize>,
+    pub last_visible_height: usize,
     pub scrollbar_dragging: bool,
 
     // Private cache
@@ -98,6 +119,9 @@ impl LibraryState {
             click_pending: None,
             dragging: false,
             drag_last_y: None,
+            drag_viewport_line: None,
+            drag_selected_index: None,
+            last_visible_height: 0,
             scrollbar_dragging: false,
 
             cached_flat_library: Vec::new(),
@@ -270,6 +294,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let hovered_heart_index = compute_hovered_heart_index(app, area);
     // Determine which track entry is being hovered anywhere on the row.
     let hovered_entry_index = compute_hovered_entry_index(app, area);
+    // During a content drag, keep the underline on the drag-selected row;
+    // otherwise fall back to the normal hover detection.
+    let underline_index = app.library.drag_selected_index.or(hovered_entry_index);
 
     let has_loaded = app.logic.has_loaded_all_tracks();
 
@@ -308,24 +335,27 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let sort_order = app.logic.get_sort_order();
     let indicator_width = scroll_indicator_width(sort_order);
     let visible_height = inner.height as usize;
+    app.library.last_visible_height = visible_height;
 
     let geo = super::layout::library_geometry(inner, total_lines, indicator_width);
     let has_scrollbar = geo.has_scrollbar;
     let list_width = geo.list_width;
 
-    // Calculate the line offset for center-scroll.
-    // GroupHeaders take 2 lines, Tracks take 1 line.
-    let mut line_offset = 0usize;
-    for (i, entry) in entries.iter().enumerate() {
-        if i >= selected_index {
-            break;
+    // Calculate the viewport line offset.
+    // During drag, use the manually tracked viewport line; otherwise center-scroll.
+    let centered_offset = if let Some(viewport_line) = app.library.drag_viewport_line {
+        viewport_line.min(total_lines.saturating_sub(visible_height))
+    } else {
+        let mut line_offset = 0usize;
+        for (i, entry) in entries.iter().enumerate() {
+            if i >= selected_index {
+                break;
+            }
+            line_offset += entry.height();
         }
-        line_offset += entry.height();
-    }
-
-    // Center the selected item in the visible area.
-    let half_height = (geo.visible_height / 2).saturating_sub(1);
-    let centered_offset = line_offset.saturating_sub(half_height);
+        let half_height = (geo.visible_height / 2).saturating_sub(1);
+        line_offset.saturating_sub(half_height)
+    };
 
     // Convert line offset back to item offset for ListState.
     let mut item_offset = 0usize;
@@ -458,7 +488,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     ));
                     line2_spans.push(Span::styled(heart, heart_style));
 
-                    if hovered_entry_index == Some(i) {
+                    if underline_index == Some(i) {
                         for span in &mut line2_spans[content_start..] {
                             span.style = span.style.add_modifier(Modifier::UNDERLINED);
                         }
@@ -578,7 +608,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(Span::raw(" ".repeat(padding_needed)));
                     spans.extend(right_spans);
 
-                    if hovered_entry_index == Some(i) {
+                    if underline_index == Some(i) {
                         // Skip the leading indent span.
                         for span in &mut spans[1..] {
                             span.style = span.style.add_modifier(Modifier::UNDERLINED);
@@ -1135,45 +1165,56 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
         return true;
     }
 
-    // Content drag → pan library
+    // Content drag → pan library by tracking viewport line offset.
     if app.library.click_pending.is_some() || app.library.dragging {
+        let entries = app.library.get_flat_library(&app.logic).to_vec();
+        let total_lines = total_entry_lines(&entries);
+        let visible_height = library_area.height as usize;
+
+        // On first drag, initialise the viewport line from the current scroll_offset.
+        if app.library.click_pending.is_some() {
+            let viewport_line = item_offset_to_line(&entries, app.library.scroll_offset);
+            app.library.drag_viewport_line = Some(viewport_line);
+        }
+
         app.library.click_pending = None;
         app.library.dragging = true;
 
         if let Some(last_y) = app.library.drag_last_y {
             let delta = y as i32 - last_y as i32;
             if delta != 0 {
-                let entries_len = app.library.flat_library_len();
-                let steps = delta.unsigned_abs() as usize;
-                for _ in 0..steps {
-                    let mut new_index = app.library.selected_index;
-                    if delta > 0 {
-                        while new_index > 0 {
-                            new_index -= 1;
-                            if let Some(LibraryEntry::Track { .. }) =
-                                app.library.get_library_entry(&app.logic, new_index)
-                            {
-                                break;
-                            }
-                        }
-                    } else {
-                        while new_index < entries_len.saturating_sub(1) {
-                            new_index += 1;
-                            if let Some(LibraryEntry::Track { .. }) =
-                                app.library.get_library_entry(&app.logic, new_index)
-                            {
-                                break;
-                            }
-                        }
-                    }
-                    if let Some(LibraryEntry::Track { .. }) =
-                        app.library.get_library_entry(&app.logic, new_index)
-                    {
-                        app.library.selected_index = new_index;
-                    }
-                }
+                // Drag down → content moves down → viewport line decreases.
+                let viewport_line = app.library.drag_viewport_line.unwrap_or(0);
+                let max_viewport = total_lines.saturating_sub(visible_height);
+                let new_viewport =
+                    (viewport_line as i32 - delta).clamp(0, max_viewport as i32) as usize;
+                app.library.drag_viewport_line = Some(new_viewport);
             }
         }
+
+        // Select the entry under the cursor.
+        let viewport_line = app.library.drag_viewport_line.unwrap_or(0);
+        let cursor_content_line = viewport_line + y.saturating_sub(library_area.y) as usize;
+        if let Some(entry_index) = entry_at_line(&entries, cursor_content_line) {
+            // Snap to the entry itself, or the nearest track if it's a header.
+            let target = match entries.get(entry_index) {
+                Some(LibraryEntry::Track { .. }) => Some(entry_index),
+                Some(LibraryEntry::GroupHeader { .. }) => {
+                    // Try the next entry (first track in the group).
+                    let next = entry_index + 1;
+                    match entries.get(next) {
+                        Some(LibraryEntry::Track { .. }) => Some(next),
+                        _ => None,
+                    }
+                }
+                None => None,
+            };
+            if let Some(idx) = target {
+                app.library.selected_index = idx;
+                app.library.drag_selected_index = Some(idx);
+            }
+        }
+
         app.library.drag_last_y = Some(y);
         return true;
     }
@@ -1191,9 +1232,38 @@ pub fn handle_mouse_up(app: &mut App) {
         app.library.selected_index = index;
         app.logic.request_play_track(&id);
     }
+    if app.library.dragging && !app.library.scrollbar_dragging {
+        select_center_of_viewport(app);
+    }
+
     app.library.dragging = false;
     app.library.drag_last_y = None;
+    app.library.drag_viewport_line = None;
+    app.library.drag_selected_index = None;
     app.library.scrollbar_dragging = false;
+}
+
+/// After a content drag ends, select the entry at the center of the final viewport
+/// so that the subsequent center-scroll doesn't snap the view away.
+fn select_center_of_viewport(app: &mut App) -> Option<()> {
+    let viewport_line = app.library.drag_viewport_line?;
+    let entries = app.library.get_flat_library(&app.logic).to_vec();
+    let total_lines = total_entry_lines(&entries);
+    let visible_height = app.library.last_visible_height;
+    let max_viewport = total_lines.saturating_sub(visible_height);
+    let center_line = viewport_line.min(max_viewport) + visible_height / 2;
+    let idx = entry_at_line(&entries, center_line)?;
+    // Snap to the nearest track if the center lands on a group header.
+    let target = match entries.get(idx) {
+        Some(LibraryEntry::Track { .. }) => idx,
+        Some(LibraryEntry::GroupHeader { .. }) => match entries.get(idx + 1) {
+            Some(LibraryEntry::Track { .. }) => idx + 1,
+            _ => return None,
+        },
+        None => return None,
+    };
+    app.library.selected_index = target;
+    Some(())
 }
 
 /// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
