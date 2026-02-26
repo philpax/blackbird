@@ -253,12 +253,9 @@ fn run_app(
 }
 
 fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
-    // Close album art overlay on Escape or any key.
+    // Close album art overlay on Escape, q, or Enter.
     if app.album_art_overlay.is_some() {
-        if matches!(
-            key.code,
-            event::KeyCode::Esc | event::KeyCode::Char('q') | event::KeyCode::Enter
-        ) {
+        if keys::album_art_overlay_action(key).is_some() {
             app.album_art_overlay = None;
         }
         return;

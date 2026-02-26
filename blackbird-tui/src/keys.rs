@@ -221,6 +221,14 @@ pub fn volume_action(key: &KeyEvent) -> Option<Action> {
     }
 }
 
+/// Resolve a key event into an action in album art overlay context.
+pub fn album_art_overlay_action(key: &KeyEvent) -> Option<Action> {
+    match key.code {
+        KEY_BACK | KEY_QUIT | KEY_SELECT => Some(Action::Back),
+        _ => None,
+    }
+}
+
 /// Resolve a key event into an action in playback mode dropdown context.
 pub fn playback_mode_dropdown_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
