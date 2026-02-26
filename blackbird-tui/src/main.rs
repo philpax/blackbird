@@ -273,6 +273,32 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
         return;
     }
 
+    // Handle playback mode dropdown.
+    if app.playback_mode_dropdown {
+        if let Some(action) = keys::playback_mode_dropdown_action(key) {
+            let modes = blackbird_core::PlaybackMode::ALL;
+            match action {
+                Action::Back | Action::Select => {
+                    app.playback_mode_dropdown = false;
+                }
+                Action::MoveUp => {
+                    let current = app.logic.get_playback_mode();
+                    let idx = modes.iter().position(|m| *m == current).unwrap_or(0);
+                    let prev = if idx == 0 { modes.len() - 1 } else { idx - 1 };
+                    app.logic.set_playback_mode(modes[prev]);
+                }
+                Action::MoveDown => {
+                    let current = app.logic.get_playback_mode();
+                    let idx = modes.iter().position(|m| *m == current).unwrap_or(0);
+                    let next = (idx + 1) % modes.len();
+                    app.logic.set_playback_mode(modes[next]);
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
+
     // Handle volume editing mode first
     if app.volume_editing {
         if let Some(action) = keys::volume_action(key) {
@@ -353,6 +379,32 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
         }
         MouseEventKind::Down(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
+
+            // --- Playback mode dropdown (handled before other areas) ---
+            if app.playback_mode_dropdown {
+                let dropdown_rect = ui::now_playing::playback_mode_dropdown_rect(size);
+                let inner = Rect::new(
+                    dropdown_rect.x + 1,
+                    dropdown_rect.y + 1,
+                    dropdown_rect.width.saturating_sub(2),
+                    dropdown_rect.height.saturating_sub(2),
+                );
+                if x >= inner.x
+                    && x < inner.x + inner.width
+                    && y >= inner.y
+                    && y < inner.y + inner.height
+                {
+                    let idx = (y - inner.y) as usize;
+                    let modes = blackbird_core::PlaybackMode::ALL;
+                    if idx < modes.len() {
+                        app.logic.set_playback_mode(modes[idx]);
+                        app.playback_mode_dropdown = false;
+                    }
+                } else {
+                    app.playback_mode_dropdown = false;
+                }
+                return;
+            }
 
             // --- Album art overlay (handled first, on top of everything) ---
             if app.album_art_overlay.is_some() {

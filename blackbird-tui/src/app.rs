@@ -40,6 +40,8 @@ pub struct App {
     pub needs_redraw: bool,
     pub mouse_position: Option<(u16, u16)>,
     pub album_art_overlay: Option<AlbumArtOverlay>,
+    /// Whether the playback mode dropdown is open.
+    pub playback_mode_dropdown: bool,
     /// Clickable regions in the help bar: (x_start, x_end, action).
     pub help_bar_items: Vec<(u16, u16, keys::Action)>,
     /// Monotonically increasing tick counter for animations.
@@ -83,6 +85,7 @@ impl App {
             needs_redraw: true,
             mouse_position: None,
             album_art_overlay: None,
+            playback_mode_dropdown: false,
             help_bar_items: Vec::new(),
             tick_count: 0,
 

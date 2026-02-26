@@ -221,6 +221,17 @@ pub fn volume_action(key: &KeyEvent) -> Option<Action> {
     }
 }
 
+/// Resolve a key event into an action in playback mode dropdown context.
+pub fn playback_mode_dropdown_action(key: &KeyEvent) -> Option<Action> {
+    match key.code {
+        KEY_BACK | KEY_QUIT => Some(Action::Back),
+        KEY_SELECT => Some(Action::Select),
+        KEY_UP => Some(Action::MoveUp),
+        KEY_DOWN => Some(Action::MoveDown),
+        _ => None,
+    }
+}
+
 /// Resolve a key event into an action in quit-confirmation context.
 /// `y` / Enter confirms; any other key cancels.
 pub fn quit_confirm_action(key: &KeyEvent) -> Action {

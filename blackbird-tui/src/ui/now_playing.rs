@@ -1,9 +1,10 @@
+use blackbird_core::PlaybackMode;
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Block, Clear, Paragraph},
 };
 
 use crate::{
@@ -323,8 +324,90 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
                 }
             }
         } else if row == 1 {
-            // Mode text row: "[mode]" right-aligned → cycle playback mode
-            app.cycle_playback_mode();
+            // Mode text row: "[mode]" right-aligned → open playback mode dropdown.
+            app.playback_mode_dropdown = !app.playback_mode_dropdown;
         }
+    }
+}
+
+/// The marker prefix for the current mode in the dropdown (" > ").
+const DROPDOWN_MARKER_CURRENT: &str = " > ";
+/// The marker prefix for non-current modes in the dropdown ("   ").
+const DROPDOWN_MARKER_OTHER: &str = "   ";
+
+/// Computes the dropdown rect for the playback mode selector, anchored below
+/// the mode text in the transport area and right-aligned to the terminal.
+pub fn playback_mode_dropdown_rect(size: Rect) -> Rect {
+    let main = super::layout::split_main(size);
+    let np = super::layout::split_now_playing(main.now_playing);
+
+    let marker_width = DROPDOWN_MARKER_CURRENT.len() as u16;
+
+    // Width: marker + widest mode label + 1 trailing space + border (2).
+    let max_label_width = PlaybackMode::ALL
+        .iter()
+        .map(|m| m.as_str().len())
+        .max()
+        .unwrap_or(0) as u16;
+    let width = marker_width + max_label_width + 1 + 2;
+
+    // Height: one row per mode + border (2).
+    let height = PlaybackMode::ALL.len() as u16 + 2;
+
+    // Anchor: right-aligned to transport area, just below the now-playing row.
+    let right_edge = np.transport.x + np.transport.width;
+    let x = right_edge.saturating_sub(width);
+    let y = main.now_playing.y + main.now_playing.height;
+
+    Rect::new(x, y, width, height)
+}
+
+/// Draws the playback mode dropdown overlay.
+pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
+    let style = &app.config.style;
+    let rect = playback_mode_dropdown_rect(size);
+    let current_mode = app.logic.get_playback_mode();
+
+    frame.render_widget(Clear, rect);
+
+    let block = Block::bordered().style(
+        Style::default()
+            .fg(style.text_color())
+            .bg(style.background_color()),
+    );
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    for (i, mode) in PlaybackMode::ALL.iter().enumerate() {
+        if i as u16 >= inner.height {
+            break;
+        }
+        let is_current = *mode == current_mode;
+        let marker = if is_current {
+            DROPDOWN_MARKER_CURRENT
+        } else {
+            DROPDOWN_MARKER_OTHER
+        };
+        let label = format!("{marker}{}", mode.as_str());
+
+        // Determine row color: current mode is highlighted, hovered rows
+        // turn white (text color), others use the subdued duration color.
+        let row_rect = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
+        let hovered = app.mouse_position.is_some_and(|(mx, my)| {
+            mx >= row_rect.x && mx < row_rect.x + row_rect.width && my == row_rect.y
+        });
+
+        let fg = if is_current {
+            style.track_name_playing_color()
+        } else if hovered {
+            style.text_color()
+        } else {
+            style.track_duration_color()
+        };
+
+        frame.render_widget(
+            Paragraph::new(label).style(Style::default().fg(fg).bg(style.background_color())),
+            row_rect,
+        );
     }
 }

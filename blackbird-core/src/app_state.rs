@@ -55,6 +55,17 @@ pub enum PlaybackMode {
 }
 
 impl PlaybackMode {
+    /// All playback modes in cycle order.
+    pub const ALL: [PlaybackMode; 7] = [
+        PlaybackMode::Sequential,
+        PlaybackMode::RepeatOne,
+        PlaybackMode::GroupRepeat,
+        PlaybackMode::Shuffle,
+        PlaybackMode::LikedShuffle,
+        PlaybackMode::GroupShuffle,
+        PlaybackMode::LikedGroupShuffle,
+    ];
+
     /// Returns whether this mode organizes playback by groups (albums).
     pub fn is_group_mode(&self) -> bool {
         matches!(

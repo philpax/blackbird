@@ -639,6 +639,11 @@ fn heart_to_tui(
 
 /// Computes which library entry's heart is being hovered by the mouse, if any.
 fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
+    // Suppress hover when the playback mode dropdown is covering the library.
+    if app.playback_mode_dropdown {
+        return None;
+    }
+
     let (mx, my) = app.mouse_position?;
 
     // Must be within library area
@@ -687,6 +692,11 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
 /// Unlike `compute_hovered_heart_index`, this triggers on any X position within the row,
 /// not just the heart column. For group headers, only the second line (album line) counts.
 fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
+    // Suppress hover when the playback mode dropdown is covering the library.
+    if app.playback_mode_dropdown {
+        return None;
+    }
+
     let (mx, my) = app.mouse_position?;
 
     // Must be within library area.

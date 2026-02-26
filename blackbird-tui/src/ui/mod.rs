@@ -195,6 +195,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     draw_help_bar(frame, app, main.help_bar);
 
+    // Draw playback mode dropdown if open.
+    if app.playback_mode_dropdown {
+        now_playing::draw_playback_mode_dropdown(frame, app, size);
+    }
+
     // Draw album art overlay on top of everything if active.
     if app.album_art_overlay.is_some() {
         album_art_overlay::draw(frame, app, size);
