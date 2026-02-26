@@ -94,7 +94,7 @@ pub fn draw(
         let display = TrackDisplayDetails::from_track_id(track_id, &st);
         let label = match &display {
             Some(d) => format!("{} - {}", d.artist(), d.track_title),
-            None => format!("{}", track_id.0),
+            None => track_id.0.to_string(),
         };
 
         let duration_str = display

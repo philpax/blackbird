@@ -643,7 +643,7 @@ mod tests {
             _genre: None,
             duration: Some(180),
             disc_number: None,
-            starred: idx % 3 == 0, // every 3rd track is starred
+            starred: idx.is_multiple_of(3), // every 3rd track is starred
             play_count: None,
             album_id: None,
         }
@@ -659,7 +659,7 @@ mod tests {
             duration: 0,
             tracks: track_ids,
             cover_art_id: None,
-            starred: g % 2 == 0, // every other group is starred
+            starred: g.is_multiple_of(2), // every other group is starred
         })
     }
 
@@ -862,7 +862,7 @@ mod tests {
         let next_idx = (last_idx + 1) % ordering.len();
         assert_eq!(next_idx, 0);
 
-        let prev_idx = (0 + ordering.len() - 1) % ordering.len();
+        let prev_idx = (ordering.len() - 1) % ordering.len();
         assert_eq!(prev_idx, last_idx);
     }
 
