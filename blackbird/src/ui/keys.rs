@@ -47,7 +47,8 @@ pub const KEY_SEEK_FWD: Key = Key::Period;
 pub const KEY_GOTO_PLAYING: Key = Key::G;
 pub const KEY_SEARCH_INLINE: Key = Key::Slash;
 pub const KEY_LYRICS: Key = Key::L;
-pub const KEY_QUEUE: Key = Key::Q;
+pub const KEY_QUEUE: Key = Key::U;
+pub const KEY_QUIT: Key = Key::Q;
 pub const KEY_STAR: Key = Key::Num8; // '*' is Shift+8
 pub const KEY_VOLUME_UP: Key = Key::ArrowUp;
 pub const KEY_VOLUME_DOWN: Key = Key::ArrowDown;
@@ -71,6 +72,7 @@ pub enum Action {
     SearchInline,
     Lyrics,
     Queue,
+    Quit,
     VolumeUp,
     VolumeDown,
 }
@@ -94,6 +96,7 @@ impl Action {
             Action::SearchInline => KEY_SEARCH_INLINE,
             Action::Lyrics => KEY_LYRICS,
             Action::Queue => KEY_QUEUE,
+            Action::Quit => KEY_QUIT,
             Action::VolumeUp => KEY_VOLUME_UP,
             Action::VolumeDown => KEY_VOLUME_DOWN,
         }
@@ -143,6 +146,7 @@ impl Action {
             Action::SearchInline => "search".into(),
             Action::Lyrics => "lyrics".into(),
             Action::Queue => "queue".into(),
+            Action::Quit => "quit".into(),
             Action::VolumeUp => "vol+".into(),
             Action::VolumeDown => "vol-".into(),
         };
@@ -153,6 +157,7 @@ impl Action {
 
 /// Ordered list of entries to show in the library help bar.
 pub const LIBRARY_HELP: &[HelpEntry] = &[
+    HelpEntry::Single(Action::Quit),
     HelpEntry::Single(Action::PlayPause),
     HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
     HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
@@ -186,6 +191,7 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
         KEY_SEARCH_INLINE => Some(Action::SearchInline),
         KEY_LYRICS => Some(Action::Lyrics),
         KEY_QUEUE => Some(Action::Queue),
+        KEY_QUIT => Some(Action::Quit),
         // '*' is Shift+8.
         KEY_STAR if shift => Some(Action::Star),
         KEY_VOLUME_UP => Some(Action::VolumeUp),

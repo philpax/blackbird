@@ -46,6 +46,7 @@ pub struct UiState {
     pub queue: QueueState,
     pub library_view: library::LibraryViewState,
     pub mini_library: library::MiniLibraryState,
+    pub quit_confirming: bool,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -179,7 +180,65 @@ impl App {
         let can_handle_shortcuts = !self.ui_state.search.open
             && !self.ui_state.lyrics.open
             && !self.ui_state.queue.open
+            && !self.ui_state.quit_confirming
             && !search_active;
+
+        // Handle Y/N keys for the quit confirmation modal.
+        // The confirmed flag is collected separately to avoid calling
+        // `send_viewport_cmd` inside the `input` closure, which would deadlock.
+        let mut quit_confirmed = false;
+        if self.ui_state.quit_confirming {
+            ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                        && !modifiers.command
+                        && !modifiers.alt
+                        && !modifiers.ctrl
+                    {
+                        match key {
+                            egui::Key::Y => {
+                                quit_confirmed = true;
+                            }
+                            egui::Key::N => {
+                                self.ui_state.quit_confirming = false;
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            });
+            if quit_confirmed {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
+
+        // Q closes any open sub-window when shortcuts are blocked by one.
+        if !can_handle_shortcuts && !self.ui_state.quit_confirming && !search_active {
+            ctx.input(|i| {
+                for event in &i.events {
+                    if let egui::Event::Key {
+                        key: keys::KEY_QUIT,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } = event
+                        && !modifiers.command
+                        && !modifiers.alt
+                        && !modifiers.ctrl
+                        && !modifiers.shift
+                    {
+                        self.ui_state.search.open = false;
+                        self.ui_state.lyrics.open = false;
+                        self.ui_state.queue.open = false;
+                    }
+                }
+            });
+        }
 
         if can_handle_shortcuts {
             ctx.input(|i| {
@@ -266,6 +325,9 @@ impl App {
                         }
                         keys::Action::Queue => {
                             self.ui_state.queue.open = !self.ui_state.queue.open;
+                        }
+                        keys::Action::Quit => {
+                            self.ui_state.quit_confirming = true;
                         }
                         keys::Action::Star => {
                             let Some(track_id) = logic.get_playing_track_id() else {
@@ -528,6 +590,36 @@ impl App {
                         ui.fonts(|f| f.layout_job(job)),
                         config.style.text_color32(),
                     );
+                });
+        }
+
+        // Quit confirmation modal.
+        if self.ui_state.quit_confirming {
+            egui::Area::new(egui::Id::new("quit_confirm_overlay"))
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(config.style.background_color32())
+                        .inner_margin(egui::Margin::same(16))
+                        .show(ui, |ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.label(
+                                    RichText::new("Quit?")
+                                        .heading()
+                                        .color(config.style.text_color32()),
+                                );
+                                ui.add_space(8.0);
+                                ui.horizontal(|ui| {
+                                    if ui.button("Yes").clicked() {
+                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                                    }
+                                    if ui.button("No").clicked() {
+                                        self.ui_state.quit_confirming = false;
+                                    }
+                                });
+                            });
+                        });
                 });
         }
 
