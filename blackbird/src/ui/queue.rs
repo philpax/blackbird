@@ -1,6 +1,4 @@
-use egui::{
-    Align, Align2, Color32, Context, Label, RichText, ScrollArea, Sense, Vec2, Vec2b, Window,
-};
+use egui::{Align2, Color32, Context, Label, RichText, ScrollArea, Sense, Vec2, Vec2b, Window};
 
 use blackbird_client_shared::next_playback_mode;
 
@@ -136,10 +134,6 @@ pub fn ui(logic: &mut bc::Logic, ctx: &Context, style: &style::Style, queue_open
                         };
 
                         let response = ui.add(label_widget.selectable(false));
-
-                        if is_current {
-                            response.scroll_to_me(Some(Align::Center));
-                        }
 
                         let row_interaction = ui.interact(
                             response.rect,
