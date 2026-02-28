@@ -62,7 +62,8 @@ pub(crate) struct LibraryViewConfig<'a> {
     pub incremental_search_enabled: bool,
 }
 
-/// Render player controls: mouse button handling, now playing, scrub bar, and separator.
+/// Render player controls: mouse button handling, now playing, scrub bar,
+/// and separator.
 /// Returns track_to_scroll_to if the user clicked on the playing track info.
 pub(crate) fn render_player_controls(
     ui: &mut Ui,
@@ -99,6 +100,7 @@ pub(crate) fn render_player_controls(
     );
 
     crate::ui::scrub_bar::ui(ui, logic, config);
+
     ui.separator();
 
     track_to_scroll_to

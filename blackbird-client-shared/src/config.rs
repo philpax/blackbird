@@ -21,7 +21,7 @@ pub fn load_config<T: Default + serde::de::DeserializeOwned>(filename: &str) -> 
 }
 
 /// Shared configuration fields used by both the egui and TUI clients.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
     /// Server connection settings.
@@ -30,6 +30,22 @@ pub struct Config {
     /// Last playback state, persisted across sessions.
     #[serde(default)]
     pub last_playback: LastPlayback,
+    /// Whether to show the current synced lyric line inline in the player UI.
+    #[serde(default = "default_true")]
+    pub show_inline_lyrics: bool,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server: Default::default(),
+            last_playback: Default::default(),
+            show_inline_lyrics: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Last playback state, persisted across sessions.

@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Gauge, Paragraph},
+    widgets::{Block, Clear, Gauge, Paragraph},
 };
 
 use std::time::Duration;
@@ -155,7 +155,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let bg = Block::default().style(Style::default().bg(app.config.style.background_color()));
     frame.render_widget(bg, size);
 
-    // Main layout matches egui: [NowPlaying] | [Scrub+Volume] | [Library/Search/Lyrics] | [Help].
+    // Main layout: [NowPlaying] | [Scrub+Volume] | [Content] | [Help].
     let main = layout::split_main(size);
 
     let is_loading = !app.logic.has_loaded_all_tracks();
@@ -194,6 +194,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     draw_help_bar(frame, app, main.help_bar);
+
+    // Draw inline lyrics as an overlay at the bottom of the content area.
+    if !is_loading
+        && app.config.shared.show_inline_lyrics
+        && app.lyrics.shared.has_synced_lyrics()
+        && let Some(overlay) = layout::inline_lyrics_overlay(main.content)
+    {
+        draw_inline_lyrics(frame, app, overlay);
+    }
 
     // Draw playback mode dropdown if open.
     if app.playback_mode_dropdown {
@@ -299,6 +308,51 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         Span::styled(format!(" {vol_pct}"), Style::default().fg(vol_active_color)),
     ]);
     frame.render_widget(Paragraph::new(vol_line), vol_area);
+}
+
+fn draw_inline_lyrics(frame: &mut Frame, app: &App, area: Rect) {
+    let style = &app.config.style;
+    let position = app.logic.get_playing_position();
+    let lyrics_line = app.lyrics.shared.current_inline_line(position);
+
+    let line = if let Some(lyrics_line) = lyrics_line {
+        let mut spans = Vec::new();
+        // Timestamp prefix, matching the full lyrics panel style.
+        if let Some(start_ms) = lyrics_line.start {
+            let timestamp_secs = (start_ms / 1000) as u32;
+            let timestamp_str = blackbird_core::util::seconds_to_hms_string(timestamp_secs, false);
+            spans.push(Span::styled(
+                format!(" {timestamp_str:>6} "),
+                Style::default().fg(style.track_name_playing_color()),
+            ));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            &lyrics_line.value,
+            Style::default().fg(style.text_color()),
+        ));
+        Line::from(spans)
+    } else {
+        Line::from(Span::styled(
+            " [no lyrics]",
+            Style::default().fg(style.track_duration_color()),
+        ))
+    };
+
+    let paragraph = Paragraph::new(line).style(
+        Style::default()
+            .bg(style.background_color())
+            .fg(style.track_duration_color()),
+    );
+    // Use top and bottom borders to visually separate inline lyrics from
+    // the content area above and the help bar below.
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::TOP | ratatui::widgets::Borders::BOTTOM)
+        .border_style(Style::default().fg(style.album_color()));
+    // Clear the area first so library content underneath doesn't bleed through.
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph.block(block), area);
 }
 
 /// Handle click on scrub bar or volume slider area.

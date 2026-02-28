@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use blackbird_client_shared::style as shared_style;
-use blackbird_core::{self as bc, blackbird_state::TrackId, util::seconds_to_hms_string};
+use blackbird_core::{self as bc, util::seconds_to_hms_string};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -20,41 +20,33 @@ pub enum LyricsAction {
     SeekRelative(i64),
 }
 
-pub struct LyricsState {
-    pub track_id: Option<TrackId>,
-    pub data: Option<bc::bs::StructuredLyrics>,
-    pub loading: bool,
+/// TUI-specific lyrics view state wrapping the shared data state.
+pub struct LyricsViewState {
+    pub shared: blackbird_client_shared::lyrics::LyricsState,
     pub scroll_offset: usize,
     /// Keyboard-selected line index for scrubbing. `None` = auto-follow playback.
     pub selected_index: Option<usize>,
 }
 
-impl LyricsState {
+impl LyricsViewState {
     pub fn new() -> Self {
         Self {
-            track_id: None,
-            data: None,
-            loading: false,
+            shared: blackbird_client_shared::lyrics::LyricsState::new(),
             scroll_offset: 0,
             selected_index: None,
         }
     }
 
-    pub fn reset(&mut self) {
+    /// Resets the view-specific state (scroll and selection).
+    pub fn reset_view(&mut self) {
         self.scroll_offset = 0;
         self.selected_index = None;
-    }
-
-    pub fn start_loading(&mut self, track_id: TrackId) {
-        self.track_id = Some(track_id);
-        self.loading = true;
-        self.data = None;
     }
 }
 
 pub fn draw(
     frame: &mut Frame,
-    lyrics: &LyricsState,
+    lyrics: &LyricsViewState,
     style: &shared_style::Style,
     playing_position: Option<Duration>,
     area: Rect,
@@ -67,14 +59,14 @@ pub fn draw(
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if lyrics.loading {
+    if lyrics.shared.loading {
         let loading = Paragraph::new("Loading lyrics...")
             .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(loading, inner);
         return;
     }
 
-    let Some(lyrics_data) = &lyrics.data else {
+    let Some(lyrics_data) = &lyrics.shared.data else {
         let msg = Paragraph::new("No lyrics available for this track.")
             .style(Style::default().fg(style.track_duration_color()));
         frame.render_widget(msg, inner);
@@ -181,7 +173,7 @@ pub fn draw(
 }
 
 pub fn handle_key(
-    lyrics: &mut LyricsState,
+    lyrics: &mut LyricsViewState,
     logic: &bc::Logic,
     action: Action,
 ) -> Option<LyricsAction> {
@@ -219,13 +211,13 @@ pub fn handle_key(
 
 /// Handle click in the lyrics area — seek to the clicked line.
 pub fn handle_mouse_click(
-    lyrics: &mut LyricsState,
+    lyrics: &mut LyricsViewState,
     logic: &bc::Logic,
     area: Rect,
     _x: u16,
     y: u16,
 ) {
-    let Some(lyrics_data) = &lyrics.data else {
+    let Some(lyrics_data) = &lyrics.shared.data else {
         return;
     };
     if lyrics_data.line.is_empty() {
@@ -264,14 +256,24 @@ pub fn handle_mouse_click(
 
 /// Move the lyrics selection cursor by `delta` lines.
 /// If no selection exists, starts from the current playing line.
-pub fn move_selection(lyrics: &mut LyricsState, playing_position: Option<Duration>, delta: i32) {
-    let line_count = lyrics.data.as_ref().map(|l| l.line.len()).unwrap_or(0);
+pub fn move_selection(
+    lyrics: &mut LyricsViewState,
+    playing_position: Option<Duration>,
+    delta: i32,
+) {
+    let line_count = lyrics
+        .shared
+        .data
+        .as_ref()
+        .map(|l| l.line.len())
+        .unwrap_or(0);
     if line_count == 0 {
         return;
     }
 
     let current = lyrics.selected_index.unwrap_or_else(|| {
         lyrics
+            .shared
             .data
             .as_ref()
             .map(|lyrics_data| {
@@ -288,11 +290,11 @@ pub fn move_selection(lyrics: &mut LyricsState, playing_position: Option<Duratio
 }
 
 /// Seek playback to the timestamp of the currently selected lyrics line.
-pub fn seek_to_selected(lyrics: &mut LyricsState, logic: &bc::Logic) {
+pub fn seek_to_selected(lyrics: &mut LyricsViewState, logic: &bc::Logic) {
     let Some(selected) = lyrics.selected_index else {
         return;
     };
-    let Some(lyrics_data) = &lyrics.data else {
+    let Some(lyrics_data) = &lyrics.shared.data else {
         return;
     };
     if let Some(line) = lyrics_data.line.get(selected)
@@ -305,8 +307,8 @@ pub fn seek_to_selected(lyrics: &mut LyricsState, logic: &bc::Logic) {
 }
 
 /// Seek playback to the timestamp of a lyrics line at the given index.
-pub fn seek_to_line(lyrics: &mut LyricsState, logic: &bc::Logic, line_index: usize) {
-    let Some(lyrics_data) = &lyrics.data else {
+pub fn seek_to_line(lyrics: &mut LyricsViewState, logic: &bc::Logic, line_index: usize) {
+    let Some(lyrics_data) = &lyrics.shared.data else {
         return;
     };
     if let Some(line) = lyrics_data.line.get(line_index)

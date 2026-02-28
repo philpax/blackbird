@@ -9,7 +9,7 @@ use crate::{
     log_buffer::LogBuffer,
     ui::{
         album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
-        lyrics::LyricsState, queue::QueueState, search::SearchState,
+        lyrics::LyricsViewState, queue::QueueState, search::SearchState,
     },
 };
 
@@ -53,7 +53,7 @@ pub struct App {
     // Per-view state (owned by their respective modules)
     pub library: LibraryState,
     pub search: SearchState,
-    pub lyrics: LyricsState,
+    pub lyrics: LyricsViewState,
     pub logs: LogsState,
     pub queue: QueueState,
 }
@@ -91,7 +91,7 @@ impl App {
 
             library: LibraryState::new(),
             search: SearchState::new(),
-            lyrics: LyricsState::new(),
+            lyrics: LyricsViewState::new(),
             logs: LogsState::new(log_buffer),
             queue: QueueState::new(),
         }
@@ -111,9 +111,13 @@ impl App {
                 self.library.scroll_to_track = Some(tap.track_id.clone());
                 self.library.needs_scroll_to_playing = false;
 
-                // Auto-request lyrics if the lyrics panel is open.
-                if self.focused_panel == FocusedPanel::Lyrics {
-                    self.lyrics.start_loading(tap.track_id.clone());
+                // Request lyrics if inline lyrics are enabled or the panel is open.
+                let panel_open = self.focused_panel == FocusedPanel::Lyrics;
+                if self.lyrics.shared.on_track_started(
+                    &tap.track_id,
+                    self.config.shared.show_inline_lyrics,
+                    panel_open,
+                ) {
                     self.logic.request_lyrics(&tap.track_id);
                 }
             }
@@ -121,10 +125,7 @@ impl App {
 
         // Process lyrics data.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
-            if Some(&lyrics_data.track_id) == self.lyrics.track_id.as_ref() {
-                self.lyrics.data = lyrics_data.lyrics;
-                self.lyrics.loading = false;
-            }
+            self.lyrics.shared.on_lyrics_loaded(&lyrics_data);
         }
 
         // Process library population.
@@ -195,10 +196,12 @@ impl App {
             self.focused_panel = FocusedPanel::Library;
         } else {
             self.focused_panel = FocusedPanel::Lyrics;
-            self.lyrics.reset();
-            // Request lyrics for the currently playing track.
-            if let Some(track_id) = self.logic.get_playing_track_id() {
-                self.lyrics.start_loading(track_id.clone());
+            self.lyrics.reset_view();
+            // Request lyrics if not already loaded for the current track.
+            let playing_id = self.logic.get_playing_track_id();
+            if self.lyrics.shared.on_panel_opened(playing_id.as_ref())
+                && let Some(track_id) = playing_id
+            {
                 self.logic.request_lyrics(&track_id);
             }
         }

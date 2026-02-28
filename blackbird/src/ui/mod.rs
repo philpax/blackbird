@@ -30,9 +30,7 @@ pub struct SearchState {
 #[derive(Default)]
 pub struct LyricsState {
     pub(crate) open: bool,
-    pub(crate) track_id: Option<bc::blackbird_state::TrackId>,
-    pub(crate) data: Option<bc::bs::StructuredLyrics>,
-    pub(crate) loading: bool,
+    pub(crate) shared: blackbird_client_shared::lyrics::LyricsState,
     pub(crate) auto_scroll: bool,
 }
 
@@ -110,12 +108,13 @@ impl App {
             if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
                 track_to_scroll_to = Some(track_and_position.track_id.clone());
 
-                // If lyrics window is open, request lyrics for the new track
-                if self.ui_state.lyrics.open {
-                    self.ui_state.lyrics.track_id = Some(track_and_position.track_id.clone());
-                    self.ui_state.lyrics.loading = true;
-                    self.ui_state.lyrics.data = None; // Clear old lyrics while loading
-                    self.ui_state.lyrics.auto_scroll = true; // Re-enable auto-scroll for new track
+                // Request lyrics if inline lyrics are enabled or the panel is open.
+                if self.ui_state.lyrics.shared.on_track_started(
+                    &track_and_position.track_id,
+                    config.shared.show_inline_lyrics,
+                    self.ui_state.lyrics.open,
+                ) {
+                    self.ui_state.lyrics.auto_scroll = true;
                     logic.request_lyrics(&track_and_position.track_id);
                 }
             }
@@ -158,14 +157,18 @@ impl App {
                     .requires_command(&config.keybindings.local_lyrics);
                 if (!requires_cmd || i.modifiers.command) && i.key_released(lyrics_key) {
                     self.ui_state.lyrics.open = !self.ui_state.lyrics.open;
-                    // Request lyrics for the currently playing track when opening the window
-                    if self.ui_state.lyrics.open
-                        && let Some(track_id) = logic.get_playing_track_id()
-                    {
-                        self.ui_state.lyrics.track_id = Some(track_id.clone());
-                        self.ui_state.lyrics.loading = true;
-                        self.ui_state.lyrics.auto_scroll = true; // Enable auto-scroll by default
-                        logic.request_lyrics(&track_id);
+                    if self.ui_state.lyrics.open {
+                        let playing_id = logic.get_playing_track_id();
+                        if self
+                            .ui_state
+                            .lyrics
+                            .shared
+                            .on_panel_opened(playing_id.as_ref())
+                            && let Some(track_id) = playing_id
+                        {
+                            logic.request_lyrics(&track_id);
+                        }
+                        self.ui_state.lyrics.auto_scroll = true;
                     }
                 }
             }
@@ -247,13 +250,18 @@ impl App {
                         }
                         keys::Action::Lyrics => {
                             self.ui_state.lyrics.open = !self.ui_state.lyrics.open;
-                            if self.ui_state.lyrics.open
-                                && let Some(track_id) = logic.get_playing_track_id()
-                            {
-                                self.ui_state.lyrics.track_id = Some(track_id.clone());
-                                self.ui_state.lyrics.loading = true;
+                            if self.ui_state.lyrics.open {
+                                let playing_id = logic.get_playing_track_id();
+                                if self
+                                    .ui_state
+                                    .lyrics
+                                    .shared
+                                    .on_panel_opened(playing_id.as_ref())
+                                    && let Some(track_id) = playing_id
+                                {
+                                    logic.request_lyrics(&track_id);
+                                }
                                 self.ui_state.lyrics.auto_scroll = true;
-                                logic.request_lyrics(&track_id);
                             }
                         }
                         keys::Action::Queue => {
@@ -288,12 +296,9 @@ impl App {
             });
         }
 
-        // Process incoming lyrics data
+        // Process incoming lyrics data.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
-            if Some(&lyrics_data.track_id) == self.ui_state.lyrics.track_id.as_ref() {
-                self.ui_state.lyrics.data = lyrics_data.lyrics;
-                self.ui_state.lyrics.loading = false;
-            }
+            self.ui_state.lyrics.shared.on_lyrics_loaded(&lyrics_data);
         }
 
         // Process library population signal
@@ -333,8 +338,8 @@ impl App {
                 ctx,
                 &config.style,
                 &mut self.ui_state.lyrics.open,
-                &mut self.ui_state.lyrics.data,
-                &mut self.ui_state.lyrics.loading,
+                &mut self.ui_state.lyrics.shared.data,
+                &mut self.ui_state.lyrics.shared.loading,
                 &mut self.ui_state.lyrics.auto_scroll,
             );
         }
@@ -438,6 +443,93 @@ impl App {
                     },
                 );
             });
+
+        // Draw inline lyrics as an overlay at the bottom of the central panel.
+        if config.shared.show_inline_lyrics && self.ui_state.lyrics.shared.has_synced_lyrics() {
+            let panel_rect = ctx.available_rect();
+            let font_id = egui::TextStyle::Body.resolve(&ctx.style());
+            let row_height = ctx.fonts(|f| f.row_height(&font_id));
+            // Height: separator (2px) + text row + small padding.
+            let overlay_height = row_height + 6.0;
+            let overlay_rect = egui::Rect::from_min_size(
+                egui::pos2(panel_rect.left(), panel_rect.bottom() - overlay_height),
+                egui::vec2(panel_rect.width(), overlay_height),
+            );
+
+            egui::Area::new(egui::Id::new("inline_lyrics_overlay"))
+                .fixed_pos(overlay_rect.min)
+                .order(egui::Order::Foreground)
+                .show(ctx, |ui| {
+                    ui.set_min_size(overlay_rect.size());
+                    ui.set_max_size(overlay_rect.size());
+
+                    // Fill background so library content doesn't bleed through.
+                    ui.painter()
+                        .rect_filled(overlay_rect, 0.0, config.style.background_color32());
+
+                    // Top separator line.
+                    let sep_rect = egui::Rect::from_min_size(
+                        overlay_rect.min,
+                        egui::vec2(overlay_rect.width(), 1.0),
+                    );
+                    ui.painter()
+                        .rect_filled(sep_rect, 0.0, config.style.track_duration_color32());
+
+                    let position = logic.get_playing_position();
+                    let mut job = egui::text::LayoutJob::default();
+                    if let Some(line) = self.ui_state.lyrics.shared.current_inline_line(position) {
+                        if let Some(start_ms) = line.start {
+                            let timestamp_secs = (start_ms / 1000) as u32;
+                            let timestamp_str =
+                                blackbird_core::util::seconds_to_hms_string(timestamp_secs, false);
+                            job.append(
+                                &format!("{timestamp_str} "),
+                                0.0,
+                                egui::text::TextFormat {
+                                    color: config.style.track_name_playing_color32(),
+                                    font_id: font_id.clone(),
+                                    ..Default::default()
+                                },
+                            );
+                        }
+                        job.append(
+                            &line.value,
+                            0.0,
+                            egui::text::TextFormat {
+                                color: config.style.text_color32(),
+                                font_id,
+                                ..Default::default()
+                            },
+                        );
+                    } else {
+                        let [r, g, b, a] = config.style.text_color32().to_array();
+                        job.append(
+                            "[no lyrics]",
+                            0.0,
+                            egui::text::TextFormat {
+                                color: egui::Color32::from_rgba_unmultiplied(
+                                    (r as f32 * 0.5) as u8,
+                                    (g as f32 * 0.5) as u8,
+                                    (b as f32 * 0.5) as u8,
+                                    a,
+                                ),
+                                font_id,
+                                ..Default::default()
+                            },
+                        );
+                    }
+                    // Add some left margin and vertical centering.
+                    let text_pos = egui::pos2(
+                        overlay_rect.left() + margin as f32,
+                        overlay_rect.top() + 3.0,
+                    );
+                    ui.painter().galley(
+                        text_pos,
+                        ui.fonts(|f| f.layout_job(job)),
+                        config.style.text_color32(),
+                    );
+                });
+        }
 
         // If the track-to-scroll-to doesn't exist yet in the library, save it back
         // and it will hopefully become available at some point in the future

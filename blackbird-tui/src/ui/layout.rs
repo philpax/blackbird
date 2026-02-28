@@ -4,6 +4,7 @@ use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
 pub const NOW_PLAYING_HEIGHT: u16 = 2;
 pub const SCRUB_BAR_HEIGHT: u16 = 1;
+pub const INLINE_LYRICS_HEIGHT: u16 = 3;
 pub const CONTENT_MIN_HEIGHT: u16 = 3;
 pub const HELP_BAR_HEIGHT: u16 = 1;
 
@@ -30,6 +31,21 @@ pub fn split_main(area: Rect) -> MainLayout {
         content: chunks[2],
         help_bar: chunks[3],
     }
+}
+
+/// Computes the overlay rect for inline lyrics, anchored to the bottom of the
+/// content area just above the help bar. Returns `None` if the content area is
+/// too small.
+pub fn inline_lyrics_overlay(content: Rect) -> Option<Rect> {
+    if content.height < INLINE_LYRICS_HEIGHT {
+        return None;
+    }
+    Some(Rect::new(
+        content.x,
+        content.y + content.height - INLINE_LYRICS_HEIGHT,
+        content.width,
+        INLINE_LYRICS_HEIGHT,
+    ))
 }
 
 // ── Now-playing horizontal layout ───────────────────────────────────────────

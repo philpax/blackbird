@@ -370,9 +370,22 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     let x = mouse.column;
     let y = mouse.row;
 
+    // Check whether the cursor is over the inline lyrics overlay so we can
+    // block interactions that would otherwise reach the library underneath.
+    let over_inline_lyrics = app.config.shared.show_inline_lyrics
+        && app.lyrics.shared.has_synced_lyrics()
+        && ui::layout::inline_lyrics_overlay(main.content)
+            .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+
     match mouse.kind {
         MouseEventKind::Moved => {
-            app.mouse_position = Some((x, y));
+            // Suppress hover position when cursor is over the overlay so
+            // library rows underneath don't get underlined.
+            if over_inline_lyrics {
+                app.mouse_position = None;
+            } else {
+                app.mouse_position = Some((x, y));
+            }
         }
         MouseEventKind::Down(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
@@ -432,6 +445,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             // --- Scrub bar / Volume area ---
             if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
                 ui::handle_scrub_volume_click(app, scrub_area, x);
+                return;
+            }
+
+            // --- Inline lyrics overlay (absorbs clicks) ---
+            if over_inline_lyrics {
                 return;
             }
 

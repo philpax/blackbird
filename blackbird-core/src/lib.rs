@@ -48,6 +48,9 @@ pub struct Logic {
     lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     library_populated_tx: std::sync::mpsc::Sender<()>,
 
+    /// Guards against duplicate in-flight lyrics requests for the same track.
+    last_requested_lyrics_track: std::sync::Mutex<Option<TrackId>>,
+
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
     transcode: bool,
@@ -237,6 +240,8 @@ impl Logic {
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             library_populated_tx,
+
+            last_requested_lyrics_track: std::sync::Mutex::new(None),
 
             state,
             client,
@@ -580,6 +585,15 @@ impl Logic {
     }
 
     pub fn request_lyrics(&self, track_id: &TrackId) {
+        // Skip if we already have an in-flight request for this track.
+        {
+            let mut last = self.last_requested_lyrics_track.lock().unwrap();
+            if last.as_ref() == Some(track_id) {
+                return;
+            }
+            *last = Some(track_id.clone());
+        }
+
         let client = self.client.clone();
         let track_id = track_id.clone();
         let lyrics_loaded_tx = self.lyrics_loaded_tx.clone();
