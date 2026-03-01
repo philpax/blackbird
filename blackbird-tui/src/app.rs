@@ -174,6 +174,11 @@ impl App {
             }
         }
 
+        // Apply inertia scrolling when the library panel is focused.
+        if self.focused_panel == FocusedPanel::Library {
+            self.library.tick_inertia(&self.logic);
+        }
+
         if self.logic.should_shutdown() {
             self.should_quit = true;
         }
