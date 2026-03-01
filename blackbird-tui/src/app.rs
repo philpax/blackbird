@@ -114,7 +114,23 @@ impl App {
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let PlaybackToLogicMessage::TrackStarted(tap) = event {
-                self.library.scroll_to_track = Some(tap.track_id.clone());
+                // Auto-follow the playing track unless the user has scrolled
+                // away. Re-follow if the new track is visible in the current
+                // viewport (the user hasn't scrolled far).
+                if !self.library.follow_playback {
+                    let state = self.logic.get_state();
+                    let state = state.read().unwrap();
+                    if let Some(idx) = self
+                        .library
+                        .find_flat_index_for_track(&state, &tap.track_id)
+                        && self.library.is_index_visible(idx)
+                    {
+                        self.library.follow_playback = true;
+                    }
+                }
+                if self.library.follow_playback {
+                    self.library.scroll_to_track = Some(tap.track_id.clone());
+                }
                 self.library.needs_scroll_to_playing = false;
 
                 // Request lyrics if inline lyrics are enabled or the panel is open.

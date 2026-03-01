@@ -108,6 +108,9 @@ pub struct LibraryState {
     pub selected_index: usize,
     pub needs_scroll_to_playing: bool,
     pub scroll_to_track: Option<TrackId>,
+    /// Whether to auto-follow the playing track on track transitions. Set to
+    /// `false` when the user manually scrolls/drags, restored by GotoPlaying.
+    pub follow_playback: bool,
 
     // Mouse interaction
     pub click_pending: Option<(u16, u16, usize)>,
@@ -138,6 +141,7 @@ impl LibraryState {
             selected_index: 0,
             needs_scroll_to_playing: true,
             scroll_to_track: None,
+            follow_playback: true,
 
             click_pending: None,
             dragging: false,
@@ -1369,6 +1373,7 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Queue => app.toggle_queue(),
         Action::VolumeMode => app.volume_editing = true,
         Action::GotoPlaying => {
+            app.library.follow_playback = true;
             if let Some(track_id) = app.logic.get_playing_track_id() {
                 app.library.scroll_to_track = Some(track_id);
             }
@@ -1651,6 +1656,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
     let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
 
     if x >= scroll_area_start && y >= library_area.y && y < library_area.y + library_area.height {
+        app.library.follow_playback = false;
         let entries = app.library.get_flat_library(&app.logic).to_vec();
         scroll_to_y(app, &entries, library_area, y);
         app.library.click_pending = None;
@@ -1661,6 +1667,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
 
     // Content drag → pan library by tracking viewport line offset.
     if app.library.click_pending.is_some() || app.library.dragging {
+        app.library.follow_playback = false;
         app.library.inertia_velocity = 0.0;
         let entries = app.library.get_flat_library(&app.logic).to_vec();
         let total_lines = total_entry_lines(&entries);
@@ -1765,6 +1772,7 @@ pub fn handle_mouse_up(app: &mut App) {
 
 /// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
 pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
+    app.library.follow_playback = false;
     app.library.cancel_inertia(&app.logic);
     let entries = app.library.get_flat_library(&app.logic);
     let total_lines = total_entry_lines(entries);
