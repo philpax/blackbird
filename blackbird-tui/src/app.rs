@@ -46,6 +46,8 @@ pub struct App {
     pub help_bar_items: Vec<(u16, u16, keys::Action)>,
     /// Monotonically increasing tick counter for animations.
     pub tick_count: u64,
+    /// Whether the user is dragging the scrub bar or volume slider.
+    pub scrub_dragging: bool,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -88,6 +90,7 @@ impl App {
             playback_mode_dropdown: false,
             help_bar_items: Vec::new(),
             tick_count: 0,
+            scrub_dragging: false,
 
             library: LibraryState::new(),
             search: SearchState::new(),

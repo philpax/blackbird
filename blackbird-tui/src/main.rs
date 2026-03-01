@@ -445,6 +445,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             // --- Scrub bar / Volume area ---
             if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
                 ui::handle_scrub_volume_click(app, scrub_area, x);
+                app.scrub_dragging = true;
                 return;
             }
 
@@ -475,20 +476,21 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            app.scrub_dragging = false;
             ui::library::handle_mouse_up(app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
 
-            if app.focused_panel == FocusedPanel::Library
-                && ui::library::handle_mouse_drag(app, library_area, x, y)
-            {
+            // Continue scrub bar / volume drag regardless of Y position.
+            if app.scrub_dragging {
+                let clamped_x = x.clamp(scrub_area.x, scrub_area.x + scrub_area.width - 1);
+                ui::handle_scrub_volume_click(app, scrub_area, clamped_x);
                 return;
             }
 
-            // Scrub bar drag → seek
-            if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
-                ui::handle_scrub_volume_click(app, scrub_area, x);
+            if app.focused_panel == FocusedPanel::Library {
+                ui::library::handle_mouse_drag(app, library_area, x, y);
             }
         }
         MouseEventKind::ScrollUp => {

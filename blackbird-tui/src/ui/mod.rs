@@ -14,7 +14,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, Clear, Gauge, Paragraph},
+    widgets::{Block, Clear, Paragraph},
 };
 
 use std::time::Duration;
@@ -272,15 +272,56 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     // Split area: scrub bar | volume slider.
     let sv = layout::split_scrub_volume(area);
 
-    let gauge = Gauge::default()
-        .gauge_style(
-            Style::default()
-                .fg(style.track_name_playing_color())
-                .bg(style.background_color()),
-        )
-        .ratio(ratio as f64)
-        .label(label);
-    frame.render_widget(gauge, sv.scrub_bar);
+    // Render the scrub bar with half-block precision. Each column can show
+    // empty, a left-half block (▌), or a full block (█), giving twice the
+    // resolution of the built-in Gauge widget.
+    let bar_width = sv.scrub_bar.width as f64;
+    let filled_half_blocks = (ratio as f64 * bar_width * 2.0).round() as u16;
+    let full_cols = filled_half_blocks / 2;
+    let has_half = filled_half_blocks % 2 == 1;
+
+    let fg = style.track_name_playing_color();
+    let bg = style.background_color();
+    let buf = frame.buffer_mut();
+    let y = sv.scrub_bar.y;
+
+    for col in 0..sv.scrub_bar.width {
+        let x = sv.scrub_bar.x + col;
+        let pos = ratatui::layout::Position::new(x, y);
+        if !sv.scrub_bar.contains(pos) {
+            continue;
+        }
+        let cell = &mut buf[pos];
+        if col < full_cols {
+            cell.set_char('█');
+            cell.set_style(Style::default().fg(fg));
+        } else if col == full_cols && has_half {
+            cell.set_char('▌');
+            cell.set_style(Style::default().fg(fg).bg(bg));
+        } else {
+            cell.set_char(' ');
+            cell.set_style(Style::default().bg(bg));
+        }
+    }
+
+    // Center the time label over the bar.
+    let label_width = label.len() as u16;
+    let label_start = sv.scrub_bar.x + sv.scrub_bar.width.saturating_sub(label_width) / 2;
+    for (ci, ch) in label.chars().enumerate() {
+        let x = label_start + ci as u16;
+        let pos = ratatui::layout::Position::new(x, y);
+        if sv.scrub_bar.contains(pos) {
+            let col = x - sv.scrub_bar.x;
+            let cell = &mut buf[pos];
+            cell.set_char(ch);
+            if col < full_cols {
+                // Label on filled portion: invert colors.
+                cell.set_style(Style::default().fg(bg).bg(fg));
+            } else {
+                cell.set_style(Style::default().fg(fg).bg(bg));
+            }
+        }
+    }
 
     // Draw volume as a visual slider: "♪ ████░░░░ nn%"
     let vol_area = sv.volume;
