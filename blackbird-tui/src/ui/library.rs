@@ -322,6 +322,52 @@ impl LibraryState {
         self.viewport_line = line_offset.saturating_sub(half_height).min(max_viewport);
     }
 
+    /// Scrolls the viewport just enough to keep `selected_index` visible,
+    /// with a margin from the viewport edges. Unlike `center_viewport_on_selection`,
+    /// this avoids jarring snaps when the cursor is already on-screen.
+    pub fn ensure_viewport_shows_selection(&mut self) {
+        let margin = super::layout::SCROLL_MARGIN;
+        let mut line_offset = 0usize;
+        for entry in self.cached_flat_library.iter().take(self.selected_index) {
+            line_offset += entry.height();
+        }
+        let entry_height = self
+            .cached_flat_library
+            .get(self.selected_index)
+            .map(LibraryEntry::height)
+            .unwrap_or(1);
+        let total_lines = total_entry_lines(&self.cached_flat_library);
+        let max_viewport = total_lines.saturating_sub(self.last_visible_height);
+
+        // Cursor above viewport + margin: scroll up.
+        if line_offset < self.viewport_line + margin {
+            self.viewport_line = line_offset.saturating_sub(margin);
+        }
+        // Cursor below viewport - margin: scroll down.
+        let bottom = self.viewport_line + self.last_visible_height;
+        if line_offset + entry_height + margin > bottom {
+            self.viewport_line =
+                (line_offset + entry_height + margin).saturating_sub(self.last_visible_height);
+        }
+        self.viewport_line = self.viewport_line.min(max_viewport);
+    }
+
+    /// Returns whether the entry at the given flat index is visible in the
+    /// current viewport.
+    pub fn is_index_visible(&self, index: usize) -> bool {
+        let mut line_offset = 0usize;
+        for entry in self.cached_flat_library.iter().take(index) {
+            line_offset += entry.height();
+        }
+        let entry_height = self
+            .cached_flat_library
+            .get(index)
+            .map(LibraryEntry::height)
+            .unwrap_or(0);
+        let viewport_end = self.viewport_line + self.last_visible_height;
+        line_offset + entry_height > self.viewport_line && line_offset < viewport_end
+    }
+
     /// Sets `selected_index` to the nearest track at the viewport center.
     pub fn snap_cursor_to_viewport_center(&mut self) {
         let total_lines = total_entry_lines(&self.cached_flat_library);
@@ -1361,7 +1407,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                 app.library.get_library_entry(&app.logic, new_index)
             {
                 app.library.selected_index = new_index;
-                app.library.center_viewport_on_selection();
+                app.library.ensure_viewport_shows_selection();
             }
         }
         Action::MoveDown => {
@@ -1378,7 +1424,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                 app.library.get_library_entry(&app.logic, new_index)
             {
                 app.library.selected_index = new_index;
-                app.library.center_viewport_on_selection();
+                app.library.ensure_viewport_shows_selection();
             }
         }
         Action::PageUp => {
@@ -1397,7 +1443,7 @@ pub fn handle_key(app: &mut App, action: Action) {
             }
             if new_index < entries_len {
                 app.library.selected_index = new_index;
-                app.library.center_viewport_on_selection();
+                app.library.ensure_viewport_shows_selection();
             }
         }
         Action::PageDown => {
@@ -1420,7 +1466,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                     app.library.get_library_entry(&app.logic, new_index)
                 {
                     app.library.selected_index = new_index;
-                    app.library.center_viewport_on_selection();
+                    app.library.ensure_viewport_shows_selection();
                 }
             }
         }
