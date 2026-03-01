@@ -463,14 +463,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let track_duration_color = app.config.style.track_duration_color();
     let track_name_hovered_color = app.config.style.track_name_hovered_color();
 
-    // Determine which entry's heart is being hovered (for hover color effect).
-    let hovered_heart_index = compute_hovered_heart_index(app, area);
-    // Determine which track entry is being hovered anywhere on the row.
-    let hovered_entry_index = compute_hovered_entry_index(app, area);
-    // During a content drag, keep the underline on the drag-selected row;
-    // otherwise fall back to the normal hover detection.
-    let underline_index = app.library.drag_selected_index.or(hovered_entry_index);
-
     let has_loaded = app.logic.has_loaded_all_tracks();
 
     // Use the full area directly (no frame/border)
@@ -520,18 +512,33 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .viewport_line
         .min(total_lines.saturating_sub(visible_height));
 
-    // Convert line offset back to item offset for ListState.
+    // Convert line offset back to item offset for ListState. Use `>` so that
+    // an item whose span *contains* centered_offset is included (important for
+    // 2-line group headers whose first line may be above the viewport).
     let mut item_offset = 0usize;
     let mut current_line = 0usize;
     for (i, entry) in entries.iter().enumerate() {
-        if current_line >= centered_offset {
+        let next_line = current_line + entry.height();
+        if next_line > centered_offset {
             item_offset = i;
             break;
         }
-        current_line += entry.height();
+        current_line = next_line;
         item_offset = i + 1;
     }
     item_offset = item_offset.min(entries.len().saturating_sub(1));
+
+    // Update scroll_offset now so that hover hit-testing (below) uses the
+    // current viewport position rather than the stale value from last frame.
+    app.library.scroll_offset = item_offset;
+
+    // Determine which entry's heart is being hovered (for hover color effect).
+    let hovered_heart_index = compute_hovered_heart_index(app, area);
+    // Determine which track entry is being hovered anywhere on the row.
+    let hovered_entry_index = compute_hovered_entry_index(app, area);
+    // During a content drag, keep the underline on the drag-selected row;
+    // otherwise fall back to the normal hover detection.
+    let underline_index = app.library.drag_selected_index.or(hovered_entry_index);
 
     // Determine the visible item range: walk forward from item_offset until we
     // exceed the visible height (plus a small buffer for partially visible items).
@@ -973,16 +980,15 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items);
 
-    // Use a ListState with offset 0 since we only built visible items.
+    // Render with offset 0 since we only built visible items starting from
+    // item_offset. We intentionally don't set a selection — we handle
+    // highlighting manually in item styles, and setting one would cause
+    // ratatui to auto-scroll the offset to keep the selected item visible,
+    // fighting our viewport positioning.
     let mut state = ListState::default();
-    let relative_selection = selected_index.saturating_sub(item_offset);
-    state.select(Some(relative_selection));
     *state.offset_mut() = 0;
 
     frame.render_stateful_widget(list, inner, &mut state);
-
-    // Save the item_offset for use by keyboard navigation and mouse hit-testing.
-    app.library.scroll_offset = item_offset;
 
     // Render combined scrollbar + library indicator on the right column.
     render_scrollbar_with_library_indicator(
