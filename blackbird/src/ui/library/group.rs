@@ -1,3 +1,4 @@
+use blackbird_client_shared::config::AlbumArtStyle;
 use blackbird_core::{AppState, Logic};
 use egui::{Align, Align2, Label, Layout, RichText, TextFormat, TextStyle, Ui, pos2, vec2};
 
@@ -23,6 +24,9 @@ pub const GROUP_ALBUM_ART_LINE_COUNT: usize = 8;
 pub struct GroupResponse<'a> {
     pub clicked_track: Option<&'a TrackId>,
     pub clicked_heart: bool,
+    /// When set, the user is hovering over album art. Contains the cover art ID
+    /// and the screen-space rect of the thumbnail.
+    pub hovered_art: Option<(blackbird_core::blackbird_state::CoverArtId, egui::Rect)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -34,11 +38,54 @@ pub fn ui<'a>(
     playing_track: Option<&TrackId>,
     incremental_search_target: Option<&TrackId>,
     cover_art_cache: &mut CoverArtCache,
+    album_art_style: AlbumArtStyle,
 ) -> GroupResponse<'a> {
     let mut clicked_track = None;
     let mut clicked_heart = false;
+    let mut hovered_art: Option<(blackbird_core::blackbird_state::CoverArtId, egui::Rect)> = None;
+
+    // Compute the header art size for LeftOfAlbum so it can be reused for
+    // track alignment below.
+    let left_of_album_art_size = if album_art_style == AlbumArtStyle::LeftOfAlbum {
+        let text_height = ui.text_style_height(&TextStyle::Body);
+        let item_spacing_y = ui.spacing().item_spacing.y;
+        // Match the height of the two text lines (artist + album) including
+        // the vertical spacing between them.
+        Some(text_height * 2.0 + item_spacing_y)
+    } else {
+        None
+    };
+
+    const LEFT_OF_ALBUM_ART_LEFT_MARGIN: f32 = 4.0;
+    const LEFT_OF_ALBUM_ART_RIGHT_MARGIN: f32 = 8.0;
 
     ui.horizontal(|ui| {
+        // In LeftOfAlbum mode, show a small thumbnail beside the header.
+        if let Some(art_size) = left_of_album_art_size {
+            // Disable horizontal item spacing so only our explicit margins
+            // control the gaps — this keeps track titles aligned with the
+            // album name, which uses the same margin constants.
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(LEFT_OF_ALBUM_ART_LEFT_MARGIN);
+            let art_rect =
+                egui::Rect::from_min_size(ui.cursor().left_top(), vec2(art_size, art_size));
+            egui::Image::new(cover_art_cache.get(
+                logic,
+                group.cover_art_id.as_ref(),
+                CachePriority::Visible,
+            ))
+            .show_loading_spinner(false)
+            .paint_at(ui, art_rect);
+            // Sense hover on the art area.
+            let art_response = ui.allocate_rect(art_rect, egui::Sense::hover());
+            if art_response.hovered()
+                && let Some(id) = &group.cover_art_id
+            {
+                hovered_art = Some((id.clone(), art_response.rect));
+            }
+            ui.add_space(LEFT_OF_ALBUM_ART_RIGHT_MARGIN);
+        }
+
         ui.vertical(|ui| {
             // Artist
             ui.add(
@@ -137,83 +184,163 @@ pub fn ui<'a>(
         let total_height = tracks.len() as f32 * spaced_row_height;
         ui.allocate_space(vec2(ui.available_width(), total_height));
 
-        let image_size = GROUP_ALBUM_ART_SIZE;
-        let image_top_margin = 4.0;
-        let image_pos = pos2(ui.min_rect().left(), ui.min_rect().top() + image_top_margin);
-        egui::Image::new(cover_art_cache.get(
-            logic,
-            group.cover_art_id.as_ref(),
-            CachePriority::Visible,
-        ))
-        .show_loading_spinner(false)
-        .paint_at(
-            ui,
-            egui::Rect {
-                min: image_pos,
-                max: image_pos + vec2(image_size, image_size),
-            },
-        );
+        match album_art_style {
+            AlbumArtStyle::BelowAlbum => {
+                let image_size = GROUP_ALBUM_ART_SIZE;
+                let image_top_margin = 4.0;
+                let image_left_margin = 4.0;
+                let image_right_margin = 12.0;
+                let image_pos = pos2(
+                    ui.min_rect().left() + image_left_margin,
+                    ui.min_rect().top() + image_top_margin,
+                );
+                let art_rect = egui::Rect {
+                    min: image_pos,
+                    max: image_pos + vec2(image_size, image_size),
+                };
 
-        let track_x = image_pos.x + image_size + 16.0;
+                egui::Image::new(cover_art_cache.get(
+                    logic,
+                    group.cover_art_id.as_ref(),
+                    CachePriority::Visible,
+                ))
+                .show_loading_spinner(false)
+                .paint_at(ui, art_rect);
+                ui.allocate_rect(art_rect, egui::Sense::hover());
 
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(egui::Rect {
-                min: pos2(track_x, ui.min_rect().top()),
-                max: pos2(ui.max_rect().right(), ui.max_rect().bottom()),
-            }),
-            |ui| {
-                // Render only the visible tracks using direct positioning
-                for (track_index, track_id) in tracks.iter().enumerate() {
-                    let y_offset = track_index as f32 * spaced_row_height;
-                    let track_y = ui.min_rect().top() + y_offset;
-
-                    let Some(track) = track_map.get(track_id) else {
-                        // Draw loading text directly with painter
-                        ui.painter().text(
-                            pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
-                            Align2::LEFT_TOP,
-                            "[loading...]",
-                            TextStyle::Body.resolve(ui.style()),
-                            ui.visuals().text_color(),
-                        );
-                        continue;
-                    };
-
-                    let r = track::ui(
-                        track,
-                        ui,
-                        style,
-                        logic,
-                        &group.artist,
-                        track::TrackParams {
+                let track_x = image_pos.x + image_size + image_right_margin;
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(egui::Rect {
+                        min: pos2(track_x, ui.min_rect().top()),
+                        max: pos2(ui.max_rect().right(), ui.max_rect().bottom()),
+                    }),
+                    |ui| {
+                        render_tracks(
+                            ui,
+                            tracks,
+                            track_map,
+                            style,
+                            logic,
+                            &group.artist,
+                            playing_track,
+                            incremental_search_target,
                             max_track_length_width,
-                            playing: playing_track == Some(&track.id),
-                            incremental_search_target: incremental_search_target == Some(&track.id),
-                            track_y,
-                            track_row_height,
-                        },
-                    );
+                            spaced_row_height,
+                            total_spacing,
+                            &mut clicked_track,
+                        );
+                    },
+                );
+            }
+            AlbumArtStyle::LeftOfAlbum => {
+                // Align track titles with the album name in the header.
+                // track::ui draws the title at `scope_left + 24.0`
+                // (16.0 for the track number right-edge + 8.0 gap).
+                // We want `scope_left + 24.0 = header_text_x`.
+                let art_size = left_of_album_art_size.unwrap_or(0.0);
+                let header_text_x = ui.min_rect().left()
+                    + LEFT_OF_ALBUM_ART_LEFT_MARGIN
+                    + art_size
+                    + LEFT_OF_ALBUM_ART_RIGHT_MARGIN;
 
-                    if r.clicked {
-                        clicked_track = Some(track_id);
-                    }
-                }
-            },
-        );
+                let track_title_internal_offset = 24.0;
+                let track_x = header_text_x - track_title_internal_offset;
+
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(egui::Rect {
+                        min: pos2(track_x, ui.min_rect().top()),
+                        max: pos2(ui.max_rect().right(), ui.max_rect().bottom()),
+                    }),
+                    |ui| {
+                        render_tracks(
+                            ui,
+                            tracks,
+                            track_map,
+                            style,
+                            logic,
+                            &group.artist,
+                            playing_track,
+                            incremental_search_target,
+                            max_track_length_width,
+                            spaced_row_height,
+                            total_spacing,
+                            &mut clicked_track,
+                        );
+                    },
+                );
+            }
+        }
     });
 
     GroupResponse {
         clicked_track,
         clicked_heart,
+        hovered_art,
     }
 }
 
-pub fn line_count(group: &Group) -> usize {
+#[allow(clippy::too_many_arguments)]
+fn render_tracks<'a>(
+    ui: &mut Ui,
+    tracks: &'a [TrackId],
+    track_map: &std::collections::HashMap<TrackId, blackbird_core::blackbird_state::Track>,
+    style: &style::Style,
+    logic: &mut Logic,
+    artist: &str,
+    playing_track: Option<&TrackId>,
+    incremental_search_target: Option<&TrackId>,
+    max_track_length_width: f32,
+    spaced_row_height: f32,
+    total_spacing: f32,
+    clicked_track: &mut Option<&'a TrackId>,
+) {
+    for (track_index, track_id) in tracks.iter().enumerate() {
+        let y_offset = track_index as f32 * spaced_row_height;
+        let track_y = ui.min_rect().top() + y_offset;
+
+        let Some(track) = track_map.get(track_id) else {
+            ui.painter().text(
+                pos2(ui.min_rect().left(), track_y + total_spacing / 2.0),
+                Align2::LEFT_TOP,
+                "[loading...]",
+                TextStyle::Body.resolve(ui.style()),
+                ui.visuals().text_color(),
+            );
+            continue;
+        };
+
+        let r = track::ui(
+            track,
+            ui,
+            style,
+            logic,
+            artist,
+            track::TrackParams {
+                max_track_length_width,
+                playing: playing_track == Some(&track.id),
+                incremental_search_target: incremental_search_target == Some(&track.id),
+                track_y,
+                track_row_height: spaced_row_height - total_spacing,
+            },
+        );
+
+        if r.clicked {
+            *clicked_track = Some(track_id);
+        }
+    }
+}
+
+pub fn line_count(group: &Group, album_art_style: AlbumArtStyle) -> usize {
     let track_lines = group.tracks.len();
+
+    let min_track_lines = match album_art_style {
+        AlbumArtStyle::LeftOfAlbum => track_lines,
+        AlbumArtStyle::BelowAlbum => track_lines.max(GROUP_ALBUM_ART_LINE_COUNT),
+    };
 
     GROUP_ARTIST_LINE_COUNT
         + GROUP_ALBUM_LINE_COUNT
-        + track_lines.max(GROUP_ALBUM_ART_LINE_COUNT)
+        + min_track_lines
         + GROUP_MARGIN_BOTTOM_ROW_COUNT
 }
 
@@ -227,6 +354,7 @@ pub fn target_scroll_height_for_track(
     state: &AppState,
     spaced_row_height: f32,
     track_id: &TrackId,
+    album_art_style: AlbumArtStyle,
 ) -> Option<f32> {
     let track = state.library.track_map.get(track_id)?;
     let album_id = track.album_id.as_ref()?;
@@ -238,7 +366,7 @@ pub fn target_scroll_height_for_track(
             break;
         }
 
-        scroll_to_rows += line_count(group);
+        scroll_to_rows += line_count(group, album_art_style);
     }
 
     Some(scroll_to_rows as f32 * spaced_row_height)

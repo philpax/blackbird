@@ -115,7 +115,7 @@ impl App {
                 let panel_open = self.focused_panel == FocusedPanel::Lyrics;
                 if self.lyrics.shared.on_track_started(
                     &tap.track_id,
-                    self.config.shared.show_inline_lyrics,
+                    self.config.shared.layout.show_inline_lyrics,
                     panel_open,
                 ) {
                     self.logic.request_lyrics(&tap.track_id);

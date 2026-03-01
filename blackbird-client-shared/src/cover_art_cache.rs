@@ -1,4 +1,7 @@
 //! Cover art cache shared between the egui and TUI clients.
+//!
+//! Each cache entry holds up to three resolution tiers (low, library, full)
+//! that load on demand and degrade when no longer actively requested.
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
@@ -12,26 +15,51 @@ const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
 const LOW_RES_CACHE_SIZE: u32 = 16;
 const CACHE_DIR_NAME: &str = "album-art-cache";
 
+/// How long a higher-resolution slot can go unrequested before being dropped.
+const RESOLUTION_STALE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Resolution requested from the server for library-size art (thumbnails, BelowAlbum grids).
+pub const LIBRARY_ART_SIZE: usize = 128;
+
+/// Maximum number of full-resolution images kept in memory (overlays).
+pub const FULL_RES_MAX_CACHE_SIZE: usize = 5;
+
+/// Resolution tiers for cover art, ordered from lowest to highest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Resolution {
+    /// 16px — disk cache, always kept while entry exists.
+    Low = 0,
+    /// 128px — on-demand for rendered albums.
+    Library = 1,
+    /// Full resolution — on-demand for overlay viewing.
+    Full = 2,
+}
+
 /// Clients implement this to produce their own data from raw cover art bytes.
 /// Called when image data first arrives or transitions to a new resolution.
 pub trait ClientData: Clone {
-    /// `is_high_res` is false for data loaded from the 16×16 disk cache,
-    /// true for data loaded from the network.
-    fn from_image_data(data: &Arc<[u8]>, cover_art_id: &CoverArtId, is_high_res: bool) -> Self;
+    /// Create client data from raw image bytes at a given resolution.
+    fn from_image_data(data: &Arc<[u8]>, cover_art_id: &CoverArtId, resolution: Resolution)
+    -> Self;
 
-    /// Called during resolution upgrades (e.g. low-res → high-res) to carry
-    /// relevant state from the previous client data into the new one.
+    /// Called during resolution upgrades to carry relevant state from the
+    /// previous (lower) resolution's client data into the new one.
     fn carry_over(&mut self, _previous: &Self) {}
 }
 
-pub struct CoverArtCache<T: ClientData> {
-    cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
-    cache: HashMap<CoverArtId, CacheEntry<T>>,
-    target_size: Option<usize>,
-    cache_dir: PathBuf,
-    max_cache_size: usize,
-    cache_entry_timeout: Duration,
-    prefetcher: BackgroundPrefetcher,
+/// Result of a `get()` call, containing the best available client data
+/// and the resolution tier it came from.
+pub struct GetResult<'a, T> {
+    pub data: &'a T,
+    pub resolution: Resolution,
+}
+
+/// Result of an `update()` call.
+pub struct UpdateResult {
+    /// IDs of entries that were fully evicted from the cache.
+    pub evicted: Vec<CoverArtId>,
+    /// IDs and resolutions of newly populated image data slots.
+    pub upgraded: Vec<(CoverArtId, Resolution)>,
 }
 
 /// Priority levels for cache entries, from highest to lowest.
@@ -39,66 +67,91 @@ pub struct CoverArtCache<T: ClientData> {
 /// All entries timeout after the configured duration of not being requested, regardless of priority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CachePriority {
-    /// Transient art loaded while scrolling - evicted first when cache is full
+    /// Transient art loaded while scrolling — evicted first when cache is full.
     Transient = 0,
-    /// Art for albums surrounding/including the next track in queue - evicted second when cache is full
+    /// Art for albums surrounding/including the next track in queue — evicted second when cache is full.
     NextTrack = 1,
-    /// Currently visible art - protected from size-based eviction, but will timeout if not actively displayed
+    /// Currently visible art — protected from size-based eviction, but will timeout if not actively displayed.
     Visible = 2,
 }
 
+struct ImageData<T> {
+    data: Arc<[u8]>,
+    client_data: T,
+    last_requested: Instant,
+}
+
 struct CacheEntry<T> {
-    first_requested: std::time::Instant,
-    last_requested: std::time::Instant,
-    state: CacheEntryState<T>,
+    low_res: Option<ImageData<T>>,
+    library_res: Option<ImageData<T>>,
+    full_res: Option<ImageData<T>>,
+    /// Resolutions currently being loaded from the network.
+    loading: HashSet<Resolution>,
+    first_requested: Instant,
+    last_requested: Instant,
     priority: CachePriority,
 }
 
 impl<T> CacheEntry<T> {
-    fn client_data(&self) -> Option<&T> {
-        match &self.state {
-            CacheEntryState::LoadedLowRes { client_data, .. }
-            | CacheEntryState::LoadingWithLowRes { client_data, .. }
-            | CacheEntryState::Loaded { client_data, .. } => Some(client_data),
-            _ => None,
+    /// Returns the best available client data up to (and including) the
+    /// requested resolution, along with its tier.
+    fn best_up_to(&self, resolution: Resolution) -> Option<(&T, Resolution)> {
+        if resolution >= Resolution::Full
+            && let Some(ref slot) = self.full_res
+        {
+            return Some((&slot.client_data, Resolution::Full));
+        }
+        if resolution >= Resolution::Library
+            && let Some(ref slot) = self.library_res
+        {
+            return Some((&slot.client_data, Resolution::Library));
+        }
+        if let Some(ref slot) = self.low_res {
+            return Some((&slot.client_data, Resolution::Low));
+        }
+        None
+    }
+
+    /// Returns a mutable reference to the slot for a given resolution.
+    fn slot_mut(&mut self, resolution: Resolution) -> &mut Option<ImageData<T>> {
+        match resolution {
+            Resolution::Low => &mut self.low_res,
+            Resolution::Library => &mut self.library_res,
+            Resolution::Full => &mut self.full_res,
+        }
+    }
+
+    /// Returns a reference to the slot for a given resolution.
+    fn slot(&self, resolution: Resolution) -> &Option<ImageData<T>> {
+        match resolution {
+            Resolution::Low => &self.low_res,
+            Resolution::Library => &self.library_res,
+            Resolution::Full => &self.full_res,
         }
     }
 }
 
-enum CacheEntryState<T> {
-    Unloaded,
-    /// Loading from network, no image available yet
-    Loading,
-    /// Low-res version loaded from disk cache, not yet requested from network
-    LoadedLowRes {
-        data: Arc<[u8]>,
-        client_data: T,
-    },
-    /// Low-res version loaded from disk cache, high-res loading from network
-    LoadingWithLowRes {
-        data: Arc<[u8]>,
-        client_data: T,
-    },
-    /// High-res version loaded from network
-    Loaded {
-        data: Arc<[u8]>,
-        client_data: T,
-    },
+pub struct CoverArtCache<T: ClientData> {
+    cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
+    cache: HashMap<CoverArtId, CacheEntry<T>>,
+    cache_dir: PathBuf,
+    max_cache_size: usize,
+    cache_entry_timeout: Duration,
+    prefetcher: BackgroundPrefetcher,
 }
 
 impl<T: ClientData> CoverArtCache<T> {
     pub fn new(
         cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
-        target_size: Option<usize>,
         max_cache_size: usize,
         cache_entry_timeout: Duration,
     ) -> Self {
-        // Get the cache directory path
+        // Get the cache directory path.
         let cache_dir = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
             .join(CACHE_DIR_NAME);
 
-        // Create the cache directory if it doesn't exist
+        // Create the cache directory if it doesn't exist.
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {
             panic!("Failed to create cache directory: {e}");
         }
@@ -106,7 +159,6 @@ impl<T: ClientData> CoverArtCache<T> {
         Self {
             cover_art_loaded_rx,
             cache: HashMap::new(),
-            target_size,
             cache_dir,
             max_cache_size,
             cache_entry_timeout,
@@ -114,50 +166,111 @@ impl<T: ClientData> CoverArtCache<T> {
         }
     }
 
-    /// Process incoming cover art, evict stale/excess entries.
-    /// Returns IDs of evicted entries (for client-side cleanup like `ctx.forget_image()`).
-    pub fn update(&mut self) -> Vec<CoverArtId> {
-        for incoming_cover_art in self.cover_art_loaded_rx.try_iter() {
-            if let Some(cache_entry) = self.cache.get_mut(&incoming_cover_art.cover_art_id) {
-                let data: Arc<[u8]> = incoming_cover_art.cover_art.clone().into();
-                let mut client_data =
-                    T::from_image_data(&data, &incoming_cover_art.cover_art_id, true);
-                // Carry over relevant state from the previous resolution.
-                if let Some(previous) = cache_entry.client_data() {
-                    client_data.carry_over(previous);
-                }
-                // Save the high-res version to memory cache
-                cache_entry.state = CacheEntryState::Loaded {
-                    data: data.clone(),
-                    client_data,
-                };
-                tracing::debug!("Loaded cover art for {}", incoming_cover_art.cover_art_id);
+    /// Process incoming cover art, evict stale/excess entries, and degrade
+    /// unused higher-resolution slots. Returns evicted entry IDs and newly
+    /// populated resolution upgrades.
+    pub fn update(&mut self) -> UpdateResult {
+        let mut upgraded = Vec::new();
 
-                // Save a low-res version to disk cache for future use
-                // Only if it doesn't already exist
-                let safe_filename = incoming_cover_art
-                    .cover_art_id
-                    .0
-                    .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-                let cache_path = self.cache_dir.join(format!("{}.png", safe_filename));
-                if !cache_path.exists() {
-                    let cover_art = incoming_cover_art.cover_art.clone();
-                    let cache_path = cache_path.clone();
-                    std::thread::spawn(move || {
-                        save_to_disk_cache(&cache_path, &cover_art);
-                    });
-                }
-            } else {
+        for incoming in self.cover_art_loaded_rx.try_iter() {
+            let Some(entry) = self.cache.get_mut(&incoming.cover_art_id) else {
                 tracing::debug!(
                     "Cache entry for {} not found when receiving cover art",
-                    incoming_cover_art.cover_art_id
+                    incoming.cover_art_id
                 );
+                continue;
+            };
+
+            // Determine which slot this response belongs to.
+            let resolution = match incoming.requested_size {
+                None => Resolution::Full,
+                Some(s) if s == LIBRARY_ART_SIZE => Resolution::Library,
+                Some(_) => Resolution::Library, // Fallback for other sizes.
+            };
+
+            entry.loading.remove(&resolution);
+
+            let data: Arc<[u8]> = incoming.cover_art.clone().into();
+            let mut client_data = T::from_image_data(&data, &incoming.cover_art_id, resolution);
+
+            // Carry over state from the next lower resolution if available.
+            let lower = match resolution {
+                Resolution::Full => entry.library_res.as_ref().or(entry.low_res.as_ref()),
+                Resolution::Library => entry.low_res.as_ref(),
+                Resolution::Low => None,
+            };
+            if let Some(lower_slot) = lower {
+                client_data.carry_over(&lower_slot.client_data);
+            }
+
+            let now = Instant::now();
+            *entry.slot_mut(resolution) = Some(ImageData {
+                data: data.clone(),
+                client_data,
+                last_requested: now,
+            });
+
+            tracing::debug!(
+                "Loaded {:?} cover art for {}",
+                resolution,
+                incoming.cover_art_id
+            );
+
+            upgraded.push((incoming.cover_art_id.clone(), resolution));
+
+            // Save a low-res version to disk cache for future use.
+            let safe_filename = incoming
+                .cover_art_id
+                .0
+                .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+            let cache_path = self.cache_dir.join(format!("{}.png", safe_filename));
+            if !cache_path.exists() {
+                let cover_art = incoming.cover_art.clone();
+                let cache_path = cache_path.clone();
+                std::thread::spawn(move || {
+                    save_to_disk_cache(&cache_path, &cover_art);
+                });
             }
         }
 
-        let mut removal_candidates = HashSet::new();
+        // Degrade stale higher-resolution slots.
+        for entry in self.cache.values_mut() {
+            if let Some(ref slot) = entry.full_res
+                && slot.last_requested.elapsed() > RESOLUTION_STALE_TIMEOUT
+            {
+                entry.full_res = None;
+            }
+            if let Some(ref slot) = entry.library_res
+                && slot.last_requested.elapsed() > RESOLUTION_STALE_TIMEOUT
+            {
+                entry.library_res = None;
+            }
+        }
 
-        // Remove entries that have timed out (not requested recently)
+        // Limit total full_res slots to FULL_RES_MAX_CACHE_SIZE via LRU eviction.
+        let mut full_res_entries: Vec<(CoverArtId, Instant)> = self
+            .cache
+            .iter()
+            .filter_map(|(id, entry)| {
+                entry
+                    .full_res
+                    .as_ref()
+                    .map(|slot| (id.clone(), slot.last_requested))
+            })
+            .collect();
+        if full_res_entries.len() > FULL_RES_MAX_CACHE_SIZE {
+            full_res_entries.sort_by_key(|(_, t)| *t);
+            let to_evict = full_res_entries.len() - FULL_RES_MAX_CACHE_SIZE;
+            for (id, _) in full_res_entries.into_iter().take(to_evict) {
+                if let Some(entry) = self.cache.get_mut(&id) {
+                    entry.full_res = None;
+                    tracing::debug!("Evicted full-res cover art for {id}");
+                }
+            }
+        }
+
+        // Evict entire entries by timeout.
+        let mut removal_candidates = HashSet::new();
         for (cover_art_id, cache_entry) in self.cache.iter() {
             if cache_entry.last_requested.elapsed() > self.cache_entry_timeout {
                 tracing::debug!(
@@ -168,9 +281,7 @@ impl<T: ClientData> CoverArtCache<T> {
             }
         }
 
-        // Remove any entries that exceed our cache size limit
-        // Evict in priority order: Transient first, then NextTrack
-        // Visible items are protected from size-based eviction (but can timeout if not requested)
+        // Evict entries that exceed the cache size limit.
         let overage = self
             .cache
             .len()
@@ -179,7 +290,6 @@ impl<T: ClientData> CoverArtCache<T> {
         if overage > 0 {
             tracing::debug!("Cache overage: {overage} entries need to be evicted");
 
-            // Collect all non-removed entries and sort by priority (lowest first), then by age (oldest first)
             let mut cache_entries_by_priority_and_age = self
                 .cache
                 .iter()
@@ -189,7 +299,6 @@ impl<T: ClientData> CoverArtCache<T> {
                 })
                 .collect::<Vec<_>>();
 
-            // Sort by priority (ascending, so Transient comes first), then by first_requested (oldest first)
             cache_entries_by_priority_and_age.sort_by_key(|(_, cache_entry)| {
                 (cache_entry.priority, cache_entry.first_requested)
             });
@@ -208,86 +317,143 @@ impl<T: ClientData> CoverArtCache<T> {
         self.cache
             .retain(|cover_art_id, _| !removal_candidates.contains(cover_art_id));
 
-        removal_candidates.into_iter().collect()
+        UpdateResult {
+            evicted: removal_candidates.into_iter().collect(),
+            upgraded,
+        }
     }
 
-    /// Get client data for a cover art entry, triggering loading if needed.
-    /// Returns `None` when no image data is available yet (Unloaded/Loading states).
+    /// Get the best available client data for a cover art entry, triggering
+    /// loading at the requested resolution if needed.
+    /// Returns `None` when no image data is available yet.
     pub fn get(
         &mut self,
         logic: &Logic,
         id: Option<&CoverArtId>,
+        resolution: Resolution,
         priority: CachePriority,
-    ) -> Option<&T> {
+    ) -> Option<GetResult<'_, T>> {
         let cover_art_id = id?;
 
-        let cache_entry = self
+        let now = Instant::now();
+        let entry = self
             .cache
             .entry(cover_art_id.clone())
             .or_insert(CacheEntry {
-                first_requested: std::time::Instant::now(),
-                last_requested: std::time::Instant::now(),
-                state: CacheEntryState::Unloaded,
+                low_res: None,
+                library_res: None,
+                full_res: None,
+                loading: HashSet::new(),
+                first_requested: now,
+                last_requested: now,
                 priority,
             });
 
-        cache_entry.last_requested = std::time::Instant::now();
-        // Always update priority to match current request
-        cache_entry.priority = priority;
+        entry.last_requested = now;
+        entry.priority = priority;
 
-        // Check disk cache if we haven't loaded anything yet
-        if let CacheEntryState::Unloaded = cache_entry.state
+        // Load from disk cache into the low_res slot if empty.
+        if entry.low_res.is_none()
             && let Some(low_res_data) = load_from_disk_cache(&self.cache_dir, cover_art_id)
         {
-            let client_data = T::from_image_data(&low_res_data, cover_art_id, false);
-            cache_entry.state = CacheEntryState::LoadedLowRes {
+            let client_data = T::from_image_data(&low_res_data, cover_art_id, Resolution::Low);
+            entry.low_res = Some(ImageData {
                 data: low_res_data,
                 client_data,
-            };
+                last_requested: now,
+            });
         }
 
-        // Request from network after the initial delay, if we don't have high-res yet
-        if cache_entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT {
-            match &cache_entry.state {
-                CacheEntryState::Unloaded => {
-                    logic.request_cover_art(cover_art_id, self.target_size);
-                    cache_entry.state = CacheEntryState::Loading;
-                    tracing::debug!("Requesting cover art for {cover_art_id}");
+        // Request from network based on the exact resolution requested.
+        // Library and Full are independent — requesting Full does NOT also
+        // request Library, because the low-res fallback is sufficient while
+        // waiting and the extra request would compete with the prefetch queue.
+        match resolution {
+            Resolution::Low => {}
+            Resolution::Library => {
+                if entry.library_res.is_none()
+                    && !entry.loading.contains(&Resolution::Library)
+                    && entry.first_requested.elapsed() > TIME_BEFORE_LOAD_ATTEMPT
+                {
+                    logic.request_cover_art(cover_art_id, Some(LIBRARY_ART_SIZE));
+                    entry.loading.insert(Resolution::Library);
+                    tracing::debug!("Requesting library-res cover art for {cover_art_id}");
                 }
-                CacheEntryState::LoadedLowRes { data, client_data } => {
-                    let data = data.clone();
-                    let client_data = client_data.clone();
-                    logic.request_cover_art(cover_art_id, self.target_size);
-                    cache_entry.state = CacheEntryState::LoadingWithLowRes { data, client_data };
-                    tracing::debug!("Requesting cover art for {cover_art_id} (low-res cached)");
+            }
+            Resolution::Full => {
+                if entry.full_res.is_none() && !entry.loading.contains(&Resolution::Full) {
+                    logic.request_cover_art(cover_art_id, None);
+                    entry.loading.insert(Resolution::Full);
+                    tracing::debug!("Requesting full-res cover art for {cover_art_id}");
                 }
-                _ => {}
             }
         }
 
-        match &cache_entry.state {
-            CacheEntryState::Unloaded | CacheEntryState::Loading => None,
-            CacheEntryState::LoadedLowRes { client_data, .. }
-            | CacheEntryState::LoadingWithLowRes { client_data, .. }
-            | CacheEntryState::Loaded { client_data, .. } => Some(client_data),
+        // Touch last_requested on the returned slot.
+        if let Some((_, res)) = entry.best_up_to(resolution)
+            && let Some(slot) = entry.slot_mut(res)
+        {
+            slot.last_requested = now;
         }
+
+        let (data, res) = entry.best_up_to(resolution)?;
+        Some(GetResult {
+            data,
+            resolution: res,
+        })
     }
 
-    /// Mutable access to the client data and raw bytes of a loaded entry.
-    /// Refreshes `last_requested`. Returns `None` if entry has no loaded data.
+    /// Read-only access to the client data at a specific resolution tier.
+    /// No side effects — does not trigger loading or touch timestamps.
+    pub fn get_resolution(&self, id: &CoverArtId, resolution: Resolution) -> Option<&T> {
+        let entry = self.cache.get(id)?;
+        entry
+            .slot(resolution)
+            .as_ref()
+            .map(|slot| &slot.client_data)
+    }
+
+    /// Returns true if the given resolution tier is fully loaded for the entry.
+    pub fn is_resolution_loaded(&self, id: &CoverArtId, resolution: Resolution) -> bool {
+        self.cache
+            .get(id)
+            .is_some_and(|entry| entry.slot(resolution).is_some())
+    }
+
+    /// Mutable access to the client data and raw bytes at the best available
+    /// resolution. Refreshes `last_requested`. Returns `None` if entry has
+    /// no loaded data.
     pub fn with_client_data_mut<R>(
         &mut self,
         id: &CoverArtId,
         f: impl FnOnce(&mut T, &Arc<[u8]>) -> R,
     ) -> Option<R> {
-        let cache_entry = self.cache.get_mut(id)?;
-        cache_entry.last_requested = std::time::Instant::now();
+        let entry = self.cache.get_mut(id)?;
+        entry.last_requested = Instant::now();
 
-        match &mut cache_entry.state {
-            CacheEntryState::LoadedLowRes { data, client_data }
-            | CacheEntryState::LoadingWithLowRes { data, client_data }
-            | CacheEntryState::Loaded { data, client_data } => Some(f(client_data, data)),
-            _ => None,
+        // Try full > library > low.
+        for res in [Resolution::Full, Resolution::Library, Resolution::Low] {
+            if let Some(slot) = entry.slot_mut(res) {
+                return Some(f(&mut slot.client_data, &slot.data));
+            }
+        }
+        None
+    }
+
+    /// Mutable access to the client data and raw bytes at a specific resolution
+    /// tier. Returns `None` if the slot is not populated.
+    pub fn with_client_data_mut_at<R>(
+        &mut self,
+        id: &CoverArtId,
+        resolution: Resolution,
+        f: impl FnOnce(&mut T, &Arc<[u8]>) -> R,
+    ) -> Option<R> {
+        let entry = self.cache.get_mut(id)?;
+        entry.last_requested = Instant::now();
+        if let Some(slot) = entry.slot_mut(resolution) {
+            Some(f(&mut slot.client_data, &slot.data))
+        } else {
+            None
         }
     }
 
@@ -297,8 +463,13 @@ impl<T: ClientData> CoverArtCache<T> {
         let cover_art_ids = logic.get_next_track_surrounding_cover_art_ids();
 
         for cover_art_id in &cover_art_ids {
-            // Use get with NextTrack priority to trigger loading
-            self.get(logic, Some(cover_art_id), CachePriority::NextTrack);
+            // Use get with NextTrack priority to trigger loading at library resolution.
+            self.get(
+                logic,
+                Some(cover_art_id),
+                Resolution::Library,
+                CachePriority::NextTrack,
+            );
         }
     }
 
@@ -331,18 +502,21 @@ impl<T: ClientData> CoverArtCache<T> {
 
         // Create a cache entry so that `update()` can match the incoming
         // response and save it to the disk cache. Request immediately,
-        // bypassing the normal `TIME_BEFORE_LOAD_ATTEMPT` delay that
-        // `get()` uses for on-demand requests.
-        let cache_entry = self.cache.entry(id.clone()).or_insert(CacheEntry {
-            first_requested: std::time::Instant::now(),
-            last_requested: std::time::Instant::now(),
-            state: CacheEntryState::Unloaded,
+        // bypassing the normal `TIME_BEFORE_LOAD_ATTEMPT` delay.
+        let now = Instant::now();
+        let entry = self.cache.entry(id.clone()).or_insert(CacheEntry {
+            low_res: None,
+            library_res: None,
+            full_res: None,
+            loading: HashSet::new(),
+            first_requested: now,
+            last_requested: now,
             priority: CachePriority::Transient,
         });
 
-        if let CacheEntryState::Unloaded = cache_entry.state {
-            logic.request_cover_art(&id, self.target_size);
-            cache_entry.state = CacheEntryState::Loading;
+        if entry.library_res.is_none() && !entry.loading.contains(&Resolution::Library) {
+            logic.request_cover_art(&id, Some(LIBRARY_ART_SIZE));
+            entry.loading.insert(Resolution::Library);
         }
     }
 }
@@ -413,7 +587,7 @@ impl BackgroundPrefetcher {
 }
 
 fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<Arc<[u8]>> {
-    // Sanitize the cover_art_id to make it a valid filename
+    // Sanitize the cover_art_id to make it a valid filename.
     let safe_filename = cover_art_id
         .0
         .replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
@@ -431,23 +605,23 @@ fn load_from_disk_cache(cache_dir: &Path, cover_art_id: &CoverArtId) -> Option<A
 }
 
 fn save_to_disk_cache(cache_path: &Path, image_data: &[u8]) {
-    // Decode the image
+    // Decode the image.
     let Ok(img) = image::load_from_memory(image_data) else {
         tracing::warn!("Failed to decode image for {}", cache_path.display());
         return;
     };
 
-    // Resize to low-res size
+    // Resize to low-res size.
     let resized = img.resize_exact(
         LOW_RES_CACHE_SIZE,
         LOW_RES_CACHE_SIZE,
         image::imageops::FilterType::Triangle,
     );
 
-    // Apply explicit blur to destroy high-level detail
+    // Apply explicit blur to destroy high-level detail.
     let blurred = image::imageops::fast_blur(&resized.into_rgb8(), 1.0);
 
-    // Encode as PNG
+    // Encode as PNG.
     let mut buffer = std::io::Cursor::new(Vec::new());
     if let Err(e) = blurred.write_to(&mut buffer, image::ImageFormat::Png) {
         tracing::warn!(
@@ -458,7 +632,7 @@ fn save_to_disk_cache(cache_path: &Path, image_data: &[u8]) {
         return;
     }
 
-    // Save to disk
+    // Save to disk.
     if let Err(e) = std::fs::write(cache_path, buffer.into_inner()) {
         tracing::warn!(
             "Failed to save low-res cover art for {} to disk: {}",

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use blackbird_client_shared::library_scroll;
+use blackbird_client_shared::{config::AlbumArtStyle, library_scroll};
 use blackbird_core::{
     self as bc, SortOrder,
     blackbird_state::{CoverArtId, TrackId},
@@ -16,7 +16,10 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    app::App, cover_art::QuadrantColors, keys::Action, ui::album_art_overlay::AlbumArtOverlay,
+    app::App,
+    cover_art::{ArtColorGrid, QuadrantColors},
+    keys::Action,
+    ui::album_art_overlay::AlbumArtOverlay,
 };
 
 use super::{StyleExt, string_to_color};
@@ -54,6 +57,19 @@ pub enum LibraryEntry {
         duration: Option<u32>,
         starred: bool,
         play_count: Option<u64>,
+        /// The group's cover art ID (used in `BelowAlbum` mode).
+        cover_art_id: Option<CoverArtId>,
+        /// 0-based index of this track within its group (used in `BelowAlbum` mode).
+        track_index_in_group: usize,
+    },
+    /// Padding entry added after the last track in a `BelowAlbum` group when
+    /// the group has fewer tracks than the art height, so the art is fully visible.
+    GroupSpacer {
+        /// The group's cover art ID (used to render art continuation rows).
+        cover_art_id: Option<CoverArtId>,
+        /// The track index within the group this spacer row corresponds to
+        /// (i.e., `track_count + spacer_index`), used for art row calculation.
+        art_row_index: usize,
     },
 }
 
@@ -61,7 +77,7 @@ impl LibraryEntry {
     pub fn height(&self) -> usize {
         match self {
             LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } => 1,
+            LibraryEntry::Track { .. } | LibraryEntry::GroupSpacer { .. } => 1,
         }
     }
 }
@@ -106,6 +122,7 @@ pub struct LibraryState {
     // Private cache
     cached_flat_library: Vec<LibraryEntry>,
     flat_library_dirty: bool,
+    album_art_style: AlbumArtStyle,
 }
 
 impl LibraryState {
@@ -126,6 +143,15 @@ impl LibraryState {
 
             cached_flat_library: Vec::new(),
             flat_library_dirty: true,
+            album_art_style: AlbumArtStyle::default(),
+        }
+    }
+
+    /// Update the album art style used for spacer entry generation.
+    pub fn set_album_art_style(&mut self, style: AlbumArtStyle) {
+        if self.album_art_style != style {
+            self.album_art_style = style;
+            self.flat_library_dirty = true;
         }
     }
 
@@ -138,7 +164,7 @@ impl LibraryState {
     pub fn selected_track_id(&self) -> Option<&TrackId> {
         match self.cached_flat_library.get(self.selected_index)? {
             LibraryEntry::Track { id, .. } => Some(id),
-            LibraryEntry::GroupHeader { .. } => None,
+            LibraryEntry::GroupHeader { .. } | LibraryEntry::GroupSpacer { .. } => None,
         }
     }
 
@@ -188,7 +214,8 @@ impl LibraryState {
                 cover_art_id: group.cover_art_id.clone(),
             });
 
-            for track_id in &group.tracks {
+            let track_count = group.tracks.len();
+            for (track_index, track_id) in group.tracks.iter().enumerate() {
                 if let Some(track) = state.library.track_map.get(track_id) {
                     self.cached_flat_library.push(LibraryEntry::Track {
                         id: track.id.clone(),
@@ -200,6 +227,21 @@ impl LibraryState {
                         duration: track.duration,
                         starred: track.starred,
                         play_count: track.play_count,
+                        cover_art_id: group.cover_art_id.clone(),
+                        track_index_in_group: track_index,
+                    });
+                }
+            }
+
+            // In BelowAlbum mode, pad short groups so the art is fully visible.
+            if self.album_art_style == AlbumArtStyle::BelowAlbum
+                && track_count < super::layout::LARGE_ART_TERM_ROWS
+            {
+                let spacer_count = super::layout::LARGE_ART_TERM_ROWS - track_count;
+                for si in 0..spacer_count {
+                    self.cached_flat_library.push(LibraryEntry::GroupSpacer {
+                        cover_art_id: group.cover_art_id.clone(),
+                        art_row_index: track_count + si,
                     });
                 }
             }
@@ -215,13 +257,21 @@ impl LibraryState {
         let mut index = 0;
         for group in &state.library.groups {
             index += 1; // group header
+            let mut track_count = 0;
             for track_id in &group.tracks {
                 if track_id == target_track_id {
                     return Some(index);
                 }
                 if state.library.track_map.contains_key(track_id) {
                     index += 1;
+                    track_count += 1;
                 }
+            }
+            // Account for spacer entries in BelowAlbum mode.
+            if self.album_art_style == AlbumArtStyle::BelowAlbum
+                && track_count < super::layout::LARGE_ART_TERM_ROWS
+            {
+                index += super::layout::LARGE_ART_TERM_ROWS - track_count;
             }
         }
         None
@@ -385,17 +435,54 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     visible_item_end = visible_item_end.min(entries.len());
 
-    // Pre-compute quadrant colors only for visible group headers.
+    let album_art_style = app.config.shared.layout.album_art_style;
+    app.library.set_album_art_style(album_art_style);
+
+    // Pre-compute quadrant colors only for visible group headers (used in LeftOfAlbum mode).
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
-    for entry in &entries[item_offset..visible_item_end] {
-        if let LibraryEntry::GroupHeader {
-            cover_art_id: Some(id),
-            ..
-        } = entry
-            && !art_colors.contains_key(id)
-        {
-            let colors = app.cover_art_cache.get(&app.logic, Some(id));
-            art_colors.insert(id.clone(), colors);
+    if album_art_style == AlbumArtStyle::LeftOfAlbum {
+        for entry in &entries[item_offset..visible_item_end] {
+            if let LibraryEntry::GroupHeader {
+                cover_art_id: Some(id),
+                ..
+            } = entry
+                && !art_colors.contains_key(id)
+            {
+                let colors = app.cover_art_cache.get(&app.logic, Some(id));
+                art_colors.insert(id.clone(), colors);
+            }
+        }
+    }
+
+    // Pre-compute large art grids for visible tracks and spacers (used in BelowAlbum mode).
+    let large_art_cols = super::layout::large_art_cols() as usize;
+    let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
+    let mut large_art_grids: HashMap<CoverArtId, ArtColorGrid> = HashMap::new();
+    if album_art_style == AlbumArtStyle::BelowAlbum {
+        for entry in &entries[item_offset..visible_item_end] {
+            let id = match entry {
+                LibraryEntry::Track {
+                    cover_art_id: Some(id),
+                    track_index_in_group,
+                    ..
+                } if *track_index_in_group < super::layout::LARGE_ART_TERM_ROWS => Some(id),
+                LibraryEntry::GroupSpacer {
+                    cover_art_id: Some(id),
+                    ..
+                } => Some(id),
+                _ => None,
+            };
+            if let Some(id) = id
+                && !large_art_grids.contains_key(id)
+            {
+                let (grid, _loading) = app.cover_art_cache.get_art_grid(
+                    &app.logic,
+                    Some(id),
+                    large_art_cols,
+                    large_art_pixel_rows,
+                );
+                large_art_grids.insert(id.clone(), grid);
+            }
         }
     }
 
@@ -427,12 +514,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         track_duration_color,
                     );
 
-                    let colors = cover_art_id
-                        .as_ref()
-                        .and_then(|id| art_colors.get(id))
-                        .copied()
-                        .unwrap_or_default();
-
                     // Format year and added date.
                     let year_str = year.map(|y| format!(" ({y})")).unwrap_or_default();
                     let added_str = created
@@ -442,61 +523,108 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         .unwrap_or_default();
                     let dur_str = seconds_to_hms_string(*duration, false);
 
-                    // Line 1: Album art (rows 0-1) + artist name
-                    let art_cols = super::layout::art_cols();
-                    let mut line1_spans = vec![Span::raw(" ")];
-                    line1_spans.extend(super::art_row_spans(&colors, 0, 1));
-                    line1_spans.push(Span::raw(" "));
-                    line1_spans.push(Span::styled(
-                        artist,
-                        Style::default().fg(string_to_color(artist)),
-                    ));
-                    let line1 = Line::from(line1_spans);
+                    match album_art_style {
+                        AlbumArtStyle::LeftOfAlbum => {
+                            let colors = cover_art_id
+                                .as_ref()
+                                .and_then(|id| art_colors.get(id))
+                                .copied()
+                                .unwrap_or_default();
 
-                    // Line 2: Album art (rows 2-3) + album name + year + added + duration + heart (right-aligned)
-                    // Calculate padding for right-alignment using unicode width.
-                    let left_content_width = super::layout::ART_LEFT_MARGIN as usize
-                        + art_cols as usize
-                        + 1
-                        + album.width()
-                        + year_str.width()
-                        + added_str.width(); // margin + art + space + album + year + added
-                    let right_content = format!(" {dur_str} ");
-                    let right_width = right_content.width() + 1; // duration + heart
-                    let padding_needed = list_width
-                        .saturating_sub(left_content_width + right_width)
-                        .saturating_sub(1);
+                            // Line 1: Album art (rows 0-1) + artist name
+                            let art_cols = super::layout::art_cols();
+                            let mut line1_spans = vec![Span::raw(" ")];
+                            line1_spans.extend(super::art_row_spans(&colors, 0, 1));
+                            line1_spans.push(Span::raw(" "));
+                            line1_spans.push(Span::styled(
+                                artist,
+                                Style::default().fg(string_to_color(artist)),
+                            ));
+                            let line1 = Line::from(line1_spans);
 
-                    let mut line2_spans = vec![Span::raw(" ")];
-                    line2_spans.extend(super::art_row_spans(&colors, 2, 3));
-                    line2_spans.push(Span::raw(" "));
-                    // Content starts here (album name onward) — underline from this point.
-                    let content_start = line2_spans.len();
-                    line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
-                    line2_spans.push(Span::styled(
-                        year_str,
-                        Style::default().fg(album_year_color),
-                    ));
-                    line2_spans.push(Span::styled(
-                        added_str,
-                        Style::default().fg(album_year_color),
-                    ));
-                    line2_spans.push(Span::raw(" ".repeat(padding_needed)));
-                    line2_spans.push(Span::styled(
-                        right_content,
-                        Style::default().fg(album_length_color),
-                    ));
-                    line2_spans.push(Span::styled(heart, heart_style));
+                            // Line 2: Album art (rows 2-3) + album + year + added + duration + heart
+                            let left_content_width = super::layout::ART_LEFT_MARGIN as usize
+                                + art_cols as usize
+                                + 1
+                                + album.width()
+                                + year_str.width()
+                                + added_str.width();
+                            let right_content = format!(" {dur_str} ");
+                            let right_width = right_content.width() + 1;
+                            let padding_needed = list_width
+                                .saturating_sub(left_content_width + right_width)
+                                .saturating_sub(1);
 
-                    if underline_index == Some(i) {
-                        for span in &mut line2_spans[content_start..] {
-                            span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                            let mut line2_spans = vec![Span::raw(" ")];
+                            line2_spans.extend(super::art_row_spans(&colors, 2, 3));
+                            line2_spans.push(Span::raw(" "));
+                            let content_start = line2_spans.len();
+                            line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
+                            line2_spans.push(Span::styled(
+                                year_str,
+                                Style::default().fg(album_year_color),
+                            ));
+                            line2_spans.push(Span::styled(
+                                added_str,
+                                Style::default().fg(album_year_color),
+                            ));
+                            line2_spans.push(Span::raw(" ".repeat(padding_needed)));
+                            line2_spans.push(Span::styled(
+                                right_content,
+                                Style::default().fg(album_length_color),
+                            ));
+                            line2_spans.push(Span::styled(heart, heart_style));
+
+                            if underline_index == Some(i) {
+                                for span in &mut line2_spans[content_start..] {
+                                    span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                                }
+                            }
+
+                            ListItem::new(vec![line1, Line::from(line2_spans)])
+                        }
+                        AlbumArtStyle::BelowAlbum => {
+                            // No art in header — just artist and album text lines.
+                            let line1 = Line::from(vec![
+                                Span::raw(" "),
+                                Span::styled(artist, Style::default().fg(string_to_color(artist))),
+                            ]);
+
+                            let left_content_width =
+                                1 + album.width() + year_str.width() + added_str.width();
+                            let right_content = format!(" {dur_str} ");
+                            let right_width = right_content.width() + 1;
+                            let padding_needed = list_width
+                                .saturating_sub(left_content_width + right_width)
+                                .saturating_sub(1);
+
+                            let mut line2_spans = vec![Span::raw(" ")];
+                            let content_start = line2_spans.len();
+                            line2_spans.push(Span::styled(album, Style::default().fg(album_color)));
+                            line2_spans.push(Span::styled(
+                                year_str,
+                                Style::default().fg(album_year_color),
+                            ));
+                            line2_spans.push(Span::styled(
+                                added_str,
+                                Style::default().fg(album_year_color),
+                            ));
+                            line2_spans.push(Span::raw(" ".repeat(padding_needed)));
+                            line2_spans.push(Span::styled(
+                                right_content,
+                                Style::default().fg(album_length_color),
+                            ));
+                            line2_spans.push(Span::styled(heart, heart_style));
+
+                            if underline_index == Some(i) {
+                                for span in &mut line2_spans[content_start..] {
+                                    span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                                }
+                            }
+
+                            ListItem::new(vec![line1, Line::from(line2_spans)])
                         }
                     }
-
-                    let line2 = Line::from(line2_spans);
-
-                    ListItem::new(vec![line1, line2])
                 }
                 LibraryEntry::Track {
                     id,
@@ -508,6 +636,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     duration,
                     starred,
                     play_count,
+                    cover_art_id,
+                    track_index_in_group,
                 } => {
                     let is_playing = playing_track_id.as_ref() == Some(id);
                     let is_heart_hovered =
@@ -540,17 +670,69 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                         Style::default().fg(track_name_color)
                     };
 
-                    // Build left side: indent + track number + play icon + title + playcount
-                    let track_num_formatted = format!("{:>5} ", track_str);
-                    let mut left_spans = vec![
-                        Span::raw(" ".repeat(super::layout::TRACK_INDENT)),
-                        Span::styled(
-                            track_num_formatted.clone(),
-                            Style::default().fg(track_number_color),
-                        ),
-                    ];
+                    // Build left side: art/indent + track number + play icon + title + playcount
+                    let mut left_spans: Vec<Span<'_>> = Vec::new();
+                    let mut left_width: usize;
 
-                    let mut left_width = super::layout::TRACK_INDENT + track_num_formatted.width(); // indent + track_str formatted
+                    match album_art_style {
+                        AlbumArtStyle::LeftOfAlbum => {
+                            left_spans.push(Span::raw(" ".repeat(super::layout::TRACK_INDENT)));
+                            left_width = super::layout::TRACK_INDENT;
+                        }
+                        AlbumArtStyle::BelowAlbum => {
+                            let art_display_cols = large_art_cols as usize;
+                            let indent_width = super::layout::LARGE_ART_LEFT_MARGIN
+                                + art_display_cols
+                                + super::layout::LARGE_ART_RIGHT_MARGIN;
+
+                            if *track_index_in_group < super::layout::LARGE_ART_TERM_ROWS {
+                                // Render art row spans for this track's terminal row.
+                                let grid =
+                                    cover_art_id.as_ref().and_then(|id| large_art_grids.get(id));
+                                let term_row = *track_index_in_group;
+                                let color_row_top = term_row * 2;
+                                let color_row_bot = color_row_top + 1;
+
+                                left_spans.push(Span::raw(
+                                    " ".repeat(super::layout::LARGE_ART_LEFT_MARGIN),
+                                ));
+                                if let Some(grid) = grid {
+                                    for col in 0..art_display_cols {
+                                        let fg = if color_row_top < grid.rows {
+                                            grid.colors[color_row_top][col]
+                                        } else {
+                                            background_color
+                                        };
+                                        let bg = if color_row_bot < grid.rows {
+                                            grid.colors[color_row_bot][col]
+                                        } else {
+                                            background_color
+                                        };
+                                        left_spans.push(Span::styled(
+                                            "\u{2580}",
+                                            Style::default().fg(fg).bg(bg),
+                                        ));
+                                    }
+                                } else {
+                                    left_spans.push(Span::raw(" ".repeat(art_display_cols)));
+                                }
+                                left_spans.push(Span::raw(
+                                    " ".repeat(super::layout::LARGE_ART_RIGHT_MARGIN),
+                                ));
+                            } else {
+                                // Past the art area — just blank padding.
+                                left_spans.push(Span::raw(" ".repeat(indent_width)));
+                            }
+                            left_width = indent_width;
+                        }
+                    }
+
+                    let track_num_formatted = format!("{:>5} ", track_str);
+                    left_spans.push(Span::styled(
+                        track_num_formatted.clone(),
+                        Style::default().fg(track_number_color),
+                    ));
+                    left_width += track_num_formatted.width();
 
                     if is_playing {
                         left_spans.push(Span::styled(
@@ -565,7 +747,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     left_spans.push(Span::styled(title, title_style));
                     left_width += title.width();
 
-                    // Add playcount immediately after title (uses track_number_color like egui)
+                    // Add playcount immediately after title (uses track_number_color like egui).
                     if let Some(pc) = play_count {
                         let pc_str = format!(" {pc}");
                         left_width += pc_str.width();
@@ -599,7 +781,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     right_spans.push(Span::raw(" "));
                     right_spans.push(Span::styled(heart, heart_style));
 
-                    // Calculate padding for right-alignment using unicode width
+                    // Calculate padding for right-alignment using unicode width.
                     let padding_needed = list_width
                         .saturating_sub(left_width + right_width)
                         .saturating_sub(1);
@@ -609,7 +791,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.extend(right_spans);
 
                     if underline_index == Some(i) {
-                        // Skip the leading indent span.
+                        // Skip the leading indent/art span(s).
                         for span in &mut spans[1..] {
                             span.style = span.style.add_modifier(Modifier::UNDERLINED);
                         }
@@ -618,6 +800,51 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     let line = Line::from(spans);
 
                     ListItem::new(line)
+                }
+                LibraryEntry::GroupSpacer {
+                    cover_art_id,
+                    art_row_index,
+                    ..
+                } => {
+                    // Render the art continuation row with empty track content.
+                    let art_display_cols = large_art_cols as usize;
+                    let indent_width = super::layout::LARGE_ART_LEFT_MARGIN
+                        + art_display_cols
+                        + super::layout::LARGE_ART_RIGHT_MARGIN;
+
+                    let mut spans: Vec<Span<'_>> = Vec::new();
+
+                    if *art_row_index < super::layout::LARGE_ART_TERM_ROWS {
+                        let grid = cover_art_id.as_ref().and_then(|id| large_art_grids.get(id));
+                        let term_row = *art_row_index;
+                        let color_row_top = term_row * 2;
+                        let color_row_bot = color_row_top + 1;
+
+                        spans.push(Span::raw(" ".repeat(super::layout::LARGE_ART_LEFT_MARGIN)));
+                        if let Some(grid) = grid {
+                            for col in 0..art_display_cols {
+                                let fg = if color_row_top < grid.rows {
+                                    grid.colors[color_row_top][col]
+                                } else {
+                                    background_color
+                                };
+                                let bg = if color_row_bot < grid.rows {
+                                    grid.colors[color_row_bot][col]
+                                } else {
+                                    background_color
+                                };
+                                spans
+                                    .push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
+                            }
+                        } else {
+                            spans.push(Span::raw(" ".repeat(art_display_cols)));
+                        }
+                        spans.push(Span::raw(" ".repeat(super::layout::LARGE_ART_RIGHT_MARGIN)));
+                    } else {
+                        spans.push(Span::raw(" ".repeat(indent_width)));
+                    }
+
+                    ListItem::new(Line::from(spans))
                 }
             }
         })
@@ -667,6 +894,35 @@ fn heart_to_tui(
     }
 }
 
+/// Returns `true` if the given mouse X position falls within the art area
+/// for a track that is within the art rows in `BelowAlbum` mode.
+fn is_over_below_album_art(
+    album_art_style: AlbumArtStyle,
+    mx: u16,
+    area: Rect,
+    entry: &LibraryEntry,
+) -> bool {
+    if album_art_style != AlbumArtStyle::BelowAlbum {
+        return false;
+    }
+    let track_index = match entry {
+        LibraryEntry::Track {
+            track_index_in_group,
+            ..
+        } => *track_index_in_group,
+        LibraryEntry::GroupSpacer { art_row_index, .. } => *art_row_index,
+        _ => return false,
+    };
+    if track_index >= super::layout::LARGE_ART_TERM_ROWS {
+        return false;
+    }
+    let art_end_col = area.x as usize
+        + super::layout::LARGE_ART_LEFT_MARGIN
+        + super::layout::large_art_cols() as usize
+        + super::layout::LARGE_ART_RIGHT_MARGIN;
+    (mx as usize) < art_end_col
+}
+
 /// Computes which library entry's heart is being hovered by the mouse, if any.
 fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
     // Suppress hover when the playback mode dropdown is covering the library.
@@ -683,6 +939,7 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
 
     // Capture scroll_offset before borrowing entries.
     let scroll_offset = app.library.scroll_offset;
+    let album_art_style = app.config.shared.layout.album_art_style;
     let entries = app.library.get_flat_library(&app.logic);
 
     // Compute list_width and heart column.
@@ -704,6 +961,10 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
         let h = entry.height();
 
         if inner_y >= line && inner_y < line + h {
+            // Suppress hover for entries under the art area in BelowAlbum mode.
+            if is_over_below_album_art(album_art_style, mx, area, entry) {
+                return None;
+            }
             // For group headers, heart is only on line 2 (index 1)
             if let LibraryEntry::GroupHeader { .. } = entry {
                 if inner_y - line == 1 {
@@ -735,6 +996,7 @@ fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
     }
 
     let scroll_offset = app.library.scroll_offset;
+    let album_art_style = app.config.shared.layout.album_art_style;
     let entries = app.library.get_flat_library(&app.logic);
 
     let inner_y = my.saturating_sub(area.y) as usize;
@@ -744,6 +1006,10 @@ fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
         let h = entry.height();
 
         if inner_y >= line && inner_y < line + h {
+            // Suppress hover for entries under the art area in BelowAlbum mode.
+            if is_over_below_album_art(album_art_style, mx, area, entry) {
+                return None;
+            }
             match entry {
                 LibraryEntry::Track { .. } => return Some(i),
                 // Only the second line (album name) triggers hover.
@@ -815,7 +1081,7 @@ fn render_scrollbar_with_library_indicator(
                 };
                 groups.push((label, entry.height()));
             }
-            LibraryEntry::Track { .. } => {
+            LibraryEntry::Track { .. } | LibraryEntry::GroupSpacer { .. } => {
                 if let Some(last) = groups.last_mut() {
                     last.1 += entry.height();
                 }
@@ -941,6 +1207,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                         app.logic.set_album_starred(&album_id, !starred);
                         app.library.mark_dirty();
                     }
+                    LibraryEntry::GroupSpacer { .. } => {}
                 }
             }
         }
@@ -1099,6 +1366,26 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let heart_col = geo.heart_col;
     let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
 
+    let album_art_style = app.config.shared.layout.album_art_style;
+
+    // In BelowAlbum mode, clicking the art area on a track or spacer opens the overlay.
+    if is_over_below_album_art(album_art_style, x, library_area, &entry) {
+        let cover_art_id = match &entry {
+            LibraryEntry::Track { cover_art_id, .. }
+            | LibraryEntry::GroupSpacer { cover_art_id, .. } => cover_art_id.clone(),
+            _ => None,
+        };
+        if let Some(id) = cover_art_id {
+            // Find the group header for the overlay title.
+            let title = find_group_title_for_entry(&entries, index);
+            app.album_art_overlay = Some(AlbumArtOverlay {
+                cover_art_id: id,
+                title,
+            });
+        }
+        return;
+    }
+
     match &entry {
         LibraryEntry::Track { id, starred, .. } => {
             if is_heart_click {
@@ -1119,7 +1406,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             ..
         } => {
             let art_end_col = library_area.x + super::layout::art_end_col();
-            if x < art_end_col {
+            if album_art_style == AlbumArtStyle::LeftOfAlbum && x < art_end_col {
                 if let Some(id) = cover_art_id {
                     app.album_art_overlay = Some(AlbumArtOverlay {
                         cover_art_id: id.clone(),
@@ -1135,7 +1422,20 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                 app.library.drag_last_y = Some(y);
             }
         }
+        LibraryEntry::GroupSpacer { .. } => {
+            // Spacers are not interactable outside the art area.
+        }
     }
+}
+
+/// Find the group header title (artist – album) for an entry by searching backward.
+fn find_group_title_for_entry(entries: &[LibraryEntry], index: usize) -> String {
+    for i in (0..=index).rev() {
+        if let LibraryEntry::GroupHeader { artist, album, .. } = &entries[i] {
+            return format!("{artist} \u{2013} {album}");
+        }
+    }
+    String::new()
 }
 
 /// Handle mouse drag in the library area. Returns `true` if the drag was handled.
@@ -1207,7 +1507,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
                         _ => None,
                     }
                 }
-                None => None,
+                Some(LibraryEntry::GroupSpacer { .. }) | None => None,
             };
             if let Some(idx) = target {
                 app.library.selected_index = idx;
@@ -1260,7 +1560,7 @@ fn select_center_of_viewport(app: &mut App) -> Option<()> {
             Some(LibraryEntry::Track { .. }) => idx + 1,
             _ => return None,
         },
-        None => return None,
+        Some(LibraryEntry::GroupSpacer { .. }) | None => return None,
     };
     app.library.selected_index = target;
     Some(())

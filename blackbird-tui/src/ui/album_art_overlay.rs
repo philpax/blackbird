@@ -80,10 +80,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     )]);
     frame.render_widget(Paragraph::new(x_button), x_button_area);
 
-    // Compute art color grid.
-    let (grid, loading) =
-        app.cover_art_cache
-            .get_art_grid(Some(&cover_art_id), art_cols, actual_art_pixel_rows);
+    // Compute art color grid using full-resolution data when available.
+    let (grid, loading) = app.cover_art_cache.get_full_res_art_grid(
+        &app.logic,
+        Some(&cover_art_id),
+        art_cols,
+        actual_art_pixel_rows,
+    );
 
     // Render art using half-block characters inside the border.
     let art_x = overlay_rect.x + 1; // inside left border

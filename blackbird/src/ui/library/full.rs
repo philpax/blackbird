@@ -1,7 +1,7 @@
 //! Full library view (main window)
 
-use blackbird_core::blackbird_state::TrackId;
-use egui::Ui;
+use blackbird_core::blackbird_state::{CoverArtId, TrackId};
+use egui::{Rect, Ui};
 
 use crate::{bc, config::Config, cover_art_cache::CoverArtCache};
 
@@ -14,7 +14,9 @@ pub struct FullLibraryState {
     pub queue_open: bool,
 }
 
-/// Main library UI
+/// Main library UI.
+/// Returns a `(CoverArtId, screen_rect)` pair when the user hovers over album
+/// art.
 #[allow(clippy::too_many_arguments)]
 pub fn ui(
     ui: &mut Ui,
@@ -26,7 +28,7 @@ pub fn ui(
     cover_art_cache: &mut CoverArtCache,
     view_state: &mut super::shared::LibraryViewState,
     ui_state: &FullLibraryState,
-) {
+) -> Option<(CoverArtId, Rect)> {
     // Only capture keyboard input if search modal and lyrics window are not open
     let can_handle_incremental_search =
         !ui_state.search_open && !ui_state.lyrics_open && !ui_state.queue_open;
@@ -44,5 +46,5 @@ pub fn ui(
             auto_scroll_to_playing: false,
             incremental_search_enabled: can_handle_incremental_search,
         },
-    );
+    )
 }

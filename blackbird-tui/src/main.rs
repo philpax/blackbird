@@ -372,7 +372,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
     // Check whether the cursor is over the inline lyrics overlay so we can
     // block interactions that would otherwise reach the library underneath.
-    let over_inline_lyrics = app.config.shared.show_inline_lyrics
+    let over_inline_lyrics = app.config.shared.layout.show_inline_lyrics
         && app.lyrics.shared.has_synced_lyrics()
         && ui::layout::inline_lyrics_overlay(main.content)
             .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);

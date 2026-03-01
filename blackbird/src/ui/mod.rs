@@ -11,15 +11,15 @@ mod search;
 mod style;
 mod util;
 
-pub use library::GROUP_ALBUM_ART_SIZE;
 pub use style::{Style, StyleExt};
 
+use blackbird_core::blackbird_state::CoverArtId;
 use egui::{
-    CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, RichText,
-    TextFormat, TopBottomPanel, Visuals, text::LayoutJob,
+    CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, Rect,
+    RichText, TextFormat, TopBottomPanel, Visuals, text::LayoutJob,
 };
 
-use crate::{App, bc, config::Config};
+use crate::{App, bc, config::Config, cover_art_cache::CachePriority};
 
 #[derive(Default)]
 pub struct SearchState {
@@ -39,6 +39,18 @@ pub struct QueueState {
     pub(crate) open: bool,
 }
 
+/// State for the hover-based full-res album art preview.
+pub struct ArtHoverState {
+    pub cover_art_id: CoverArtId,
+    /// Screen-space rect of the thumbnail that triggered the hover.
+    pub art_screen_rect: Rect,
+    /// Whether the popup frame was hovered in the previous frame.
+    pub popup_hovered: bool,
+    /// Actual rendered height of the popup from the previous frame, used for
+    /// accurate vertical positioning.
+    pub last_popup_height: Option<f32>,
+}
+
 #[derive(Default)]
 pub struct UiState {
     pub search: SearchState,
@@ -47,6 +59,9 @@ pub struct UiState {
     pub library_view: library::LibraryViewState,
     pub mini_library: library::MiniLibraryState,
     pub quit_confirming: bool,
+    /// When set, a full-res album art preview popup is shown near the hovered
+    /// thumbnail.
+    pub art_hover: Option<ArtHoverState>,
 }
 
 pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
@@ -112,7 +127,7 @@ impl App {
                 // Request lyrics if inline lyrics are enabled or the panel is open.
                 if self.ui_state.lyrics.shared.on_track_started(
                     &track_and_position.track_id,
-                    config.shared.show_inline_lyrics,
+                    config.shared.layout.show_inline_lyrics,
                     self.ui_state.lyrics.open,
                 ) {
                     self.ui_state.lyrics.auto_scroll = true;
@@ -489,7 +504,7 @@ impl App {
                     track_to_scroll_to = Some(id);
                 }
 
-                library::full::ui(
+                let art_hover_result = library::full::ui(
                     ui,
                     logic,
                     config,
@@ -504,10 +519,37 @@ impl App {
                         queue_open: self.ui_state.queue.open,
                     },
                 );
+                if let Some((id, rect)) = art_hover_result {
+                    // Update the hover state, preserving popup_hovered from the
+                    // previous frame if the same cover art is still targeted.
+                    let prev_popup_hovered = self
+                        .ui_state
+                        .art_hover
+                        .as_ref()
+                        .is_some_and(|h| h.cover_art_id == id && h.popup_hovered);
+                    let prev_popup_height = self
+                        .ui_state
+                        .art_hover
+                        .as_ref()
+                        .and_then(|h| h.last_popup_height);
+                    self.ui_state.art_hover = Some(ArtHoverState {
+                        cover_art_id: id,
+                        art_screen_rect: rect,
+                        popup_hovered: prev_popup_hovered,
+                        last_popup_height: prev_popup_height,
+                    });
+                } else if let Some(ref hover) = self.ui_state.art_hover {
+                    // Clear hover state only if the popup is also not hovered.
+                    if !hover.popup_hovered {
+                        self.ui_state.art_hover = None;
+                    }
+                }
             });
 
         // Draw inline lyrics as an overlay at the bottom of the central panel.
-        if config.shared.show_inline_lyrics && self.ui_state.lyrics.shared.has_synced_lyrics() {
+        if config.shared.layout.show_inline_lyrics
+            && self.ui_state.lyrics.shared.has_synced_lyrics()
+        {
             let panel_rect = ctx.available_rect();
             let font_id = egui::TextStyle::Body.resolve(&ctx.style());
             let row_height = ctx.fonts(|f| f.row_height(&font_id));
@@ -591,6 +633,87 @@ impl App {
                         config.style.text_color32(),
                     );
                 });
+        }
+
+        // Dismiss the hover popup if the thumbnail has scrolled off-screen.
+        if let Some(ref hover) = self.ui_state.art_hover
+            && !ctx.screen_rect().intersects(hover.art_screen_rect)
+        {
+            self.ui_state.art_hover = None;
+        }
+
+        // Hover-based full-res album art preview popup.
+        if let Some(ref mut hover) = self.ui_state.art_hover {
+            // Get both the fallback (library-res or lower) and full-res sources.
+            // The fallback is painted first so it remains visible while egui
+            // decodes the full-res texture, avoiding a flash.
+            let fallback_source =
+                self.cover_art_cache
+                    .get(logic, Some(&hover.cover_art_id), CachePriority::Visible);
+            let full_res_source = self
+                .cover_art_cache
+                .get_full_res(logic, Some(&hover.cover_art_id));
+
+            let screen = ctx.screen_rect();
+            let popup_max_width = screen.width() * 0.4;
+            let popup_max_height = screen.height() * 0.6;
+            let max_size = egui::vec2(popup_max_width, popup_max_height);
+
+            // Position the popup to the right of the thumbnail by default.
+            // If there isn't enough space, position it to the left instead.
+            let thumb = hover.art_screen_rect;
+            let popup_x = if thumb.right() + popup_max_width + 16.0 < screen.right() {
+                thumb.right() + 8.0
+            } else {
+                (thumb.left() - popup_max_width - 8.0).max(screen.left())
+            };
+
+            // Use the actual popup height from the previous frame if available,
+            // otherwise fall back to the max height for the initial frame.
+            let effective_height = hover.last_popup_height.unwrap_or(popup_max_height);
+
+            // Vertically: prefer top-aligned with the thumbnail. If the popup
+            // would extend past the screen bottom, align its bottom with the
+            // thumbnail's bottom instead.
+            let popup_y = if thumb.top() + effective_height <= screen.bottom() {
+                thumb.top()
+            } else {
+                (thumb.bottom() - effective_height).max(thumb.top())
+            };
+
+            let area_response = egui::Area::new(egui::Id::new("art_hover_popup"))
+                .order(egui::Order::Tooltip)
+                .fixed_pos(egui::pos2(popup_x, popup_y))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style())
+                        .fill(config.style.background_color32())
+                        .inner_margin(egui::Margin::same(8))
+                        .show(ui, |ui| {
+                            // Paint the fallback (library-res) first via
+                            // `paint_at`, then the full-res on top via `add`.
+                            // While egui decodes the full-res texture, the
+                            // fallback remains visible underneath.
+                            let response = ui.add(
+                                egui::Image::new(fallback_source)
+                                    .max_size(max_size)
+                                    .show_loading_spinner(false),
+                            );
+                            egui::Image::new(full_res_source)
+                                .show_loading_spinner(false)
+                                .paint_at(ui, response.rect);
+                        });
+                });
+
+            // Record the actual rendered popup height for next frame's
+            // positioning.
+            hover.last_popup_height = Some(area_response.response.rect.height());
+
+            // Track whether the popup itself is hovered so the preview persists
+            // when the user moves the mouse from the thumbnail to the popup.
+            hover.popup_hovered = area_response
+                .response
+                .rect
+                .contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO));
         }
 
         // Quit confirmation modal.

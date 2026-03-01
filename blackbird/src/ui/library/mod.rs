@@ -14,6 +14,5 @@ pub mod mini;
 pub mod shared;
 mod track;
 
-pub use group::GROUP_ALBUM_ART_SIZE;
 pub use mini::MiniLibraryState;
 pub use shared::LibraryViewState;

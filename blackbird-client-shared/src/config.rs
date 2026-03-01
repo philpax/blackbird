@@ -20,8 +20,39 @@ pub fn load_config<T: Default + serde::de::DeserializeOwned>(filename: &str) -> 
     }
 }
 
-/// Shared configuration fields used by both the egui and TUI clients.
+/// Controls how album art is displayed in the library view.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AlbumArtStyle {
+    /// Small thumbnail to the left of the artist/album header.
+    #[default]
+    LeftOfAlbum,
+    /// Large image below the header, to the left of the track list.
+    BelowAlbum,
+}
+
+/// Layout configuration for the library and player UI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Layout {
+    /// Whether to show the current synced lyric line inline in the player UI.
+    #[serde(default = "default_true")]
+    pub show_inline_lyrics: bool,
+    /// How album art is displayed in the library view.
+    #[serde(default)]
+    pub album_art_style: AlbumArtStyle,
+}
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            show_inline_lyrics: true,
+            album_art_style: AlbumArtStyle::default(),
+        }
+    }
+}
+
+/// Shared configuration fields used by both the egui and TUI clients.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
     /// Server connection settings.
@@ -30,18 +61,9 @@ pub struct Config {
     /// Last playback state, persisted across sessions.
     #[serde(default)]
     pub last_playback: LastPlayback,
-    /// Whether to show the current synced lyric line inline in the player UI.
-    #[serde(default = "default_true")]
-    pub show_inline_lyrics: bool,
-}
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: Default::default(),
-            last_playback: Default::default(),
-            show_inline_lyrics: true,
-        }
-    }
+    /// Layout configuration for the library and player UI.
+    #[serde(default)]
+    pub layout: Layout,
 }
 
 fn default_true() -> bool {

@@ -80,6 +80,8 @@ impl LogicRequestHandle {
 pub struct CoverArt {
     pub cover_art_id: CoverArtId,
     pub cover_art: Vec<u8>,
+    /// The size that was requested from the server, or `None` for full resolution.
+    pub requested_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -471,6 +473,7 @@ impl Logic {
                         .send(CoverArt {
                             cover_art_id: cover_art_id.clone(),
                             cover_art,
+                            requested_size: size,
                         })
                         .unwrap();
                 }

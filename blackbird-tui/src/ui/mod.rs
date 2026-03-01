@@ -197,7 +197,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Draw inline lyrics as an overlay at the bottom of the content area.
     if !is_loading
-        && app.config.shared.show_inline_lyrics
+        && app.config.shared.layout.show_inline_lyrics
         && app.lyrics.shared.has_synced_lyrics()
         && let Some(overlay) = layout::inline_lyrics_overlay(main.content)
     {

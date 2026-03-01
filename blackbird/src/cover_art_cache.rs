@@ -1,6 +1,6 @@
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use blackbird_client_shared::cover_art_cache::{self, ClientData};
+use blackbird_client_shared::cover_art_cache::{self, ClientData, Resolution};
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 
 pub use cover_art_cache::CachePriority;
@@ -14,11 +14,11 @@ pub struct EguiCoverArt {
 }
 
 impl ClientData for EguiCoverArt {
-    fn from_image_data(data: &Arc<[u8]>, id: &CoverArtId, is_high_res: bool) -> Self {
-        let uri = if is_high_res {
-            format!("bytes://{}", id.0)
-        } else {
-            format!("bytes://low-res/{}", id.0)
+    fn from_image_data(data: &Arc<[u8]>, id: &CoverArtId, resolution: Resolution) -> Self {
+        let uri = match resolution {
+            Resolution::Low => format!("bytes://low-res/{}", id.0),
+            Resolution::Library => format!("bytes://library/{}", id.0),
+            Resolution::Full => format!("bytes://full/{}", id.0),
         };
         EguiCoverArt {
             image_source: egui::ImageSource::Bytes {
@@ -34,14 +34,10 @@ pub struct CoverArtCache {
 }
 
 impl CoverArtCache {
-    pub fn new(
-        cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>,
-        target_size: Option<usize>,
-    ) -> Self {
+    pub fn new(cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>) -> Self {
         Self {
             inner: cover_art_cache::CoverArtCache::new(
                 cover_art_loaded_rx,
-                target_size,
                 MAX_CACHE_SIZE,
                 CACHE_ENTRY_TIMEOUT,
             ),
@@ -49,11 +45,12 @@ impl CoverArtCache {
     }
 
     pub fn update(&mut self, ctx: &egui::Context) {
-        let evicted = self.inner.update();
-        for cover_art_id in evicted {
-            // Forget both low-res and high-res versions
+        let result = self.inner.update();
+        for cover_art_id in result.evicted {
+            // Forget all three URI variants.
             ctx.forget_image(&format!("bytes://low-res/{}", cover_art_id.0));
-            ctx.forget_image(&format!("bytes://{}", cover_art_id.0));
+            ctx.forget_image(&format!("bytes://library/{}", cover_art_id.0));
+            ctx.forget_image(&format!("bytes://full/{}", cover_art_id.0));
         }
     }
 
@@ -63,8 +60,29 @@ impl CoverArtCache {
         cover_art_id: Option<&CoverArtId>,
         priority: CachePriority,
     ) -> egui::ImageSource<'static> {
-        match self.inner.get(logic, cover_art_id, priority) {
-            Some(egui_data) => egui_data.image_source.clone(),
+        match self
+            .inner
+            .get(logic, cover_art_id, Resolution::Library, priority)
+        {
+            Some(result) => result.data.image_source.clone(),
+            None => egui::include_image!("../assets/no-album-art.png"),
+        }
+    }
+
+    /// Get the full-resolution version of cover art for overlays.
+    /// Falls back to lower resolutions while full-res is loading.
+    pub fn get_full_res(
+        &mut self,
+        logic: &Logic,
+        cover_art_id: Option<&CoverArtId>,
+    ) -> egui::ImageSource<'static> {
+        match self.inner.get(
+            logic,
+            cover_art_id,
+            Resolution::Full,
+            CachePriority::Visible,
+        ) {
+            Some(result) => result.data.image_source.clone(),
             None => egui::include_image!("../assets/no-album-art.png"),
         }
     }

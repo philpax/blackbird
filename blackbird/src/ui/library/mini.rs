@@ -86,7 +86,8 @@ pub fn ui(
                 // Take the scroll target (only scrolls once)
                 let scroll_target = state.scroll_to_track.take();
 
-                render_library_view(
+                // Mini-library doesn't support the art overlay.
+                let _ = render_library_view(
                     ui,
                     logic,
                     config,

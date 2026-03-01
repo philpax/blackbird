@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use blackbird_client_shared::cover_art_cache::{self, CachePriority, ClientData};
+use blackbird_client_shared::cover_art_cache::{self, CachePriority, ClientData, Resolution};
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::style::Color;
 
@@ -80,34 +80,26 @@ impl ArtColorGrid {
 #[derive(Clone)]
 pub struct TuiCoverArt {
     raw_bytes: Arc<[u8]>,
-    /// Kept across low→high-res transitions so the overlay can show a quick
-    /// fallback grid while the high-res grid is computing.
-    low_res_bytes: Option<Arc<[u8]>>,
     /// 4x4 color grid for library thumbnails (computed in background).
     pub colors: Option<QuadrantColors>,
-    /// Variable-size grid for the overlay (lazily computed via with_client_data_mut).
-    /// Reset to None when from_image_data is called (new image data arrived).
-    pub overlay_grid: Option<ArtColorGrid>,
     /// Aspect ratio (height / width) of the source image. Computed from the
     /// image header so it is available without a full decode.
     aspect_ratio: Option<f64>,
 }
 
 impl ClientData for TuiCoverArt {
-    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, is_high_res: bool) -> Self {
+    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, resolution: Resolution) -> Self {
         // Low-res images (16×16 disk cache) are trivially cheap to process —
         // compute colors synchronously to avoid a frame of gray.
-        let (colors, low_res_bytes) = if is_high_res {
-            (None, None)
+        let colors = if resolution == Resolution::Low {
+            Some(compute_quadrant_colors(data))
         } else {
-            (Some(compute_quadrant_colors(data)), Some(data.clone()))
+            None
         };
         let aspect_ratio = image_aspect_ratio(data);
         TuiCoverArt {
             raw_bytes: data.clone(),
-            low_res_bytes,
             colors,
-            overlay_grid: None,
             aspect_ratio,
         }
     }
@@ -115,9 +107,6 @@ impl ClientData for TuiCoverArt {
     fn carry_over(&mut self, previous: &Self) {
         if self.colors.is_none() {
             self.colors = previous.colors;
-        }
-        if self.low_res_bytes.is_none() {
-            self.low_res_bytes = previous.low_res_bytes.clone();
         }
         if self.aspect_ratio.is_none() {
             self.aspect_ratio = previous.aspect_ratio;
@@ -131,15 +120,24 @@ const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
 pub struct CoverArtCache {
     inner: cover_art_cache::CoverArtCache<TuiCoverArt>,
     pool: ThreadPool,
-    color_tx: Sender<(CoverArtId, QuadrantColors)>,
-    color_rx: Receiver<(CoverArtId, QuadrantColors)>,
-    computing: HashSet<CoverArtId>,
-    grid_tx: Sender<(CoverArtId, ArtColorGrid)>,
-    grid_rx: Receiver<(CoverArtId, ArtColorGrid)>,
+    color_tx: Sender<(CoverArtId, Resolution, QuadrantColors)>,
+    color_rx: Receiver<(CoverArtId, Resolution, QuadrantColors)>,
+    /// Tracks which (id, resolution) pairs are currently computing colors.
+    computing: HashSet<(CoverArtId, Resolution)>,
+    grid_tx: Sender<(CoverArtId, Resolution, ArtColorGrid)>,
+    grid_rx: Receiver<(CoverArtId, Resolution, ArtColorGrid)>,
     grid_computing: HashSet<CoverArtId>,
-    /// Fallback overlay grids, persisted across image-data transitions so that
-    /// the low-res grid remains visible while the high-res grid is computing.
-    overlay_grids: HashMap<CoverArtId, ArtColorGrid>,
+    /// Cached grids keyed by `(CoverArtId, cols, rows)`, with the resolution
+    /// they were computed from. Persisted across image-data transitions so
+    /// the previous grid remains visible while a higher-res grid is computing.
+    overlay_grids: HashMap<(CoverArtId, usize, usize), CachedGrid>,
+}
+
+/// An overlay grid together with the resolution of the source image it
+/// was computed from, so we know when to trigger recomputation.
+struct CachedGrid {
+    grid: ArtColorGrid,
+    source_resolution: Resolution,
 }
 
 impl CoverArtCache {
@@ -149,7 +147,6 @@ impl CoverArtCache {
         Self {
             inner: cover_art_cache::CoverArtCache::new(
                 cover_art_loaded_rx,
-                None, // full resolution — overlay needs high-res data
                 MAX_CACHE_SIZE,
                 CACHE_ENTRY_TIMEOUT,
             ),
@@ -165,60 +162,96 @@ impl CoverArtCache {
     }
 
     pub fn update(&mut self) {
-        let evicted = self.inner.update();
-        for id in &evicted {
-            self.computing.remove(id);
+        let result = self.inner.update();
+        for id in &result.evicted {
+            // Remove all resolution-keyed entries for this id.
+            self.computing.remove(&(id.clone(), Resolution::Low));
+            self.computing.remove(&(id.clone(), Resolution::Library));
+            self.computing.remove(&(id.clone(), Resolution::Full));
             self.grid_computing.remove(id);
-            self.overlay_grids.remove(id);
+            self.overlay_grids
+                .retain(|(grid_id, _, _), _| grid_id != id);
         }
 
-        for (id, colors) in self.color_rx.try_iter() {
-            self.computing.remove(&id);
-            self.inner.with_client_data_mut(&id, |data, _raw| {
-                data.colors = Some(colors);
+        // On upgraded entries, allow recomputation from the better data if the
+        // cached grid was computed from a lower resolution. Don't remove the
+        // cached grid — it serves as a fallback while the new one computes.
+        for (id, resolution) in &result.upgraded {
+            let any_dominated = self.overlay_grids.iter().any(|((grid_id, _, _), cached)| {
+                grid_id == id && cached.source_resolution < *resolution
             });
+            if any_dominated {
+                self.grid_computing.remove(id);
+            }
         }
 
-        for (id, grid) in self.grid_rx.try_iter() {
+        for (id, resolution, colors) in self.color_rx.try_iter() {
+            self.computing.remove(&(id.clone(), resolution));
+            self.inner
+                .with_client_data_mut_at(&id, resolution, |data, _raw| {
+                    data.colors = Some(colors);
+                });
+        }
+
+        for (id, source_resolution, grid) in self.grid_rx.try_iter() {
             self.grid_computing.remove(&id);
-            self.overlay_grids.insert(id.clone(), grid.clone());
-            self.inner.with_client_data_mut(&id, |data, _raw| {
-                data.overlay_grid = Some(grid);
-            });
+            let key = (id, grid.cols, grid.rows);
+            // Only replace the cached grid if this one is from an equal or
+            // higher resolution source (don't downgrade on late arrivals).
+            let dominated = self
+                .overlay_grids
+                .get(&key)
+                .is_some_and(|cached| cached.source_resolution > source_resolution);
+            if !dominated {
+                self.overlay_grids.insert(
+                    key,
+                    CachedGrid {
+                        grid,
+                        source_resolution,
+                    },
+                );
+            }
         }
     }
 
+    /// Get quadrant colors for a cover art entry at low resolution.
+    /// Used for LeftOfAlbum thumbnail colors.
     pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
-        let Some(tui_data) = self.inner.get(logic, cover_art_id, CachePriority::Visible) else {
+        let Some(result) =
+            self.inner
+                .get(logic, cover_art_id, Resolution::Low, CachePriority::Visible)
+        else {
             return QuadrantColors::default();
         };
 
-        if let Some(colors) = tui_data.colors {
+        if let Some(colors) = result.data.colors {
             return colors;
         }
 
-        // Colors not computed yet — spawn background thread if not already running
-        let id = cover_art_id.unwrap(); // safe: inner.get returned Some
-        if !self.computing.contains(id) {
-            self.computing.insert(id.clone());
-            let raw = tui_data.raw_bytes.clone();
+        // Colors not computed yet — spawn background thread if not already running.
+        let id = cover_art_id.unwrap(); // Safe: inner.get returned Some.
+        let key = (id.clone(), result.resolution);
+        if !self.computing.contains(&key) {
+            self.computing.insert(key);
+            let raw = result.data.raw_bytes.clone();
             let id_clone = id.clone();
+            let resolution = result.resolution;
             let tx = self.color_tx.clone();
             self.pool.spawn(move || {
                 let colors = compute_quadrant_colors(&raw);
-                let _ = tx.send((id_clone, colors));
+                let _ = tx.send((id_clone, resolution, colors));
             });
         }
 
         QuadrantColors::default()
     }
 
-    /// Returns a variable-size color grid for the overlay display and whether
-    /// a higher-resolution version is still being computed.
-    /// Computes the grid in a background thread; returns the previous grid
-    /// (or empty) while the new one is being computed.
+    /// Returns a variable-size color grid for library BelowAlbum display.
+    /// Requests library-resolution data and computes a grid in a background
+    /// thread; returns a fallback grid while computing.
     pub fn get_art_grid(
         &mut self,
+        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
@@ -227,59 +260,179 @@ impl CoverArtCache {
             return (ArtColorGrid::empty(cols, rows), false);
         };
 
-        // Check if client data already has a grid with matching dimensions.
-        let up_to_date = self
+        // Request library-res data (triggers network fetch if needed).
+        let _result = self
             .inner
-            .with_client_data_mut(id, |data, _raw| {
-                data.overlay_grid
-                    .as_ref()
-                    .is_some_and(|g| g.cols == cols && g.rows == rows)
-            })
-            .unwrap_or(false);
+            .get(logic, Some(id), Resolution::Library, CachePriority::Visible);
 
-        if up_to_date {
-            let grid = self
-                .inner
-                .with_client_data_mut(id, |data, _raw| data.overlay_grid.clone().unwrap())
-                .unwrap();
-            self.overlay_grids.insert(id.clone(), grid.clone());
-            return (grid, false);
+        let library_loaded = self.inner.is_resolution_loaded(id, Resolution::Library);
+        let grid_key = (id.clone(), cols, rows);
+
+        // Check if we have a cached grid.
+        if let Some(cached) = self.overlay_grids.get(&grid_key) {
+            // Kick off a recomputation from better data if needed.
+            let grid_needs_upgrade =
+                library_loaded && cached.source_resolution < Resolution::Library;
+            let computing = self.grid_computing.contains(id);
+
+            if grid_needs_upgrade && !computing {
+                let raw_bytes =
+                    self.inner
+                        .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
+                            data.raw_bytes.clone()
+                        });
+                if let Some(raw_bytes) = raw_bytes {
+                    self.grid_computing.insert(id.clone());
+                    let id_clone = id.clone();
+                    let tx = self.grid_tx.clone();
+                    self.pool.spawn(move || {
+                        let grid = compute_art_grid(&raw_bytes, cols, rows);
+                        let _ = tx.send((id_clone, Resolution::Library, grid));
+                    });
+                }
+            }
+
+            let loading = grid_needs_upgrade || computing;
+            return (cached.grid.clone(), loading);
         }
 
         // Need to compute — spawn background thread if not already running.
         if !self.grid_computing.contains(id) {
-            let raw_bytes = self
+            // Prefer library-res bytes, fall back to low-res.
+            let source = self
                 .inner
-                .with_client_data_mut(id, |data, _raw| data.raw_bytes.clone());
-            if let Some(raw_bytes) = raw_bytes {
+                .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
+                    (data.raw_bytes.clone(), Resolution::Library)
+                })
+                .or_else(|| {
+                    self.inner
+                        .with_client_data_mut_at(id, Resolution::Low, |data, _raw| {
+                            (data.raw_bytes.clone(), Resolution::Low)
+                        })
+                });
+            if let Some((raw_bytes, source_resolution)) = source {
                 self.grid_computing.insert(id.clone());
                 let id_clone = id.clone();
                 let tx = self.grid_tx.clone();
                 self.pool.spawn(move || {
                     let grid = compute_art_grid(&raw_bytes, cols, rows);
-                    let _ = tx.send((id_clone, grid));
+                    let _ = tx.send((id_clone, source_resolution, grid));
                 });
             }
-        }
-
-        // Return the previous grid as fallback while computing.
-        if let Some(grid) = self
-            .overlay_grids
-            .get(id)
-            .filter(|g| g.cols == cols && g.rows == rows)
-        {
-            return (grid.clone(), true);
         }
 
         // No cached fallback — compute one from the low-res image synchronously
         // (16×16 pixels, sub-millisecond).
         let low_res = self
             .inner
-            .with_client_data_mut(id, |data, _raw| data.low_res_bytes.clone())
-            .flatten();
+            .get_resolution(id, Resolution::Low)
+            .map(|data| data.raw_bytes.clone());
         if let Some(low_res) = low_res {
             let grid = compute_art_grid(&low_res, cols, rows);
-            self.overlay_grids.insert(id.clone(), grid.clone());
+            let cached = CachedGrid {
+                grid: grid.clone(),
+                source_resolution: Resolution::Low,
+            };
+            self.overlay_grids.insert(grid_key, cached);
+            return (grid, true);
+        }
+
+        (ArtColorGrid::empty(cols, rows), true)
+    }
+
+    /// Returns a variable-size color grid for the overlay using full-resolution
+    /// data. Falls back to lower resolutions while full-res is loading.
+    pub fn get_full_res_art_grid(
+        &mut self,
+        logic: &Logic,
+        cover_art_id: Option<&CoverArtId>,
+        cols: usize,
+        rows: usize,
+    ) -> (ArtColorGrid, bool) {
+        let Some(id) = cover_art_id else {
+            return (ArtColorGrid::empty(cols, rows), false);
+        };
+
+        // Request full-res data (triggers network fetch if needed).
+        let _result = self
+            .inner
+            .get(logic, Some(id), Resolution::Full, CachePriority::Visible);
+
+        let full_loaded = self.inner.is_resolution_loaded(id, Resolution::Full);
+        let grid_key = (id.clone(), cols, rows);
+
+        // Check if we have a cached grid.
+        if let Some(cached) = self.overlay_grids.get(&grid_key) {
+            // The grid is up-to-date if it was computed from full-res data
+            // (or there's no better data available yet).
+            let grid_needs_upgrade = full_loaded && cached.source_resolution < Resolution::Full;
+            let computing = self.grid_computing.contains(id);
+
+            // Kick off a recomputation from better data if needed.
+            if grid_needs_upgrade && !computing {
+                let raw_bytes =
+                    self.inner
+                        .with_client_data_mut_at(id, Resolution::Full, |data, _raw| {
+                            data.raw_bytes.clone()
+                        });
+                if let Some(raw_bytes) = raw_bytes {
+                    self.grid_computing.insert(id.clone());
+                    let id_clone = id.clone();
+                    let tx = self.grid_tx.clone();
+                    self.pool.spawn(move || {
+                        let grid = compute_art_grid(&raw_bytes, cols, rows);
+                        let _ = tx.send((id_clone, Resolution::Full, grid));
+                    });
+                }
+            }
+
+            let loading = !full_loaded || grid_needs_upgrade || computing;
+            return (cached.grid.clone(), loading);
+        }
+
+        // No cached grid — need to compute.
+        if !self.grid_computing.contains(id) {
+            // Prefer full-res bytes, then library, then low.
+            let source = self
+                .inner
+                .with_client_data_mut_at(id, Resolution::Full, |data, _raw| {
+                    (data.raw_bytes.clone(), Resolution::Full)
+                })
+                .or_else(|| {
+                    self.inner
+                        .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
+                            (data.raw_bytes.clone(), Resolution::Library)
+                        })
+                })
+                .or_else(|| {
+                    self.inner
+                        .with_client_data_mut_at(id, Resolution::Low, |data, _raw| {
+                            (data.raw_bytes.clone(), Resolution::Low)
+                        })
+                });
+            if let Some((raw_bytes, source_resolution)) = source {
+                self.grid_computing.insert(id.clone());
+                let id_clone = id.clone();
+                let tx = self.grid_tx.clone();
+                self.pool.spawn(move || {
+                    let grid = compute_art_grid(&raw_bytes, cols, rows);
+                    let _ = tx.send((id_clone, source_resolution, grid));
+                });
+            }
+        }
+
+        // Return fallback from low-res if available.
+        let low_res = self
+            .inner
+            .get_resolution(id, Resolution::Low)
+            .map(|data| data.raw_bytes.clone());
+        if let Some(low_res) = low_res {
+            let grid = compute_art_grid(&low_res, cols, rows);
+            let cached = CachedGrid {
+                grid: grid.clone(),
+                source_resolution: Resolution::Low,
+            };
+            self.overlay_grids.insert(grid_key, cached);
             return (grid, true);
         }
 

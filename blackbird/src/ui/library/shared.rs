@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use blackbird_core::blackbird_state::TrackId;
+use blackbird_core::blackbird_state::{CoverArtId, TrackId};
 use egui::{Align, Pos2, Rect, ScrollArea, Spinner, Ui, pos2, style::ScrollStyle, vec2};
 
 use crate::{
@@ -106,7 +106,9 @@ pub(crate) fn render_player_controls(
     track_to_scroll_to
 }
 
-/// Render the library view with the given configuration
+/// Render the library view with the given configuration.
+/// Returns a `(CoverArtId, screen_rect)` pair when the user hovers over album
+/// art.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render_library_view(
     ui: &mut Ui,
@@ -117,16 +119,23 @@ pub(crate) fn render_library_view(
     cover_art_cache: &mut CoverArtCache,
     view_state: &mut LibraryViewState,
     view_config: LibraryViewConfig<'_>,
-) {
+) -> Option<(CoverArtId, Rect)> {
+    let mut art_hover_request: Option<(CoverArtId, Rect)> = None;
     ui.scope(|ui| {
         if !has_loaded_all_tracks {
             ui.add_sized(ui.available_size(), Spinner::new());
             return;
         }
 
+        let album_art_style = config.shared.layout.album_art_style;
+
         // Compute library scroll positions if library was populated
         if view_state.library_scroll.needs_update {
-            library_scroll::compute_positions(logic, &mut view_state.library_scroll);
+            library_scroll::compute_positions(
+                logic,
+                &mut view_state.library_scroll,
+                album_art_style,
+            );
             view_state.library_scroll.needs_update = false;
         }
 
@@ -152,8 +161,8 @@ pub(crate) fn render_library_view(
         ui.style_mut().visuals.extreme_bg_color = config.style.background_color32();
 
         let spaced_row_height = util::spaced_row_height(ui);
-        let total_rows =
-            logic.calculate_total_rows(group::line_count) - group::GROUP_MARGIN_BOTTOM_ROW_COUNT;
+        let total_rows = logic.calculate_total_rows(|g| group::line_count(g, album_art_style))
+            - group::GROUP_MARGIN_BOTTOM_ROW_COUNT;
 
         let area_offset_y = ui.cursor().top();
         let playing_track_id = logic.get_playing_track_id();
@@ -180,6 +189,7 @@ pub(crate) fn render_library_view(
                         &logic.get_state().read().unwrap(),
                         spaced_row_height,
                         id,
+                        album_art_style,
                     )
                 }) {
                     let target_height = area_offset_y + scroll_to_height - viewport.min.y;
@@ -208,13 +218,14 @@ pub(crate) fn render_library_view(
                 let visible_row_range = first_visible_row..last_visible_row;
 
                 // Calculate which groups are in view
-                let visible_groups =
-                    logic.get_visible_groups(visible_row_range.clone(), group::line_count);
+                let visible_groups = logic.get_visible_groups(visible_row_range.clone(), |g| {
+                    group::line_count(g, album_art_style)
+                });
 
                 let mut current_row = visible_groups.start_row;
 
                 for grp in visible_groups.groups {
-                    let group_lines = group::line_count(&grp);
+                    let group_lines = group::line_count(&grp, album_art_style);
 
                     // Calculate the Y position for this group
                     let group_y = current_row as f32 * spaced_row_height;
@@ -238,6 +249,7 @@ pub(crate) fn render_library_view(
                                 playing_track_id.as_ref(),
                                 current_search_match.as_ref(),
                                 cover_art_cache,
+                                album_art_style,
                             )
                         })
                         .inner;
@@ -249,6 +261,10 @@ pub(crate) fn render_library_view(
 
                     if group_response.clicked_heart {
                         logic.set_album_starred(&grp.album_id, !grp.starred);
+                    }
+
+                    if let Some(art_request) = group_response.hovered_art {
+                        art_hover_request = Some(art_request);
                     }
 
                     current_row += group_lines;
@@ -263,9 +279,12 @@ pub(crate) fn render_library_view(
             &ui.min_rect(),
             &logic.get_state().read().unwrap(),
             playing_track_id.as_ref(),
+            album_art_style,
         );
 
         // Display incremental search query overlay
         incremental_search::post_render(ui, &view_state.incremental_search, &search_results);
     });
+
+    art_hover_request
 }

@@ -6,6 +6,9 @@ pub const VOLUME_STEP: f32 = 0.05;
 /// Seek step in seconds.
 pub const SEEK_STEP_SECS: i64 = 5;
 
+/// Fraction of the window/terminal width used for the album art overlay.
+pub const OVERLAY_WIDTH_FRACTION: f32 = 0.9;
+
 pub mod config;
 pub mod cover_art_cache;
 pub mod library_scroll;

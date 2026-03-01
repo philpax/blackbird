@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use blackbird_client_shared::library_scroll as shared_scroll;
+use blackbird_client_shared::{config::AlbumArtStyle, library_scroll as shared_scroll};
 use blackbird_core::SortOrder;
 use egui::{Align2, Rect, Stroke, TextStyle, Ui, pos2};
 
@@ -16,7 +16,11 @@ use super::{group, shared::LibraryScrollState};
 /// - Alphabetical: first letter of artist name (A-Z)
 /// - NewestFirst: release year (full year like "2024")
 /// - RecentlyAdded: year from the created date (full year like "2024")
-pub fn compute_positions(logic: &mut bc::Logic, state: &mut LibraryScrollState) {
+pub fn compute_positions(
+    logic: &mut bc::Logic,
+    state: &mut LibraryScrollState,
+    album_art_style: AlbumArtStyle,
+) {
     let app_state = logic.get_state();
     let app_state = app_state.read().unwrap();
 
@@ -60,7 +64,7 @@ pub fn compute_positions(logic: &mut bc::Logic, state: &mut LibraryScrollState) 
                     )
                 }
             };
-            let line_count = group::line_count(grp);
+            let line_count = group::line_count(grp, album_art_style);
             (label, line_count)
         })
         .collect();
@@ -79,6 +83,7 @@ pub fn render(
     viewport_rect: &Rect,
     app_state: &bc::AppState,
     playing_track_id: Option<&TrackId>,
+    album_art_style: AlbumArtStyle,
 ) {
     if state.positions.is_empty() {
         return;
@@ -87,8 +92,9 @@ pub fn render(
     // Update cached playing track position if track changed
     if state.cached_playing_track_id.as_ref() != playing_track_id {
         state.cached_playing_track_id = playing_track_id.cloned();
-        state.cached_playing_track_position = playing_track_id
-            .and_then(|track_id| compute_track_position_fraction(app_state, track_id));
+        state.cached_playing_track_position = playing_track_id.and_then(|track_id| {
+            compute_track_position_fraction(app_state, track_id, album_art_style)
+        });
     }
 
     let font_id = TextStyle::Body.resolve(ui.style());
@@ -126,8 +132,12 @@ pub fn render(
     }
 }
 
-/// Computes the position fraction (0.0-1.0) of a track in the library
-fn compute_track_position_fraction(app_state: &bc::AppState, track_id: &TrackId) -> Option<f32> {
+/// Computes the position fraction (0.0-1.0) of a track in the library.
+fn compute_track_position_fraction(
+    app_state: &bc::AppState,
+    track_id: &TrackId,
+    album_art_style: AlbumArtStyle,
+) -> Option<f32> {
     let track = app_state.library.track_map.get(track_id)?;
     let album_id = track.album_id.as_ref()?;
 
@@ -140,7 +150,7 @@ fn compute_track_position_fraction(app_state: &bc::AppState, track_id: &TrackId)
             break;
         }
 
-        current_row += group::line_count(group);
+        current_row += group::line_count(group, album_art_style);
     }
 
     let track_row = track_row?;
@@ -148,7 +158,7 @@ fn compute_track_position_fraction(app_state: &bc::AppState, track_id: &TrackId)
         .library
         .groups
         .iter()
-        .map(|g| group::line_count(g))
+        .map(|g| group::line_count(g, album_art_style))
         .sum();
 
     if total_rows == 0 {

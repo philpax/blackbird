@@ -130,7 +130,7 @@ pub const TRANSPORT_BTN_NEXT: u16 = 9;
 
 // ── Album art overlay ───────────────────────────────────────────────────────
 
-pub const OVERLAY_WIDTH_FRACTION: f32 = 0.9;
+pub const OVERLAY_WIDTH_FRACTION: f32 = blackbird_client_shared::OVERLAY_WIDTH_FRACTION;
 pub const OVERLAY_MIN_WIDTH: u16 = 10;
 pub const OVERLAY_BORDER_OVERHEAD: u16 = 2;
 pub const OVERLAY_X_BUTTON_OFFSET: u16 = 4;
@@ -199,6 +199,27 @@ pub fn overlay_rect(size: Rect, aspect_ratio: f64) -> Rect {
     let overlay_y = min_y + (max_height.saturating_sub(overlay_height)) / 2;
     Rect::new(overlay_x, overlay_y, overlay_width, overlay_height)
 }
+
+// ── Large album art (BelowAlbum mode) ────────────────────────────────────────
+
+/// Number of terminal rows for the large art displayed beside tracks in
+/// `BelowAlbum` mode. Each terminal row encodes 2 pixel rows via half-blocks.
+pub const LARGE_ART_TERM_ROWS: usize = 8;
+
+/// Number of display columns for the large art grid, corrected for
+/// non-square terminal character cells (same approach as [`art_cols`]).
+pub(crate) fn large_art_cols() -> u16 {
+    let pixel_rows = (LARGE_ART_TERM_ROWS * 2) as u16;
+    (pixel_rows as f64 / half_block_correction())
+        .round()
+        .clamp(pixel_rows as f64, (pixel_rows * 2) as f64) as u16
+}
+
+/// Left margin before the large art grid in `BelowAlbum` mode.
+pub const LARGE_ART_LEFT_MARGIN: usize = 1;
+
+/// Gap between the large art and the track text.
+pub const LARGE_ART_RIGHT_MARGIN: usize = 1;
 
 // ── Library geometry ────────────────────────────────────────────────────────
 
