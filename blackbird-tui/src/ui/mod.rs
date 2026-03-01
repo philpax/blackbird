@@ -17,8 +17,6 @@ use ratatui::{
     widgets::{Block, Clear, Paragraph},
 };
 
-use std::time::Duration;
-
 use smol_str::ToSmolStr as _;
 
 use crate::{
@@ -420,13 +418,10 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
             app.logic.set_volume(ratio.clamp(0.0, 1.0));
         }
     } else if x >= sv.scrub_bar.x && x < sv.scrub_bar.x + sv.scrub_bar.width {
-        // Click on scrub bar → seek
+        // Set preview ratio for instant visual feedback; the actual seek
+        // is deferred until mouse-up via `seek_current_immediate`.
         let ratio = (x - sv.scrub_bar.x) as f32 / sv.scrub_bar.width as f32;
         app.scrub_preview_ratio = Some(ratio);
-        if let Some(details) = app.logic.get_track_display_details() {
-            let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
-            app.logic.seek_current(seek_pos);
-        }
     }
 }
 

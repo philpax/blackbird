@@ -476,8 +476,8 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            // Send a final seek so the playback thread lands exactly where
-            // the user released, even if the last drag seek was debounced.
+            // Commit the scrub bar position on release with an immediate
+            // (non-debounced) seek so it always takes effect.
             if app.scrub_dragging
                 && let Some(preview) = app.scrub_preview_ratio
                 && let Some(details) = app.logic.get_track_display_details()
@@ -485,7 +485,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 let seek_pos = std::time::Duration::from_secs_f32(
                     details.track_duration.as_secs_f32() * preview,
                 );
-                app.logic.seek_current(seek_pos);
+                app.logic.seek_current_immediate(seek_pos);
             }
             app.scrub_dragging = false;
             app.scrub_preview_ratio = None;

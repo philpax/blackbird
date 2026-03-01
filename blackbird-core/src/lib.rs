@@ -423,8 +423,24 @@ impl Logic {
     }
 
     pub fn seek_current(&self, position: Duration) {
+        // Optimistically update the displayed position so the UI reflects
+        // the seek target immediately, even if the playback thread's
+        // debounce delays the actual hardware seek.
+        if let Some(tap) = &mut self.write_state().current_track_and_position {
+            tap.position = position;
+        }
         self.playback_thread
             .send(LogicToPlaybackMessage::Seek(position));
+    }
+
+    /// Seek without debouncing. Used on scrub bar release to ensure the
+    /// final position is always applied.
+    pub fn seek_current_immediate(&self, position: Duration) {
+        if let Some(tap) = &mut self.write_state().current_track_and_position {
+            tap.position = position;
+        }
+        self.playback_thread
+            .send(LogicToPlaybackMessage::SeekImmediate(position));
     }
 
     pub fn next(&self) {

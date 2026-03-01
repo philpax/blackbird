@@ -46,6 +46,9 @@ pub enum LogicToPlaybackMessage {
     Pause,
     StopPlayback,
     Seek(Duration),
+    /// Seek without debouncing. Used on scrub bar release to ensure the
+    /// final position is always applied.
+    SeekImmediate(Duration),
     SetVolume(f32),
     /// Sent during shutdown to exit the playback loop immediately. Needed
     /// because cloned `PlaybackThreadSendHandle`s in tokio tasks keep the
@@ -316,6 +319,16 @@ impl PlaybackThread {
                             }));
                         }
                     }
+                    LTPM::SeekImmediate(position) => {
+                        last_seek_time = std::time::Instant::now();
+                        if let Err(e) = sink.try_seek(position) {
+                            tracing::warn!("Failed to seek to position {position:?}: {e}");
+                        }
+                        let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                            track_id: last_track_id.clone().unwrap(),
+                            position,
+                        }));
+                    }
                     LTPM::SetVolume(volume) => {
                         sink.set_volume(volume * volume);
                     }
@@ -380,7 +393,7 @@ impl PlaybackThread {
                 let _ = logic_tx.send(PTLM::TrackEnded);
             }
 
-            // Send position updates every second
+            // Send position updates every 250ms.
             let current_position = sink.get_pos();
             let now = std::time::Instant::now();
             if now.duration_since(last_position_update) >= Duration::from_millis(250) {
