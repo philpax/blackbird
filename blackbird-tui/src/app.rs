@@ -48,6 +48,8 @@ pub struct App {
     pub tick_count: u64,
     /// Whether the user is dragging the scrub bar or volume slider.
     pub scrub_dragging: bool,
+    /// Preview seek ratio while dragging the scrub bar (0.0–1.0).
+    pub scrub_preview_ratio: Option<f32>,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -91,6 +93,7 @@ impl App {
             help_bar_items: Vec::new(),
             tick_count: 0,
             scrub_dragging: false,
+            scrub_preview_ratio: None,
 
             library: LibraryState::new(),
             search: SearchState::new(),

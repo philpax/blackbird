@@ -476,7 +476,19 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            // Send a final seek so the playback thread lands exactly where
+            // the user released, even if the last drag seek was debounced.
+            if app.scrub_dragging
+                && let Some(preview) = app.scrub_preview_ratio
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                let seek_pos = std::time::Duration::from_secs_f32(
+                    details.track_duration.as_secs_f32() * preview,
+                );
+                app.logic.seek_current(seek_pos);
+            }
             app.scrub_dragging = false;
+            app.scrub_preview_ratio = None;
             ui::library::handle_mouse_up(app);
         }
         MouseEventKind::Drag(MouseButton::Left) => {

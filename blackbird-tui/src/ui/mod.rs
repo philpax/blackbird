@@ -257,17 +257,26 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         })
         .unwrap_or((0.0, 0.0));
 
-    let position_str = blackbird_core::util::seconds_to_hms_string(position_secs as u32, true);
+    // Use the preview ratio during scrub bar drags for instant visual feedback,
+    // falling back to the playback thread's reported position otherwise.
+    let (ratio, display_position_secs) = if let Some(preview) = app.scrub_preview_ratio {
+        let r = preview.clamp(0.0, 1.0);
+        (r, r * duration_secs)
+    } else if duration_secs > 0.0 {
+        (
+            (position_secs / duration_secs).clamp(0.0, 1.0),
+            position_secs,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+
+    let position_str =
+        blackbird_core::util::seconds_to_hms_string(display_position_secs as u32, true);
     let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
     let volume = app.logic.get_volume();
 
     let label = format!(" {position_str} / {duration_str} ");
-
-    let ratio = if duration_secs > 0.0 {
-        (position_secs / duration_secs).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
 
     // Split area: scrub bar | volume slider.
     let sv = layout::split_scrub_volume(area);
@@ -413,6 +422,7 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
     } else if x >= sv.scrub_bar.x && x < sv.scrub_bar.x + sv.scrub_bar.width {
         // Click on scrub bar → seek
         let ratio = (x - sv.scrub_bar.x) as f32 / sv.scrub_bar.width as f32;
+        app.scrub_preview_ratio = Some(ratio);
         if let Some(details) = app.logic.get_track_display_details() {
             let seek_pos = Duration::from_secs_f32(details.track_duration.as_secs_f32() * ratio);
             app.logic.seek_current(seek_pos);
