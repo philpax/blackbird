@@ -1520,7 +1520,12 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             }
         }
         LibraryEntry::GroupSpacer { .. } => {
-            // Spacers are not interactable outside the art area.
+            // Spacers can't be clicked to play, but should allow drag-scrolling.
+            // Setting click_pending with the spacer index is safe because
+            // handle_mouse_up only plays Track entries.
+            app.library.click_pending = Some((x, y, index));
+            app.library.dragging = false;
+            app.library.drag_last_y = Some(y);
         }
     }
 }
