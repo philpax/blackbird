@@ -262,12 +262,15 @@ pub fn library_geometry(
 
 pub const PAGE_SCROLL_SIZE: usize = 20;
 pub const SCROLL_WHEEL_STEPS: usize = 6;
+/// Margin (in lines) to keep between the cursor and viewport edge during
+/// incremental keyboard navigation (arrows, page up/down).
+pub const SCROLL_MARGIN: usize = 5;
 
 // Drag inertia scrolling parameters.
-pub const INERTIA_FRICTION: f64 = 0.6;
-pub const INERTIA_STOP_THRESHOLD: f64 = 0.5;
+pub const INERTIA_FRICTION: f64 = 0.973;
+pub const INERTIA_STOP_THRESHOLD: f64 = 0.1;
 /// Multiplier applied to the drag velocity when seeding inertia on release.
-pub const INERTIA_INITIAL_BOOST: f64 = 3.0;
+pub const INERTIA_INITIAL_BOOST: f64 = 0.7;
 /// Exponential smoothing factor for drag velocity (0 = no smoothing, 1 = ignore new samples).
 pub const DRAG_VELOCITY_SMOOTHING: f64 = 0.3;
 pub use blackbird_client_shared::{SEEK_STEP_SECS, VOLUME_STEP};

@@ -116,11 +116,9 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let tick_rate = Duration::from_millis(app.config.general.tick_rate_ms);
     let result = run_app(
         &mut terminal,
         &mut app,
-        tick_rate,
         #[cfg(feature = "media-controls")]
         &mut media_controls,
         #[cfg(feature = "tray-icon")]
@@ -160,10 +158,12 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
+/// Duration for high-frequency ticks during animations (inertia scrolling).
+const ANIMATION_TICK_RATE: Duration = Duration::from_millis(16);
+
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
-    tick_rate: Duration,
     #[cfg(feature = "media-controls")] media_controls: &mut Option<
         blackbird_client_shared::controls::Controls,
     >,
@@ -180,6 +180,12 @@ fn run_app(
         let term_size = terminal.size()?;
         let size = Rect::new(0, 0, term_size.width, term_size.height);
 
+        // Use a fast tick rate when inertia animation is active for smooth scrolling.
+        let tick_rate = if app.library.inertia_velocity != 0.0 && !app.library.dragging {
+            ANIMATION_TICK_RATE
+        } else {
+            Duration::from_millis(app.config.general.tick_rate_ms)
+        };
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             let mut scroll_delta: i32 = 0;
