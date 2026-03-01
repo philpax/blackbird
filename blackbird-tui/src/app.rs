@@ -164,6 +164,7 @@ impl App {
             let state = state.read().unwrap();
             if let Some(index) = self.library.find_flat_index_for_track(&state, &track_id) {
                 self.library.selected_index = index;
+                self.library.center_viewport_on_selection();
             } else {
                 // Track not in library yet, re-queue.
                 self.library.scroll_to_track = Some(track_id);
