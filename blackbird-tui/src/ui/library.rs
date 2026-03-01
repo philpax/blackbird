@@ -71,13 +71,17 @@ pub enum LibraryEntry {
         /// (i.e., `track_count + spacer_index`), used for art row calculation.
         art_row_index: usize,
     },
+    /// Blank row between albums for visual spacing.
+    AlbumGap,
 }
 
 impl LibraryEntry {
     pub fn height(&self) -> usize {
         match self {
             LibraryEntry::GroupHeader { .. } => 2,
-            LibraryEntry::Track { .. } | LibraryEntry::GroupSpacer { .. } => 1,
+            LibraryEntry::Track { .. }
+            | LibraryEntry::GroupSpacer { .. }
+            | LibraryEntry::AlbumGap => 1,
         }
     }
 }
@@ -129,6 +133,7 @@ pub struct LibraryState {
     cached_flat_library: Vec<LibraryEntry>,
     flat_library_dirty: bool,
     album_art_style: AlbumArtStyle,
+    album_spacing: usize,
 }
 
 impl LibraryState {
@@ -153,6 +158,7 @@ impl LibraryState {
             cached_flat_library: Vec::new(),
             flat_library_dirty: true,
             album_art_style: AlbumArtStyle::default(),
+            album_spacing: 1,
         }
     }
 
@@ -160,6 +166,14 @@ impl LibraryState {
     pub fn set_album_art_style(&mut self, style: AlbumArtStyle) {
         if self.album_art_style != style {
             self.album_art_style = style;
+            self.flat_library_dirty = true;
+        }
+    }
+
+    /// Update the album spacing (blank rows between albums).
+    pub fn set_album_spacing(&mut self, spacing: usize) {
+        if self.album_spacing != spacing {
+            self.album_spacing = spacing;
             self.flat_library_dirty = true;
         }
     }
@@ -173,7 +187,9 @@ impl LibraryState {
     pub fn selected_track_id(&self) -> Option<&TrackId> {
         match self.cached_flat_library.get(self.selected_index)? {
             LibraryEntry::Track { id, .. } => Some(id),
-            LibraryEntry::GroupHeader { .. } | LibraryEntry::GroupSpacer { .. } => None,
+            LibraryEntry::GroupHeader { .. }
+            | LibraryEntry::GroupSpacer { .. }
+            | LibraryEntry::AlbumGap => None,
         }
     }
 
@@ -205,8 +221,9 @@ impl LibraryState {
         let state = logic.get_state();
         let state = state.read().unwrap();
 
+        let group_count = state.library.groups.len();
         self.cached_flat_library.clear();
-        for group in &state.library.groups {
+        for (group_index, group) in state.library.groups.iter().enumerate() {
             let created = state
                 .library
                 .albums
@@ -254,6 +271,13 @@ impl LibraryState {
                     });
                 }
             }
+
+            // Add blank gap rows between albums (not after the last group).
+            if group_index + 1 < group_count {
+                for _ in 0..self.album_spacing {
+                    self.cached_flat_library.push(LibraryEntry::AlbumGap);
+                }
+            }
         }
     }
 
@@ -263,8 +287,9 @@ impl LibraryState {
         state: &bc::AppState,
         target_track_id: &TrackId,
     ) -> Option<usize> {
+        let group_count = state.library.groups.len();
         let mut index = 0;
-        for group in &state.library.groups {
+        for (group_index, group) in state.library.groups.iter().enumerate() {
             index += 1; // group header
             let mut track_count = 0;
             for track_id in &group.tracks {
@@ -281,6 +306,10 @@ impl LibraryState {
                 && track_count < super::layout::LARGE_ART_TERM_ROWS
             {
                 index += super::layout::LARGE_ART_TERM_ROWS - track_count;
+            }
+            // Account for album gap entries (not after the last group).
+            if group_index + 1 < group_count {
+                index += self.album_spacing;
             }
         }
         None
@@ -532,6 +561,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let album_art_style = app.config.shared.layout.album_art_style;
     app.library.set_album_art_style(album_art_style);
+    app.library
+        .set_album_spacing(app.config.shared.layout.album_spacing);
 
     // Pre-compute quadrant colors only for visible group headers (used in LeftOfAlbum mode).
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
@@ -946,6 +977,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
                     ListItem::new(Line::from(spans))
                 }
+                LibraryEntry::AlbumGap => ListItem::new(Line::from("")),
             }
         })
         .collect();
@@ -1065,14 +1097,19 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
             if is_over_below_album_art(album_art_style, mx, area, entry) {
                 return None;
             }
-            // For group headers, heart is only on line 2 (index 1)
-            if let LibraryEntry::GroupHeader { .. } = entry {
-                if inner_y - line == 1 {
+            match entry {
+                // For group headers, heart is only on line 2 (index 1).
+                LibraryEntry::GroupHeader { .. } => {
+                    if inner_y - line == 1 {
+                        return Some(i);
+                    }
+                    return None;
+                }
+                LibraryEntry::Track { .. } | LibraryEntry::GroupSpacer { .. } => {
                     return Some(i);
                 }
-                return None;
+                LibraryEntry::AlbumGap => return None,
             }
-            return Some(i);
         }
         line += h;
     }
@@ -1181,7 +1218,9 @@ fn render_scrollbar_with_library_indicator(
                 };
                 groups.push((label, entry.height()));
             }
-            LibraryEntry::Track { .. } | LibraryEntry::GroupSpacer { .. } => {
+            LibraryEntry::Track { .. }
+            | LibraryEntry::GroupSpacer { .. }
+            | LibraryEntry::AlbumGap => {
                 if let Some(last) = groups.last_mut() {
                     last.1 += entry.height();
                 }
@@ -1308,7 +1347,7 @@ pub fn handle_key(app: &mut App, action: Action) {
                         app.logic.set_album_starred(&album_id, !starred);
                         app.library.mark_dirty();
                     }
-                    LibraryEntry::GroupSpacer { .. } => {}
+                    LibraryEntry::GroupSpacer { .. } | LibraryEntry::AlbumGap => {}
                 }
             }
         }
@@ -1524,9 +1563,9 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                 app.library.drag_last_y = Some(y);
             }
         }
-        LibraryEntry::GroupSpacer { .. } => {
-            // Spacers can't be clicked to play, but should allow drag-scrolling.
-            // Setting click_pending with the spacer index is safe because
+        LibraryEntry::GroupSpacer { .. } | LibraryEntry::AlbumGap => {
+            // Spacers and gaps can't be clicked to play, but should allow drag-scrolling.
+            // Setting click_pending with the index is safe because
             // handle_mouse_up only plays Track entries.
             app.library.click_pending = Some((x, y, index));
             app.library.dragging = false;
@@ -1626,7 +1665,9 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
                         _ => None,
                     }
                 }
-                Some(LibraryEntry::GroupSpacer { .. }) | None => None,
+                Some(LibraryEntry::GroupSpacer { .. }) | Some(LibraryEntry::AlbumGap) | None => {
+                    None
+                }
             };
             if let Some(idx) = target {
                 app.library.selected_index = idx;
@@ -1696,7 +1737,9 @@ fn select_center_of_viewport(app: &mut App) -> Option<()> {
             Some(LibraryEntry::Track { .. }) => idx + 1,
             _ => return None,
         },
-        Some(LibraryEntry::GroupSpacer { .. }) | None => return None,
+        Some(LibraryEntry::GroupSpacer { .. }) | Some(LibraryEntry::AlbumGap) | None => {
+            return None;
+        }
     };
     app.library.selected_index = target;
     Some(())

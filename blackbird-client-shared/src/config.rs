@@ -41,14 +41,22 @@ pub struct Layout {
     /// How album art is displayed in the library view.
     #[serde(default)]
     pub album_art_style: AlbumArtStyle,
+    /// Number of blank rows between albums in the library view.
+    #[serde(default = "default_album_spacing")]
+    pub album_spacing: usize,
 }
 impl Default for Layout {
     fn default() -> Self {
         Self {
             show_inline_lyrics: true,
             album_art_style: AlbumArtStyle::default(),
+            album_spacing: default_album_spacing(),
         }
     }
+}
+
+fn default_album_spacing() -> usize {
+    1
 }
 
 /// Shared configuration fields used by both the egui and TUI clients.

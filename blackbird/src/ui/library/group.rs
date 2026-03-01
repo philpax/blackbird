@@ -15,7 +15,6 @@ use super::track;
 
 pub const GROUP_ARTIST_LINE_COUNT: usize = 1;
 pub const GROUP_ALBUM_LINE_COUNT: usize = 1;
-pub const GROUP_MARGIN_BOTTOM_ROW_COUNT: usize = 1;
 
 pub const GROUP_ALBUM_ART_SIZE: f32 = 128.0;
 // Should be roughly synchronised to GROUP_ALBUM_ART_SIZE
@@ -330,7 +329,7 @@ fn render_tracks<'a>(
     }
 }
 
-pub fn line_count(group: &Group, album_art_style: AlbumArtStyle) -> usize {
+pub fn line_count(group: &Group, album_art_style: AlbumArtStyle, album_spacing: usize) -> usize {
     let track_lines = group.tracks.len();
 
     let min_track_lines = match album_art_style {
@@ -338,10 +337,7 @@ pub fn line_count(group: &Group, album_art_style: AlbumArtStyle) -> usize {
         AlbumArtStyle::BelowAlbum => track_lines.max(GROUP_ALBUM_ART_LINE_COUNT),
     };
 
-    GROUP_ARTIST_LINE_COUNT
-        + GROUP_ALBUM_LINE_COUNT
-        + min_track_lines
-        + GROUP_MARGIN_BOTTOM_ROW_COUNT
+    GROUP_ARTIST_LINE_COUNT + GROUP_ALBUM_LINE_COUNT + min_track_lines + album_spacing
 }
 
 pub fn line_count_for_group_and_track(group: &Group, track_id: &TrackId) -> usize {
@@ -355,6 +351,7 @@ pub fn target_scroll_height_for_track(
     spaced_row_height: f32,
     track_id: &TrackId,
     album_art_style: AlbumArtStyle,
+    album_spacing: usize,
 ) -> Option<f32> {
     let track = state.library.track_map.get(track_id)?;
     let album_id = track.album_id.as_ref()?;
@@ -366,7 +363,7 @@ pub fn target_scroll_height_for_track(
             break;
         }
 
-        scroll_to_rows += line_count(group, album_art_style);
+        scroll_to_rows += line_count(group, album_art_style, album_spacing);
     }
 
     Some(scroll_to_rows as f32 * spaced_row_height)

@@ -20,6 +20,7 @@ pub fn compute_positions(
     logic: &mut bc::Logic,
     state: &mut LibraryScrollState,
     album_art_style: AlbumArtStyle,
+    album_spacing: usize,
 ) {
     let app_state = logic.get_state();
     let app_state = app_state.read().unwrap();
@@ -64,7 +65,7 @@ pub fn compute_positions(
                     )
                 }
             };
-            let line_count = group::line_count(grp, album_art_style);
+            let line_count = group::line_count(grp, album_art_style, album_spacing);
             (label, line_count)
         })
         .collect();
@@ -76,6 +77,7 @@ pub fn compute_positions(
 }
 
 /// Renders scroll indicator labels to the right side where the scrollbar would be
+#[allow(clippy::too_many_arguments)]
 pub fn render(
     ui: &mut Ui,
     style: &style::Style,
@@ -84,6 +86,7 @@ pub fn render(
     app_state: &bc::AppState,
     playing_track_id: Option<&TrackId>,
     album_art_style: AlbumArtStyle,
+    album_spacing: usize,
 ) {
     if state.positions.is_empty() {
         return;
@@ -93,7 +96,7 @@ pub fn render(
     if state.cached_playing_track_id.as_ref() != playing_track_id {
         state.cached_playing_track_id = playing_track_id.cloned();
         state.cached_playing_track_position = playing_track_id.and_then(|track_id| {
-            compute_track_position_fraction(app_state, track_id, album_art_style)
+            compute_track_position_fraction(app_state, track_id, album_art_style, album_spacing)
         });
     }
 
@@ -137,6 +140,7 @@ fn compute_track_position_fraction(
     app_state: &bc::AppState,
     track_id: &TrackId,
     album_art_style: AlbumArtStyle,
+    album_spacing: usize,
 ) -> Option<f32> {
     let track = app_state.library.track_map.get(track_id)?;
     let album_id = track.album_id.as_ref()?;
@@ -150,7 +154,7 @@ fn compute_track_position_fraction(
             break;
         }
 
-        current_row += group::line_count(group, album_art_style);
+        current_row += group::line_count(group, album_art_style, album_spacing);
     }
 
     let track_row = track_row?;
@@ -158,7 +162,7 @@ fn compute_track_position_fraction(
         .library
         .groups
         .iter()
-        .map(|g| group::line_count(g, album_art_style))
+        .map(|g| group::line_count(g, album_art_style, album_spacing))
         .sum();
 
     if total_rows == 0 {

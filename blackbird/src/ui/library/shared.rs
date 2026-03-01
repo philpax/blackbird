@@ -128,6 +128,7 @@ pub(crate) fn render_library_view(
         }
 
         let album_art_style = config.shared.layout.album_art_style;
+        let album_spacing = config.shared.layout.album_spacing;
 
         // Compute library scroll positions if library was populated
         if view_state.library_scroll.needs_update {
@@ -135,6 +136,7 @@ pub(crate) fn render_library_view(
                 logic,
                 &mut view_state.library_scroll,
                 album_art_style,
+                album_spacing,
             );
             view_state.library_scroll.needs_update = false;
         }
@@ -161,8 +163,9 @@ pub(crate) fn render_library_view(
         ui.style_mut().visuals.extreme_bg_color = config.style.background_color32();
 
         let spaced_row_height = util::spaced_row_height(ui);
-        let total_rows = logic.calculate_total_rows(|g| group::line_count(g, album_art_style))
-            - group::GROUP_MARGIN_BOTTOM_ROW_COUNT;
+        let total_rows = logic
+            .calculate_total_rows(|g| group::line_count(g, album_art_style, album_spacing))
+            - album_spacing;
 
         let area_offset_y = ui.cursor().top();
         let playing_track_id = logic.get_playing_track_id();
@@ -190,6 +193,7 @@ pub(crate) fn render_library_view(
                         spaced_row_height,
                         id,
                         album_art_style,
+                        album_spacing,
                     )
                 }) {
                     let target_height = area_offset_y + scroll_to_height - viewport.min.y;
@@ -219,13 +223,13 @@ pub(crate) fn render_library_view(
 
                 // Calculate which groups are in view
                 let visible_groups = logic.get_visible_groups(visible_row_range.clone(), |g| {
-                    group::line_count(g, album_art_style)
+                    group::line_count(g, album_art_style, album_spacing)
                 });
 
                 let mut current_row = visible_groups.start_row;
 
                 for grp in visible_groups.groups {
-                    let group_lines = group::line_count(&grp, album_art_style);
+                    let group_lines = group::line_count(&grp, album_art_style, album_spacing);
 
                     // Calculate the Y position for this group
                     let group_y = current_row as f32 * spaced_row_height;
@@ -234,8 +238,7 @@ pub(crate) fn render_library_view(
                         pos2(ui.min_rect().left(), ui.min_rect().top() + group_y),
                         vec2(
                             ui.available_width(),
-                            (group_lines - 2 * group::GROUP_MARGIN_BOTTOM_ROW_COUNT) as f32
-                                * spaced_row_height,
+                            (group_lines - 2 * album_spacing) as f32 * spaced_row_height,
                         ),
                     );
 
@@ -280,6 +283,7 @@ pub(crate) fn render_library_view(
             &logic.get_state().read().unwrap(),
             playing_track_id.as_ref(),
             album_art_style,
+            album_spacing,
         );
 
         // Display incremental search query overlay
