@@ -768,11 +768,15 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     // Build left side: art/indent + track number + play icon + title + playcount
                     let mut left_spans: Vec<Span<'_>> = Vec::new();
                     let mut left_width: usize;
+                    // Index into spans where underline-eligible content starts
+                    // (after art/indent, at the track number).
+                    let underline_start: usize;
 
                     match album_art_style {
                         AlbumArtStyle::LeftOfAlbum => {
                             left_spans.push(Span::raw(" ".repeat(super::layout::TRACK_INDENT)));
                             left_width = super::layout::TRACK_INDENT;
+                            underline_start = 1;
                         }
                         AlbumArtStyle::BelowAlbum => {
                             let art_display_cols = large_art_cols as usize;
@@ -819,6 +823,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                                 left_spans.push(Span::raw(" ".repeat(indent_width)));
                             }
                             left_width = indent_width;
+                            underline_start = left_spans.len();
                         }
                     }
 
@@ -886,8 +891,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     spans.extend(right_spans);
 
                     if underline_index == Some(i) {
-                        // Skip the leading indent/art span(s).
-                        for span in &mut spans[1..] {
+                        // Skip the leading indent/art spans.
+                        for span in &mut spans[underline_start..] {
                             span.style = span.style.add_modifier(Modifier::UNDERLINED);
                         }
                     }
