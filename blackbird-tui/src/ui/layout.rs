@@ -262,9 +262,6 @@ pub fn library_geometry(
 
 pub const PAGE_SCROLL_SIZE: usize = 20;
 pub const SCROLL_WHEEL_STEPS: usize = 6;
-/// Margin (in lines) to keep between the cursor and viewport edge during
-/// incremental keyboard navigation (arrows, page up/down).
-pub const SCROLL_MARGIN: usize = 5;
 
 // Drag inertia scrolling parameters.
 pub const INERTIA_FRICTION: f64 = 0.973;

@@ -114,21 +114,15 @@ impl App {
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             if let PlaybackToLogicMessage::TrackStarted(tap) = event {
-                // Auto-follow the playing track unless the user has scrolled
-                // away. Re-follow if the new track is visible in the current
-                // viewport (the user hasn't scrolled far).
-                if !self.library.follow_playback {
+                // Scroll to the new track unless it is already visible.
+                let visible = {
                     let state = self.logic.get_state();
                     let state = state.read().unwrap();
-                    if let Some(idx) = self
-                        .library
+                    self.library
                         .find_flat_index_for_track(&state, &tap.track_id)
-                        && self.library.is_index_visible(idx)
-                    {
-                        self.library.follow_playback = true;
-                    }
-                }
-                if self.library.follow_playback {
+                        .is_some_and(|idx| self.library.is_index_visible(idx))
+                };
+                if !visible {
                     self.library.scroll_to_track = Some(tap.track_id.clone());
                 }
                 self.library.needs_scroll_to_playing = false;

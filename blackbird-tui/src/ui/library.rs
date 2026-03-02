@@ -108,9 +108,6 @@ pub struct LibraryState {
     pub selected_index: usize,
     pub needs_scroll_to_playing: bool,
     pub scroll_to_track: Option<TrackId>,
-    /// Whether to auto-follow the playing track on track transitions. Set to
-    /// `false` when the user manually scrolls/drags, restored by GotoPlaying.
-    pub follow_playback: bool,
 
     // Mouse interaction
     pub click_pending: Option<(u16, u16, usize)>,
@@ -141,7 +138,6 @@ impl LibraryState {
             selected_index: 0,
             needs_scroll_to_playing: true,
             scroll_to_track: None,
-            follow_playback: true,
 
             click_pending: None,
             dragging: false,
@@ -326,11 +322,10 @@ impl LibraryState {
         self.viewport_line = line_offset.saturating_sub(half_height).min(max_viewport);
     }
 
-    /// Scrolls the viewport just enough to keep `selected_index` visible,
-    /// with a margin from the viewport edges. Unlike `center_viewport_on_selection`,
-    /// this avoids jarring snaps when the cursor is already on-screen.
+    /// Centers the viewport on `selected_index` only if it is outside the
+    /// visible area. Leaves the viewport untouched when the cursor is already
+    /// on-screen, avoiding jarring snaps during keyboard navigation.
     pub fn ensure_viewport_shows_selection(&mut self) {
-        let margin = super::layout::SCROLL_MARGIN;
         let mut line_offset = 0usize;
         for entry in self.cached_flat_library.iter().take(self.selected_index) {
             line_offset += entry.height();
@@ -340,20 +335,14 @@ impl LibraryState {
             .get(self.selected_index)
             .map(LibraryEntry::height)
             .unwrap_or(1);
-        let total_lines = total_entry_lines(&self.cached_flat_library);
-        let max_viewport = total_lines.saturating_sub(self.last_visible_height);
 
-        // Cursor above viewport + margin: scroll up.
-        if line_offset < self.viewport_line + margin {
-            self.viewport_line = line_offset.saturating_sub(margin);
+        let above = line_offset < self.viewport_line;
+        let below = line_offset + entry_height > self.viewport_line + self.last_visible_height;
+
+        // Only scroll if the selected entry is completely outside the viewport.
+        if above || below {
+            self.center_viewport_on_selection();
         }
-        // Cursor below viewport - margin: scroll down.
-        let bottom = self.viewport_line + self.last_visible_height;
-        if line_offset + entry_height + margin > bottom {
-            self.viewport_line =
-                (line_offset + entry_height + margin).saturating_sub(self.last_visible_height);
-        }
-        self.viewport_line = self.viewport_line.min(max_viewport);
     }
 
     /// Returns whether the entry at the given flat index is visible in the
@@ -1373,7 +1362,6 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::Queue => app.toggle_queue(),
         Action::VolumeMode => app.volume_editing = true,
         Action::GotoPlaying => {
-            app.library.follow_playback = true;
             if let Some(track_id) = app.logic.get_playing_track_id() {
                 app.library.scroll_to_track = Some(track_id);
             }
@@ -1656,7 +1644,6 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
     let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
 
     if x >= scroll_area_start && y >= library_area.y && y < library_area.y + library_area.height {
-        app.library.follow_playback = false;
         let entries = app.library.get_flat_library(&app.logic).to_vec();
         scroll_to_y(app, &entries, library_area, y);
         app.library.click_pending = None;
@@ -1667,7 +1654,6 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
 
     // Content drag → pan library by tracking viewport line offset.
     if app.library.click_pending.is_some() || app.library.dragging {
-        app.library.follow_playback = false;
         app.library.inertia_velocity = 0.0;
         let entries = app.library.get_flat_library(&app.logic).to_vec();
         let total_lines = total_entry_lines(&entries);
@@ -1772,7 +1758,6 @@ pub fn handle_mouse_up(app: &mut App) {
 
 /// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
 pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
-    app.library.follow_playback = false;
     app.library.cancel_inertia(&app.logic);
     let entries = app.library.get_flat_library(&app.logic);
     let total_lines = total_entry_lines(entries);
