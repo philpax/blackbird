@@ -15,6 +15,8 @@ pub enum SortOrder {
     NewestFirst,
     /// Sort albums by when they were added to the library, most recent first.
     RecentlyAdded,
+    /// Sort albums by average playcount per listened track, most played first.
+    MostPlayed,
 }
 
 impl SortOrder {
@@ -24,6 +26,7 @@ impl SortOrder {
             SortOrder::Alphabetical => "a-z",
             SortOrder::NewestFirst => "newest",
             SortOrder::RecentlyAdded => "recent",
+            SortOrder::MostPlayed => "most played",
         }
     }
 }

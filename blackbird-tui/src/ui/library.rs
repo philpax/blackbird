@@ -30,6 +30,7 @@ fn scroll_indicator_width(sort_order: SortOrder) -> usize {
     match sort_order {
         SortOrder::Alphabetical => 1,
         SortOrder::NewestFirst | SortOrder::RecentlyAdded => 4,
+        SortOrder::MostPlayed => 0,
     }
 }
 
@@ -1249,6 +1250,7 @@ fn render_scrollbar_with_library_indicator(
                             .filter(|s| !s.is_empty())
                             .unwrap_or_else(|| "?".to_string()),
                     ),
+                    SortOrder::MostPlayed => Cow::Borrowed(""),
                 };
                 groups.push((label, entry.height()));
             }

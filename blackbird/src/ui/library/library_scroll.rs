@@ -64,6 +64,10 @@ pub fn compute_positions(
                             .unwrap_or_else(|| "?".to_string()),
                     )
                 }
+                SortOrder::MostPlayed => {
+                    // No meaningful scroll label for playcount sorting.
+                    Cow::Borrowed("")
+                }
             };
             let line_count = group::line_count(grp, album_art_style, album_spacing);
             (label, line_count)

@@ -39,7 +39,8 @@ pub fn toggle_sort_order(current: SortOrder) -> SortOrder {
     match current {
         SortOrder::Alphabetical => SortOrder::NewestFirst,
         SortOrder::NewestFirst => SortOrder::RecentlyAdded,
-        SortOrder::RecentlyAdded => SortOrder::Alphabetical,
+        SortOrder::RecentlyAdded => SortOrder::MostPlayed,
+        SortOrder::MostPlayed => SortOrder::Alphabetical,
     }
 }
 

@@ -173,6 +173,42 @@ impl Library {
                         .then_with(|| cmp_artist_year_album(a, b))
                 });
             }
+            SortOrder::MostPlayed => {
+                // Sort by average playcount per listened track (descending).
+                // Groups with no listened tracks sort last.
+                let track_map = &self.track_map;
+                self.groups.sort_by(|a, b| {
+                    let avg_playcount = |group: &Group| -> Option<f64> {
+                        let mut total: u64 = 0;
+                        let mut count: u64 = 0;
+                        for track_id in &group.tracks {
+                            if let Some(track) = track_map.get(track_id)
+                                && let Some(pc) = track.play_count
+                                && pc > 0
+                            {
+                                total += pc;
+                                count += 1;
+                            }
+                        }
+                        if count > 0 {
+                            Some(total as f64 / count as f64)
+                        } else {
+                            None
+                        }
+                    };
+                    let avg_a = avg_playcount(a);
+                    let avg_b = avg_playcount(b);
+                    match (avg_a, avg_b) {
+                        (Some(a_val), Some(b_val)) => b_val
+                            .partial_cmp(&a_val)
+                            .unwrap_or(Ordering::Equal)
+                            .then_with(|| cmp_artist_year_album(a, b)),
+                        (Some(_), None) => Ordering::Less,
+                        (None, Some(_)) => Ordering::Greater,
+                        (None, None) => cmp_artist_year_album(a, b),
+                    }
+                });
+            }
         }
 
         // Rebuild track_ids from reordered groups.
