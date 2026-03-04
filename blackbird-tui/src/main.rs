@@ -171,9 +171,23 @@ fn run_app(
     #[cfg(feature = "tray-icon")] tray_icon: &blackbird_client_shared::tray::TrayIcon,
 ) -> anyhow::Result<()> {
     let mut last_tick = Instant::now();
+    let mut last_full_redraw = Instant::now();
+
+    /// Interval between full terminal redraws to repair damage from
+    /// rogue library output (e.g. glib warnings written to stderr).
+    const FULL_REDRAW_INTERVAL: Duration = Duration::from_secs(5);
 
     loop {
         if app.needs_redraw {
+            // Periodically invalidate the diff buffer so the next draw
+            // rewrites every cell, repairing any terminal corruption
+            // caused by external library output (e.g. glib warnings).
+            // Unlike `terminal.clear()`, this doesn't send a clear
+            // escape sequence, so there's no visible flicker.
+            if last_full_redraw.elapsed() >= FULL_REDRAW_INTERVAL {
+                terminal.swap_buffers();
+                last_full_redraw = Instant::now();
+            }
             terminal.draw(|frame| ui::draw(frame, app))?;
             app.needs_redraw = false;
         }
