@@ -26,11 +26,11 @@ use super::{StyleExt, string_to_color};
 
 /// Returns the width of the scroll indicator based on sort order.
 /// Alphabetical uses single letters (1 char), year-based modes use full years (4 chars).
+/// Modes without labels still need 1 column for the scrollbar track.
 fn scroll_indicator_width(sort_order: SortOrder) -> usize {
     match sort_order {
-        SortOrder::Alphabetical => 1,
+        SortOrder::Alphabetical | SortOrder::MostPlayed => 1,
         SortOrder::NewestFirst | SortOrder::RecentlyAdded => 4,
-        SortOrder::MostPlayed => 0,
     }
 }
 

@@ -31,6 +31,12 @@ pub fn compute_positions<'a>(
     }
 
     for (label, line_count) in entries {
+        // Skip empty labels (e.g. sort modes without meaningful categories).
+        if label.is_empty() {
+            current_line += line_count;
+            continue;
+        }
+
         let label_upper = label.to_uppercase();
 
         if last_label.as_ref() != Some(&label_upper) {

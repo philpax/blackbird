@@ -92,11 +92,7 @@ pub fn render(
     album_art_style: AlbumArtStyle,
     album_spacing: usize,
 ) {
-    if state.positions.is_empty() {
-        return;
-    }
-
-    // Update cached playing track position if track changed
+    // Update cached playing track position if track changed.
     if state.cached_playing_track_id.as_ref() != playing_track_id {
         state.cached_playing_track_id = playing_track_id.cloned();
         state.cached_playing_track_position = playing_track_id.and_then(|track_id| {
@@ -104,29 +100,29 @@ pub fn render(
         });
     }
 
-    let font_id = TextStyle::Body.resolve(ui.style());
-    let label_color = style.text_color32();
-
     let viewport_height = viewport_rect.height();
-
-    // Map fractions to pixel positions
-    // Clustering is already done in the precomputation step
     let scroll_style = &ui.style().spacing.scroll;
-    let label_x =
-        viewport_rect.right() - scroll_style.bar_outer_margin - scroll_style.bar_width / 2.0;
 
-    for (label, fraction) in &state.positions {
-        let y = viewport_rect.top() + (fraction * viewport_height);
-        ui.painter().text(
-            pos2(label_x, y),
-            Align2::CENTER_CENTER,
-            label,
-            font_id.clone(),
-            label_color,
-        );
+    // Draw category labels along the scrollbar (if any).
+    if !state.positions.is_empty() {
+        let font_id = TextStyle::Body.resolve(ui.style());
+        let label_color = style.text_color32();
+        let label_x =
+            viewport_rect.right() - scroll_style.bar_outer_margin - scroll_style.bar_width / 2.0;
+
+        for (label, fraction) in &state.positions {
+            let y = viewport_rect.top() + (fraction * viewport_height);
+            ui.painter().text(
+                pos2(label_x, y),
+                Align2::CENTER_CENTER,
+                label,
+                font_id.clone(),
+                label_color,
+            );
+        }
     }
 
-    // Draw indicator line for currently playing track
+    // Draw indicator line for currently playing track.
     if let Some(position_fraction) = state.cached_playing_track_position {
         let y = viewport_rect.top() + (position_fraction * viewport_height);
         let line_start_x = viewport_rect.right() - scroll_style.bar_width - 1.0;
