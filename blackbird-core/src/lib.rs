@@ -954,6 +954,42 @@ impl Logic {
     }
 }
 impl Logic {
+    /// Reloads the library with new server credentials. Stops playback,
+    /// replaces the client, clears the library and queue, and re-fetches.
+    pub fn reload_library(
+        &mut self,
+        base_url: String,
+        username: String,
+        password: String,
+        transcode: bool,
+    ) {
+        // Stop current playback.
+        self.playback_thread
+            .send(LogicToPlaybackMessage::StopPlayback);
+
+        // Create a new client with the new credentials.
+        self.client = Arc::new(bs::Client::new(
+            base_url,
+            username,
+            password,
+            "blackbird".to_string(),
+        ));
+        self.transcode = transcode;
+
+        // Clear the library and queue.
+        {
+            let mut st = self.write_state();
+            st.library = Default::default();
+            st.queue = Default::default();
+            st.current_track_and_position = None;
+            st.started_loading_track = None;
+            st.scrobble_state = Default::default();
+        }
+
+        // Re-fetch the library without restoring a track.
+        self.initial_fetch(None);
+    }
+
     fn initial_fetch(&self, restore_track: Option<(TrackId, Duration)>) {
         let client = self.client.clone();
         let state = self.state.clone();

@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, RwLock, atomic::AtomicBool};
 
 mod config;
 mod controls;
@@ -116,6 +116,9 @@ pub struct App {
     controls: std::mem::ManuallyDrop<controls::Controls>,
 
     config: Arc<RwLock<Config>>,
+    /// Suppresses the config reload thread while settings is open, preventing
+    /// disk values from clobbering in-memory edits.
+    config_reload_suppressed: Arc<AtomicBool>,
     _config_reload_thread: std::thread::JoinHandle<()>,
     _repaint_thread: std::thread::JoinHandle<()>,
     playback_to_logic_rx: bc::PlaybackToLogicRx,
@@ -140,11 +143,19 @@ impl App {
         library_populated_rx: std::sync::mpsc::Receiver<()>,
         #[cfg_attr(not(feature = "tray-icon"), allow(unused_variables))] icon: image::RgbaImage,
     ) -> Self {
+        let config_reload_suppressed = Arc::new(AtomicBool::new(false));
         let _config_reload_thread = std::thread::spawn({
             let config = config.clone();
+            let suppressed = config_reload_suppressed.clone();
             let egui_ctx = cc.egui_ctx.clone();
             move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(1));
+
+                // Skip reload while settings is open to avoid clobbering
+                // in-memory edits.
+                if suppressed.load(std::sync::atomic::Ordering::Relaxed) {
+                    continue;
+                }
 
                 let new_config = Config::load();
                 let current_config = config.read().unwrap();
@@ -231,6 +242,7 @@ impl App {
             controls: std::mem::ManuallyDrop::new(controls),
 
             config,
+            config_reload_suppressed,
             _config_reload_thread,
             _repaint_thread,
             playback_to_logic_rx: logic.subscribe_to_playback_events(),

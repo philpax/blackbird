@@ -7,6 +7,7 @@ pub(crate) mod lyrics;
 pub(crate) mod now_playing;
 pub(crate) mod queue;
 pub(crate) mod search;
+pub(crate) mod settings;
 
 use blackbird_client_shared::style as shared_style;
 use ratatui::{
@@ -131,7 +132,11 @@ fn hsv_to_color(hsv: shared_style::Hsv) -> Color {
 /// Builds half-block art spans for one terminal row from a 4x4 color grid,
 /// stretching to [`layout::art_cols()`] display columns via nearest-neighbor
 /// mapping.
-fn art_row_spans(colors: &ArtColors, top_row: usize, bot_row: usize) -> Vec<Span<'static>> {
+pub(crate) fn art_row_spans(
+    colors: &ArtColors,
+    top_row: usize,
+    bot_row: usize,
+) -> Vec<Span<'static>> {
     let cols = layout::art_cols();
     let mut spans = Vec::with_capacity(cols as usize);
     for col in 0..cols {
@@ -187,6 +192,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             &app.queue,
             &app.config.style,
             &app.logic,
+            main.content,
+        ),
+        FocusedPanel::Settings => settings::draw(
+            frame,
+            &mut app.settings,
+            &app.config.style,
+            &app.config,
             main.content,
         ),
     }
@@ -434,6 +446,7 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         FocusedPanel::Lyrics => keys::LYRICS_HELP,
         FocusedPanel::Logs => keys::LOGS_HELP,
         FocusedPanel::Queue => keys::QUEUE_HELP,
+        FocusedPanel::Settings => keys::SETTINGS_HELP,
     };
 
     let mut spans: Vec<Span> = Vec::new();

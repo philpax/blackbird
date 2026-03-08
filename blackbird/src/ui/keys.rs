@@ -53,6 +53,7 @@ pub const KEY_STAR: Key = Key::Num8; // '*' is Shift+8
 pub const KEY_VOLUME_UP: Key = Key::ArrowUp;
 pub const KEY_VOLUME_DOWN: Key = Key::ArrowDown;
 pub const KEY_TOGGLE_SORT: Key = Key::O;
+pub const KEY_SETTINGS: Key = Key::I;
 
 /// Actions that can be triggered by keyboard shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,6 +76,7 @@ pub enum Action {
     Quit,
     VolumeUp,
     VolumeDown,
+    Settings,
 }
 
 impl Action {
@@ -99,6 +101,7 @@ impl Action {
             Action::Quit => KEY_QUIT,
             Action::VolumeUp => KEY_VOLUME_UP,
             Action::VolumeDown => KEY_VOLUME_DOWN,
+            Action::Settings => KEY_SETTINGS,
         }
     }
 
@@ -149,6 +152,7 @@ impl Action {
             Action::Quit => "quit".into(),
             Action::VolumeUp => "vol+".into(),
             Action::VolumeDown => "vol-".into(),
+            Action::Settings => "settings".into(),
         };
 
         Some((key_label, description))
@@ -171,6 +175,7 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Pair(Action::VolumeUp, Action::VolumeDown, "vol+/-"),
     HelpEntry::Single(Action::CyclePlaybackMode),
     HelpEntry::Single(Action::ToggleSortOrder),
+    HelpEntry::Single(Action::Settings),
 ];
 
 /// Maps a key press to a library action.
@@ -196,6 +201,7 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
         KEY_STAR if shift => Some(Action::Star),
         KEY_VOLUME_UP => Some(Action::VolumeUp),
         KEY_VOLUME_DOWN => Some(Action::VolumeDown),
+        KEY_SETTINGS => Some(Action::Settings),
         _ => None,
     }
 }

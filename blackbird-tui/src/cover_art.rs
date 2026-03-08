@@ -481,7 +481,7 @@ fn image_aspect_ratio(data: &[u8]) -> Option<f64> {
 }
 
 /// Computes the average colour of each region in a 4×4 grid (4 cols, 4 rows).
-fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
+pub(crate) fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
     let Ok(img) = image::load_from_memory(image_data) else {
         return ArtColors::default();
     };
@@ -539,7 +539,7 @@ fn compute_quadrant_colors(image_data: &[u8]) -> ArtColors {
 }
 
 /// Computes a variable-size grid of averaged colours from image data.
-fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> ArtColorGrid {
+pub(crate) fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> ArtColorGrid {
     if cols == 0 || rows == 0 {
         return ArtColorGrid::empty(cols, rows);
     }

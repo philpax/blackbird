@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ui;
 
-#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Config {
     #[serde(default)]
@@ -34,7 +34,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct General {
     pub repaint_secs: f32,
@@ -63,7 +63,7 @@ impl Default for General {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Keybindings {
     /// Global hotkey to toggle search window (works even when app is not focused).

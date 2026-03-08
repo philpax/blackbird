@@ -52,6 +52,45 @@ macro_rules! style_fields {
                 }
             }
         }
+        impl Style {
+            /// Number of HSV color fields.
+            pub const FIELD_COUNT: usize = {
+                let mut count = 0usize;
+                $(let _ = stringify!($field); count += 1;)*
+                count
+            };
+
+            /// Array of `(field_name, human_label)` pairs for UI iteration.
+            pub const FIELD_NAMES: &[(&'static str, &'static str)] = &[
+                $((stringify!($field), stringify!($fn_name)),)*
+            ];
+
+            /// Returns a reference to the HSV field at the given index.
+            pub fn field(&self, index: usize) -> &Hsv {
+                let mut _i = 0usize;
+                $(
+                    if index == _i { return &self.$field; }
+                    _i += 1;
+                )*
+                panic!("style field index out of bounds: {index}");
+            }
+
+            /// Returns a mutable reference to the HSV field at the given index.
+            pub fn field_mut(&mut self, index: usize) -> &mut Hsv {
+                let mut _i = 0usize;
+                $(
+                    if index == _i { return &mut self.$field; }
+                    _i += 1;
+                )*
+                panic!("style field index out of bounds: {index}");
+            }
+
+            /// Returns the default value for the HSV field at the given index.
+            pub fn default_field(index: usize) -> Hsv {
+                let defaults: &[Hsv] = &[$($default,)*];
+                defaults[index]
+            }
+        }
     }
 }
 

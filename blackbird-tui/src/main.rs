@@ -377,6 +377,31 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
                 }
             }
         }
+        FocusedPanel::Settings => {
+            if let Some(action) = keys::settings_action(key, app.settings.editing) {
+                let (settings_action, server_changed) =
+                    ui::settings::handle_key(&mut app.settings, &mut app.config, action);
+                if server_changed {
+                    app.config.save();
+                    app.logic.reload_library(
+                        app.config.shared.server.base_url.clone(),
+                        app.config.shared.server.username.clone(),
+                        app.config.shared.server.password.clone(),
+                        app.config.shared.server.transcode,
+                    );
+                }
+                // Config changes are applied in-memory for live preview;
+                // disk save is deferred to settings exit or app exit.
+                if let Some(sa) = settings_action {
+                    match sa {
+                        ui::settings::SettingsAction::ToggleSettings => {
+                            app.config.save();
+                            app.toggle_settings();
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -488,6 +513,23 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Queue {
                     ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Settings {
+                    let server_changed = ui::settings::handle_mouse_click(
+                        &mut app.settings,
+                        &mut app.config,
+                        library_area,
+                        x,
+                        y,
+                    );
+                    if server_changed {
+                        app.config.save();
+                        app.logic.reload_library(
+                            app.config.shared.server.base_url.clone(),
+                            app.config.shared.server.username.clone(),
+                            app.config.shared.server.password.clone(),
+                            app.config.shared.server.transcode,
+                        );
+                    }
                 }
                 return;
             }
@@ -547,6 +589,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     .logs
                     .scroll_offset
                     .saturating_sub(ui::layout::SCROLL_WHEEL_STEPS);
+            } else if app.focused_panel == FocusedPanel::Settings {
+                ui::settings::scroll_selection(
+                    &mut app.settings,
+                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
+                );
             }
         }
         MouseEventKind::ScrollDown => {
@@ -570,6 +617,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     app.logs.scroll_offset =
                         (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
                 }
+            } else if app.focused_panel == FocusedPanel::Settings {
+                ui::settings::scroll_selection(
+                    &mut app.settings,
+                    ui::layout::SCROLL_WHEEL_STEPS as i32,
+                );
             }
         }
         _ => {}
@@ -586,7 +638,15 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
     };
 
     match action {
-        Action::Quit => app.quit_confirming = true,
+        Action::Quit => {
+            // In settings, "q" closes the panel rather than triggering quit.
+            if app.focused_panel == FocusedPanel::Settings {
+                app.config.save();
+                app.toggle_settings();
+            } else {
+                app.quit_confirming = true;
+            }
+        }
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
@@ -627,6 +687,7 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
             app.library.mark_dirty();
             app.library.scroll_to_track = scroll_target;
         }
+        Action::Settings => app.toggle_settings(),
         Action::Select => {
             if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_key(app, Action::Select);
@@ -671,6 +732,9 @@ fn apply_scroll(app: &mut App, scroll_delta: i32) {
             }
         }
         FocusedPanel::Search => {}
+        FocusedPanel::Settings => {
+            ui::settings::scroll_selection(&mut app.settings, direction * steps as i32);
+        }
     }
 }
 

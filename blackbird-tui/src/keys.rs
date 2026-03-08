@@ -47,6 +47,11 @@ pub enum Action {
     ClearLine,
     Char(char),
     DeleteChar,
+    Settings,
+    MoveLeft,
+    MoveRight,
+    ResetField,
+    ResetSection,
 }
 
 // ── Key code constants ───────────────────────────────────────────
@@ -82,6 +87,7 @@ pub const KEY_PAGE_DOWN: KeyCode = KeyCode::PageDown;
 pub const KEY_GOTO_TOP: KeyCode = KeyCode::Home;
 pub const KEY_GOTO_BOTTOM: KeyCode = KeyCode::End;
 pub const KEY_DELETE_CHAR: KeyCode = KeyCode::Backspace;
+pub const KEY_SETTINGS: KeyCode = KeyCode::Char('i');
 pub const KEY_CONFIRM_YES: KeyCode = KeyCode::Char('y');
 pub const KEY_CONFIRM_NO: KeyCode = KeyCode::Char('n');
 
@@ -127,6 +133,11 @@ impl Action {
                 let order = logic.get_sort_order().as_str();
                 (KEY_TOGGLE_SORT, format!("sort ({order})").into())
             }
+            Action::Settings => (KEY_SETTINGS, "settings".into()),
+            Action::MoveLeft => (KEY_LEFT, "left".into()),
+            Action::MoveRight => (KEY_RIGHT, "right".into()),
+            Action::ResetField => (KeyCode::Char('d'), "reset field".into()),
+            Action::ResetSection => (KeyCode::Char('D'), "reset section".into()),
             _ => return None,
         };
         let key_str: SmolStr = match key {
@@ -168,6 +179,29 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_GOTO_TOP => Some(Action::GotoTop),
         KEY_GOTO_BOTTOM => Some(Action::GotoBottom),
         KEY_SELECT => Some(Action::Select),
+        KEY_SETTINGS => Some(Action::Settings),
+        _ => None,
+    }
+}
+
+/// Resolve a key event into an action in settings context.
+/// When `editing` is true, `KEY_QUIT` falls through to `Char` input instead
+/// of closing the panel.
+pub fn settings_action(key: &KeyEvent, editing: bool) -> Option<Action> {
+    match key.code {
+        KEY_QUIT if !editing => Some(Action::Back),
+        KEY_BACK => Some(Action::Back),
+        KEY_SELECT => Some(Action::Select),
+        KEY_UP => Some(Action::MoveUp),
+        KEY_DOWN => Some(Action::MoveDown),
+        KEY_LEFT => Some(Action::MoveLeft),
+        KEY_RIGHT => Some(Action::MoveRight),
+        KEY_PAGE_UP => Some(Action::PageUp),
+        KEY_PAGE_DOWN => Some(Action::PageDown),
+        KEY_DELETE_CHAR => Some(Action::DeleteChar),
+        KeyCode::Char('d') => Some(Action::ResetField),
+        KeyCode::Char('D') => Some(Action::ResetSection),
+        KeyCode::Char(c) => Some(Action::Char(c)),
         _ => None,
     }
 }
@@ -299,6 +333,17 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Select),
     HelpEntry::Single(Action::CyclePlaybackMode),
     HelpEntry::Single(Action::ToggleSortOrder),
+    HelpEntry::Single(Action::Settings),
+];
+
+/// Ordered list of entries to show in the settings help bar.
+pub const SETTINGS_HELP: &[HelpEntry] = &[
+    HelpEntry::Pair(Action::Quit, Action::Back, "close"),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "nav/adjust"),
+    HelpEntry::Pair(Action::MoveLeft, Action::MoveRight, "hsv comp"),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Single(Action::ResetField),
+    HelpEntry::Single(Action::ResetSection),
 ];
 
 /// Ordered list of entries to show in the search help bar.

@@ -8,6 +8,7 @@ mod playing_track;
 mod queue;
 mod scrub_bar;
 mod search;
+mod settings;
 mod style;
 mod util;
 
@@ -56,6 +57,7 @@ pub struct UiState {
     pub search: SearchState,
     pub lyrics: LyricsState,
     pub queue: QueueState,
+    pub settings: settings::SettingsState,
     pub library_view: library::LibraryViewState,
     pub mini_library: library::MiniLibraryState,
     pub quit_confirming: bool,
@@ -112,7 +114,8 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState 
 impl App {
     pub fn render(&mut self, ctx: &Context) {
         let logic = &mut self.logic;
-        let config = &self.config.read().unwrap();
+        let config_guard = self.config.read().unwrap();
+        let config = &config_guard;
 
         let mut track_to_scroll_to = logic
             .get_state()
@@ -195,6 +198,7 @@ impl App {
         let can_handle_shortcuts = !self.ui_state.search.open
             && !self.ui_state.lyrics.open
             && !self.ui_state.queue.open
+            && !self.ui_state.settings.open
             && !self.ui_state.quit_confirming
             && !search_active;
 
@@ -250,6 +254,7 @@ impl App {
                         self.ui_state.search.open = false;
                         self.ui_state.lyrics.open = false;
                         self.ui_state.queue.open = false;
+                        self.ui_state.settings.open = false;
                     }
                 }
             });
@@ -367,6 +372,9 @@ impl App {
                             let vol = (logic.get_volume() - blackbird_client_shared::VOLUME_STEP)
                                 .max(0.0);
                             logic.set_volume(vol);
+                        }
+                        keys::Action::Settings => {
+                            self.ui_state.settings.open = !self.ui_state.settings.open;
                         }
                     }
                 }
@@ -754,6 +762,67 @@ impl App {
             if !state.library.track_map.contains_key(&track_id) {
                 state.last_requested_track_for_ui_scroll = Some(track_id);
             }
+        }
+
+        // Drop the long-lived config read guard before the settings section,
+        // which needs a write lock to apply changes.
+        drop(config_guard);
+
+        // Settings window — drawn last so it can work with a cloned config
+        // and write changes back without conflicting with the read guard above.
+        // Suppress config auto-reload while settings is open to prevent disk
+        // values from clobbering in-memory edits.
+        self.config_reload_suppressed.store(
+            self.ui_state.settings.open,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        let settings_was_open = self.ui_state.settings.open;
+        if self.ui_state.settings.open {
+            let mut cfg: crate::config::Config = (*self.config.read().unwrap()).clone();
+            let server_changed = settings::ui(ctx, &mut cfg, &mut self.ui_state.settings);
+            let config_changed = cfg != *self.config.read().unwrap();
+            if config_changed {
+                // Apply live style changes in-memory (disk save deferred to close).
+                ctx.style_mut(|style| {
+                    style.visuals.panel_fill = cfg.style.background_color32();
+                    style.visuals.override_text_color = Some(cfg.style.text_color32());
+                });
+                ctx.options_mut(|options| {
+                    options.input_options.line_scroll_speed = cfg.style.scroll_multiplier;
+                });
+
+                // Write the updated config in-memory.
+                *self.config.write().unwrap() = cfg.clone();
+
+                if server_changed {
+                    // Save immediately for server changes that trigger a reload.
+                    let path = blackbird_client_shared::config::config_path(
+                        crate::config::Config::FILENAME,
+                    );
+                    if let Some(parent) = path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&path, toml::to_string(&cfg).unwrap());
+
+                    self.logic.reload_library(
+                        cfg.shared.server.base_url,
+                        cfg.shared.server.username,
+                        cfg.shared.server.password,
+                        cfg.shared.server.transcode,
+                    );
+                }
+            }
+        }
+
+        // Save config to disk when the settings window closes.
+        if settings_was_open && !self.ui_state.settings.open {
+            let cfg = self.config.read().unwrap();
+            let path =
+                blackbird_client_shared::config::config_path(crate::config::Config::FILENAME);
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&path, toml::to_string(&*cfg).unwrap());
         }
     }
 }

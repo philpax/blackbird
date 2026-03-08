@@ -42,6 +42,19 @@ pub enum AlbumArtStyle {
     BelowAlbum,
 }
 
+impl AlbumArtStyle {
+    /// All variants for UI display/cycling.
+    pub const ALL: &[AlbumArtStyle] = &[AlbumArtStyle::LeftOfAlbum, AlbumArtStyle::BelowAlbum];
+
+    /// Returns a human-readable label for display in UI.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AlbumArtStyle::LeftOfAlbum => "left of album",
+            AlbumArtStyle::BelowAlbum => "below album",
+        }
+    }
+}
+
 /// Layout configuration for the library and player UI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

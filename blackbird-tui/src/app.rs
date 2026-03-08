@@ -9,7 +9,7 @@ use crate::{
     log_buffer::LogBuffer,
     ui::{
         album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
-        lyrics::LyricsViewState, queue::QueueState, search::SearchState,
+        lyrics::LyricsViewState, queue::QueueState, search::SearchState, settings::SettingsState,
     },
 };
 
@@ -21,6 +21,7 @@ pub enum FocusedPanel {
     Lyrics,
     Logs,
     Queue,
+    Settings,
 }
 
 pub struct App {
@@ -60,6 +61,7 @@ pub struct App {
     pub lyrics: LyricsViewState,
     pub logs: LogsState,
     pub queue: QueueState,
+    pub settings: SettingsState,
 }
 
 impl App {
@@ -100,6 +102,7 @@ impl App {
             lyrics: LyricsViewState::new(),
             logs: LogsState::new(log_buffer),
             queue: QueueState::new(),
+            settings: SettingsState::new(),
         }
     }
 
@@ -182,7 +185,10 @@ impl App {
         }
 
         // Reload config from disk if changed (check once per second).
-        if self.last_config_check.elapsed() >= Duration::from_secs(1) {
+        // Skip while settings is open — in-memory changes haven't been saved yet.
+        if self.focused_panel != FocusedPanel::Settings
+            && self.last_config_check.elapsed() >= Duration::from_secs(1)
+        {
             self.last_config_check = Instant::now();
             let new_config = Config::load();
             if new_config != self.config {
@@ -244,6 +250,15 @@ impl App {
         } else {
             self.focused_panel = FocusedPanel::Queue;
             self.queue.reset();
+        }
+    }
+
+    pub fn toggle_settings(&mut self) {
+        if self.focused_panel == FocusedPanel::Settings {
+            self.focused_panel = FocusedPanel::Library;
+        } else {
+            self.focused_panel = FocusedPanel::Settings;
+            self.settings.reset();
         }
     }
 
