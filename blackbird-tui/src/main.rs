@@ -31,7 +31,9 @@ fn main() -> anyhow::Result<()> {
     let log_buffer = LogBuffer::new();
 
     // Also log to a file for debugging (especially shutdown issues).
-    let log_file = std::fs::File::create("blackbird-tui.log")?;
+    let log_dir = blackbird_client_shared::paths::data_dir();
+    std::fs::create_dir_all(&log_dir)?;
+    let log_file = std::fs::File::create(log_dir.join("blackbird-tui.log"))?;
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::sync::Mutex::new(log_file))
         .with_ansi(false);

@@ -18,7 +18,9 @@ fn main() {
 
     // Log to a file so that shutdown diagnostics are visible even when the
     // GUI window has closed.
-    let file_layer = std::fs::File::create("blackbird-gui.log")
+    let log_dir = blackbird_client_shared::paths::data_dir();
+    std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
+    let file_layer = std::fs::File::create(log_dir.join("blackbird-gui.log"))
         .map(|f| {
             tracing_subscriber::fmt::layer()
                 .with_writer(std::sync::Mutex::new(f))

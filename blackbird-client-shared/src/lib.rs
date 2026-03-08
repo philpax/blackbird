@@ -13,6 +13,7 @@ pub mod config;
 pub mod cover_art_cache;
 pub mod library_scroll;
 pub mod lyrics;
+pub mod paths;
 pub mod style;
 
 #[cfg(feature = "media-controls")]

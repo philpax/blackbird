@@ -1,22 +1,33 @@
 /// Configuration types shared between the egui and TUI clients.
+use std::path::PathBuf;
 use std::time::Duration;
 
 use blackbird_core::{PlaybackMode, SortOrder, blackbird_state::TrackId};
 use serde::{Deserialize, Serialize};
 
-/// Load a TOML config file, returning `T::default()` if the file doesn't exist.
+/// Returns the full path to a config file inside the platform-specific config directory.
+pub fn config_path(filename: &str) -> PathBuf {
+    crate::paths::config_dir().join(filename)
+}
+
+/// Load a TOML config file from the platform-specific config directory,
+/// returning `T::default()` if the file doesn't exist.
 /// Panics on parse errors or unexpected I/O errors.
 pub fn load_config<T: Default + serde::de::DeserializeOwned>(filename: &str) -> T {
-    match std::fs::read_to_string(filename) {
+    let path = config_path(filename);
+    match std::fs::read_to_string(&path) {
         Ok(contents) => match toml::from_str(&contents) {
             Ok(config) => config,
-            Err(e) => panic!("Failed to parse {filename}: {e}"),
+            Err(e) => panic!("Failed to parse {}: {e}", path.display()),
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("no config file found, creating default config");
+            tracing::info!(
+                "no config file found at {}, creating default config",
+                path.display()
+            );
             T::default()
         }
-        Err(e) => panic!("Failed to read {filename}: {e}"),
+        Err(e) => panic!("Failed to read {}: {e}", path.display()),
     }
 }
 

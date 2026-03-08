@@ -18,6 +18,16 @@ When I was a younger lad, I used to main foobar2000. This is what my highly-cust
 
 `blackbird` is not quite that dense, I'm afraid, but all things considered, it's probably nicer on the eyes.
 
+## File locations
+
+`blackbird` stores its files in platform-specific directories using the [etcetera](https://crates.io/crates/etcetera) crate with the native platform strategy:
+
+| Purpose | Linux | macOS | Windows |
+|---|---|---|---|
+| Config (`config.toml`) | `~/.config/blackbird/` | `~/Library/Application Support/me.philpax.blackbird/` | `%APPDATA%/philpax/blackbird/config/` |
+| Cache (album art) | `~/.cache/blackbird/` | `~/Library/Caches/me.philpax.blackbird/` | `%LOCALAPPDATA%/philpax/blackbird/cache/` |
+| Data (logs) | `~/.local/share/blackbird/` | `~/Library/Application Support/me.philpax.blackbird/` | `%APPDATA%/philpax/blackbird/data/` |
+
 ---
 
 The contributing guidelines in [CONTRIBUTING.md](./CONTRIBUTING.md) are adapted from [philpax/contributing-templates](https://github.com/philpax/contributing-templates), which in turn derives from [nextest's AGENTS.md](https://github.com/nextest-rs/nextest/blob/main/AGENTS.md).

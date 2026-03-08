@@ -147,9 +147,7 @@ impl<T: ClientData> CoverArtCache<T> {
         cache_entry_timeout: Duration,
     ) -> Self {
         // Get the cache directory path.
-        let cache_dir = std::env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .join(CACHE_DIR_NAME);
+        let cache_dir = crate::paths::cache_dir().join(CACHE_DIR_NAME);
 
         // Create the cache directory if it doesn't exist.
         if let Err(e) = std::fs::create_dir_all(&cache_dir) {

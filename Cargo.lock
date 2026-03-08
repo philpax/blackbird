@@ -606,6 +606,7 @@ version = "0.1.0"
 dependencies = [
  "blackbird-core",
  "blackbird-shared",
+ "etcetera",
  "gtk",
  "image",
  "serde",
@@ -1655,6 +1656,16 @@ name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
+name = "etcetera"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de48cc4d1c1d97a20fd819def54b890cadde72ed3ad0c614822a0a433361be96"
+dependencies = [
+ "cfg-if",
+ "windows-sys 0.61.0",
+]
 
 [[package]]
 name = "event-listener"

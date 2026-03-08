@@ -24,8 +24,12 @@ impl Config {
     }
 
     pub fn save(&self) {
-        std::fs::write(Self::FILENAME, toml::to_string(self).unwrap()).unwrap();
-        tracing::info!("saved config to {}", Self::FILENAME);
+        let path = blackbird_client_shared::config::config_path(Self::FILENAME);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, toml::to_string(self).unwrap()).unwrap();
+        tracing::info!("saved config to {}", path.display());
     }
 }
 

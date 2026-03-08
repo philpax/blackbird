@@ -17,6 +17,7 @@ default-members = ["blackbird"]
 
 [workspace.dependencies]
 anyhow = "1.0"
+etcetera = "0.11"
 
 rand = "0.9.0"
 
