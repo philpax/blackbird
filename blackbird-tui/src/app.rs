@@ -32,6 +32,7 @@ pub struct App {
     pub playback_to_logic_rx: bc::PlaybackToLogicRx,
     pub lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
     pub library_populated_rx: std::sync::mpsc::Receiver<()>,
+    pub track_updated_rx: std::sync::mpsc::Receiver<()>,
 
     // Global UI orchestration
     pub focused_panel: FocusedPanel,
@@ -65,6 +66,7 @@ pub struct App {
 }
 
 impl App {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         config: Config,
         logic: bc::Logic,
@@ -72,6 +74,7 @@ impl App {
         cover_art_cache: CoverArtCache,
         lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
         library_populated_rx: std::sync::mpsc::Receiver<()>,
+        track_updated_rx: std::sync::mpsc::Receiver<()>,
         log_buffer: LogBuffer,
     ) -> Self {
         Self {
@@ -81,6 +84,7 @@ impl App {
             playback_to_logic_rx,
             lyrics_loaded_rx,
             library_populated_rx,
+            track_updated_rx,
 
             last_config_check: Instant::now(),
 
@@ -169,6 +173,11 @@ impl App {
                 .collect();
             drop(state);
             self.cover_art_cache.populate_prefetch_queue(ids);
+        }
+
+        // Process track updates (e.g. play count changes after scrobble).
+        while let Ok(()) = self.track_updated_rx.try_recv() {
+            self.library.mark_dirty();
         }
 
         // Handle scroll-to-track.

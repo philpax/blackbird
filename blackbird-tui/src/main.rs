@@ -52,6 +52,7 @@ fn main() -> anyhow::Result<()> {
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
+    let (track_updated_tx, track_updated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
         base_url: config.shared.server.base_url.clone(),
@@ -65,6 +66,7 @@ fn main() -> anyhow::Result<()> {
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
+        track_updated_tx,
     });
 
     // Initialize platform-specific tray icon requirements (GTK on Linux).
@@ -108,6 +110,7 @@ fn main() -> anyhow::Result<()> {
         cover_art_cache,
         lyrics_loaded_rx,
         library_populated_rx,
+        track_updated_rx,
         log_buffer,
     );
 

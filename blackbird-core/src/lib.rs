@@ -47,6 +47,7 @@ pub struct Logic {
     cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     library_populated_tx: std::sync::mpsc::Sender<()>,
+    track_updated_tx: std::sync::mpsc::Sender<()>,
 
     /// Guards against duplicate in-flight lyrics requests for the same track.
     last_requested_lyrics_track: std::sync::Mutex<Option<TrackId>>,
@@ -187,6 +188,7 @@ pub struct LogicArgs {
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     pub library_populated_tx: std::sync::mpsc::Sender<()>,
+    pub track_updated_tx: std::sync::mpsc::Sender<()>,
 }
 
 impl Logic {
@@ -203,6 +205,7 @@ impl Logic {
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             library_populated_tx,
+            track_updated_tx,
         }: LogicArgs,
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
@@ -242,6 +245,7 @@ impl Logic {
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             library_populated_tx,
+            track_updated_tx,
 
             last_requested_lyrics_track: std::sync::Mutex::new(None),
 
@@ -909,11 +913,12 @@ impl Logic {
                 track_duration.as_secs_f32()
             );
 
-            // Make async API call
+            // Make async API call.
             self.tokio_thread.spawn({
                 let client = self.client.clone();
                 let state = self.state.clone();
                 let track_id = track_and_position.track_id.clone();
+                let track_updated_tx = self.track_updated_tx.clone();
 
                 async move {
                     if let Err(e) = client
@@ -939,6 +944,7 @@ impl Logic {
                                     track_id.0
                                 );
                             }
+                            let _ = track_updated_tx.send(());
                         }
                         Err(e) => {
                             tracing::warn!(

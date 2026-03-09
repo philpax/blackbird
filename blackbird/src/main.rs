@@ -46,6 +46,7 @@ fn main() {
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
+    let (track_updated_tx, _track_updated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
         base_url: config.shared.server.base_url.clone(),
@@ -59,6 +60,7 @@ fn main() {
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
+        track_updated_tx,
     });
 
     let native_options = eframe::NativeOptions {
