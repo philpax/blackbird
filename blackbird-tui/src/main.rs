@@ -512,6 +512,18 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             {
                 if app.focused_panel == FocusedPanel::Library {
                     ui::library::handle_mouse_click(app, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Search {
+                    if let Some(sa) = ui::search::handle_mouse_click(
+                        &mut app.search,
+                        &app.logic,
+                        library_area,
+                        x,
+                        y,
+                    ) {
+                        match sa {
+                            ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                        }
+                    }
                 } else if app.focused_panel == FocusedPanel::Lyrics {
                     ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Queue {

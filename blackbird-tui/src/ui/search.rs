@@ -162,6 +162,31 @@ pub fn draw(
     frame.render_stateful_widget(list, chunks[1], &mut list_state);
 }
 
+pub fn handle_mouse_click(
+    search: &mut SearchState,
+    logic: &bc::Logic,
+    area: Rect,
+    _x: u16,
+    y: u16,
+) -> Option<SearchAction> {
+    // The layout is: border (1) + search input (1) + results list.
+    let results_start_y = area.y + 1 + 1;
+    let results_end_y = area.y + area.height.saturating_sub(1);
+
+    if y < results_start_y || y >= results_end_y || search.results.is_empty() {
+        return None;
+    }
+
+    let clicked_index = (y - results_start_y) as usize;
+    if clicked_index < search.results.len() {
+        search.selected_index = clicked_index;
+        logic.request_play_track(&search.results[clicked_index]);
+        return Some(SearchAction::ToggleSearch);
+    }
+
+    None
+}
+
 pub fn handle_key(
     search: &mut SearchState,
     logic: &bc::Logic,
