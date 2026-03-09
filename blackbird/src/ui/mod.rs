@@ -74,7 +74,7 @@ pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState 
         style.scroll_animation = egui::style::ScrollAnimation::duration(0.2);
     });
     cc.egui_ctx.options_mut(|options| {
-        options.input_options.line_scroll_speed = config.style.scroll_multiplier
+        options.input_options.line_scroll_speed = config.shared.layout.scroll_multiplier
     });
 
     let mut fonts = FontDefinitions::default();
@@ -788,7 +788,7 @@ impl App {
                     style.visuals.override_text_color = Some(cfg.style.text_color32());
                 });
                 ctx.options_mut(|options| {
-                    options.input_options.line_scroll_speed = cfg.style.scroll_multiplier;
+                    options.input_options.line_scroll_speed = cfg.shared.layout.scroll_multiplier;
                 });
 
                 // Write the updated config in-memory.

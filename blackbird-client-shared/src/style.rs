@@ -41,14 +41,11 @@ macro_rules! style_fields {
                 #[doc = concat!("HSV colour for ", stringify!($field))]
                 pub $field: Hsv,
             )*
-            /// Scroll multiplier for mouse wheel scrolling.
-            pub scroll_multiplier: f32,
         }
         impl Default for Style {
             fn default() -> Self {
                 Self {
                     $($field: $default,)*
-                    scroll_multiplier: 50.0,
                 }
             }
         }

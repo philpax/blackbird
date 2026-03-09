@@ -68,6 +68,9 @@ pub struct Layout {
     /// Number of blank rows between albums in the library view.
     #[serde(default = "default_album_spacing")]
     pub album_spacing: usize,
+    /// Scroll multiplier for mouse wheel scrolling.
+    #[serde(default = "default_scroll_multiplier")]
+    pub scroll_multiplier: f32,
 }
 impl Default for Layout {
     fn default() -> Self {
@@ -75,8 +78,13 @@ impl Default for Layout {
             show_inline_lyrics: true,
             album_art_style: AlbumArtStyle::default(),
             album_spacing: default_album_spacing(),
+            scroll_multiplier: default_scroll_multiplier(),
         }
     }
+}
+
+fn default_scroll_multiplier() -> f32 {
+    50.0
 }
 
 fn default_album_spacing() -> usize {

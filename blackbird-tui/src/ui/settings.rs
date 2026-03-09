@@ -241,10 +241,10 @@ fn build_rows() -> Vec<SettingsRow> {
     rows.extend([
         SettingsRow::F32Field {
             label: "Scroll multiplier",
-            section: Section::Colors,
-            get: |c| c.style.scroll_multiplier,
-            set: |c, v| c.style.scroll_multiplier = v,
-            default: || shared_style::Style::default().scroll_multiplier,
+            section: Section::General,
+            get: |c| c.shared.layout.scroll_multiplier,
+            set: |c, v| c.shared.layout.scroll_multiplier = v,
+            default: || Layout::default().scroll_multiplier,
             min: 1.0,
             max: 200.0,
         },
