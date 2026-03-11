@@ -684,6 +684,7 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
                     .get(&track_id)
                     .is_some_and(|t| t.starred);
                 app.logic.set_track_starred(&track_id, !starred);
+                app.library.mark_dirty();
             }
         }
         Action::SeekForward => app.seek_relative(ui::layout::SEEK_STEP_SECS),

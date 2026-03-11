@@ -1416,21 +1416,17 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::SeekBackward => app.seek_relative(-super::layout::SEEK_STEP_SECS),
         Action::SeekForward => app.seek_relative(super::layout::SEEK_STEP_SECS),
         Action::Star => {
-            let selected = app.library.selected_index;
-            if let Some(entry) = app.library.get_library_entry(&app.logic, selected) {
-                match entry {
-                    LibraryEntry::Track { id, starred, .. } => {
-                        app.logic.set_track_starred(&id, !starred);
-                        app.library.mark_dirty();
-                    }
-                    LibraryEntry::GroupHeader {
-                        album_id, starred, ..
-                    } => {
-                        app.logic.set_album_starred(&album_id, !starred);
-                        app.library.mark_dirty();
-                    }
-                    LibraryEntry::GroupSpacer { .. } | LibraryEntry::AlbumGap => {}
-                }
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                let state = app.logic.get_state();
+                let starred = state
+                    .read()
+                    .unwrap()
+                    .library
+                    .track_map
+                    .get(&track_id)
+                    .is_some_and(|t| t.starred);
+                app.logic.set_track_starred(&track_id, !starred);
+                app.library.mark_dirty();
             }
         }
         Action::MoveUp => {
