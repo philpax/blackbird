@@ -721,8 +721,8 @@ impl Logic {
                 .map(|t| t.track_id.clone())
         };
 
-        // Clear any queued next track by marking it for skip, so the new mode takes effect immediately.
-        // The marked track will be skipped when it transitions to current, triggering playback based on new mode.
+        // Tell the playback thread to skip any gapless-queued tracks when the
+        // current track finishes, so the new mode's next track is used instead.
         self.playback_thread
             .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
 
