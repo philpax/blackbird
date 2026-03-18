@@ -468,6 +468,53 @@ impl LibraryEntry {
     }
 }
 
+/// Assembles a flat list of library entries from `(header, tracks)` group pairs,
+/// inserting spacer and gap entries according to the layout configuration.
+///
+/// This is the single source of truth for the structural layout of the flat
+/// library. Both the real library and the settings preview use this function.
+pub(crate) fn assemble_flat_library(
+    groups: impl IntoIterator<Item = (LibraryEntry, Vec<LibraryEntry>)>,
+    album_art_style: AlbumArtStyle,
+    album_spacing: usize,
+) -> Vec<LibraryEntry> {
+    let groups: Vec<_> = groups.into_iter().collect();
+    let group_count = groups.len();
+    let mut result = Vec::new();
+
+    for (group_index, (header, tracks)) in groups.into_iter().enumerate() {
+        let cover_art_id = match &header {
+            LibraryEntry::GroupHeader { cover_art_id, .. } => cover_art_id.clone(),
+            _ => None,
+        };
+        let track_count = tracks.len();
+
+        result.push(header);
+        result.extend(tracks);
+
+        // In BelowAlbum mode, pad short groups so the art is fully visible.
+        if album_art_style == AlbumArtStyle::BelowAlbum
+            && track_count < super::layout::LARGE_ART_TERM_ROWS
+        {
+            for si in 0..(super::layout::LARGE_ART_TERM_ROWS - track_count) {
+                result.push(LibraryEntry::GroupSpacer {
+                    cover_art_id: cover_art_id.clone(),
+                    art_row_index: track_count + si,
+                });
+            }
+        }
+
+        // Add blank gap rows between albums (not after the last group).
+        if group_index + 1 < group_count {
+            for _ in 0..album_spacing {
+                result.push(LibraryEntry::AlbumGap);
+            }
+        }
+    }
+
+    result
+}
+
 pub fn total_entry_lines(entries: &[LibraryEntry]) -> usize {
     entries.iter().map(LibraryEntry::height).sum()
 }
@@ -598,15 +645,14 @@ impl LibraryState {
         let state = logic.get_state();
         let state = state.read().unwrap();
 
-        let group_count = state.library.groups.len();
-        self.cached_flat_library.clear();
-        for (group_index, group) in state.library.groups.iter().enumerate() {
+        let groups = state.library.groups.iter().map(|group| {
             let created = state
                 .library
                 .albums
                 .get(&group.album_id)
                 .map(|a| a.created.to_string());
-            self.cached_flat_library.push(LibraryEntry::GroupHeader {
+
+            let header = LibraryEntry::GroupHeader {
                 artist: group.artist.to_string(),
                 album: group.album.to_string(),
                 year: group.year,
@@ -615,12 +661,15 @@ impl LibraryState {
                 starred: group.starred,
                 album_id: group.album_id.clone(),
                 cover_art_id: group.cover_art_id.clone(),
-            });
+            };
 
-            let track_count = group.tracks.len();
-            for (track_index, track_id) in group.tracks.iter().enumerate() {
-                if let Some(track) = state.library.track_map.get(track_id) {
-                    self.cached_flat_library.push(LibraryEntry::Track {
+            let tracks: Vec<_> = group
+                .tracks
+                .iter()
+                .enumerate()
+                .filter_map(|(track_index, track_id)| {
+                    let track = state.library.track_map.get(track_id)?;
+                    Some(LibraryEntry::Track {
                         id: track.id.clone(),
                         title: track.title.to_string(),
                         artist: track.artist.as_ref().map(|a| a.to_string()),
@@ -632,64 +681,26 @@ impl LibraryState {
                         play_count: track.play_count,
                         cover_art_id: group.cover_art_id.clone(),
                         track_index_in_group: track_index,
-                    });
-                }
-            }
+                    })
+                })
+                .collect();
 
-            // In BelowAlbum mode, pad short groups so the art is fully visible.
-            if self.album_art_style == AlbumArtStyle::BelowAlbum
-                && track_count < super::layout::LARGE_ART_TERM_ROWS
-            {
-                let spacer_count = super::layout::LARGE_ART_TERM_ROWS - track_count;
-                for si in 0..spacer_count {
-                    self.cached_flat_library.push(LibraryEntry::GroupSpacer {
-                        cover_art_id: group.cover_art_id.clone(),
-                        art_row_index: track_count + si,
-                    });
-                }
-            }
+            (header, tracks)
+        });
 
-            // Add blank gap rows between albums (not after the last group).
-            if group_index + 1 < group_count {
-                for _ in 0..self.album_spacing {
-                    self.cached_flat_library.push(LibraryEntry::AlbumGap);
-                }
-            }
-        }
+        self.cached_flat_library =
+            assemble_flat_library(groups, self.album_art_style, self.album_spacing);
     }
 
     /// Finds the flat index for a given track in the library.
     pub fn find_flat_index_for_track(
         &self,
-        state: &bc::AppState,
+        _state: &bc::AppState,
         target_track_id: &TrackId,
     ) -> Option<usize> {
-        let group_count = state.library.groups.len();
-        let mut index = 0;
-        for (group_index, group) in state.library.groups.iter().enumerate() {
-            index += 1; // group header
-            let mut track_count = 0;
-            for track_id in &group.tracks {
-                if track_id == target_track_id {
-                    return Some(index);
-                }
-                if state.library.track_map.contains_key(track_id) {
-                    index += 1;
-                    track_count += 1;
-                }
-            }
-            // Account for spacer entries in BelowAlbum mode.
-            if self.album_art_style == AlbumArtStyle::BelowAlbum
-                && track_count < super::layout::LARGE_ART_TERM_ROWS
-            {
-                index += super::layout::LARGE_ART_TERM_ROWS - track_count;
-            }
-            // Account for album gap entries (not after the last group).
-            if group_index + 1 < group_count {
-                index += self.album_spacing;
-            }
-        }
-        None
+        self.cached_flat_library.iter().position(
+            |entry| matches!(entry, LibraryEntry::Track { id, .. } if id == target_track_id),
+        )
     }
 
     /// Sets `viewport_line` to center `selected_index` in the visible area.

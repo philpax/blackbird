@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     StyleExt,
-    library::{EntryRenderContext, LibraryEntry, render_library_entry},
+    library::{EntryRenderContext, LibraryEntry, assemble_flat_library, render_library_entry},
 };
 
 /// Actions returned to the caller so `app.rs` can apply side effects.
@@ -1077,7 +1077,6 @@ fn build_preview_entries(
         num: u32,
         title: &'static str,
         duration: u32,
-        is_playing: bool,
     }
 
     const ALBUMS: &[Album] = &[
@@ -1092,25 +1091,21 @@ fn build_preview_entries(
                     num: 1,
                     title: "Dawn Chorus",
                     duration: 263,
-                    is_playing: true,
                 },
                 Track {
                     num: 2,
                     title: "Feather & Sky",
                     duration: 311,
-                    is_playing: false,
                 },
                 Track {
                     num: 3,
                     title: "Wingspan",
                     duration: 362,
-                    is_playing: false,
                 },
                 Track {
                     num: 4,
                     title: "Midnight Roost",
                     duration: 225,
-                    is_playing: false,
                 },
             ],
         },
@@ -1125,41 +1120,25 @@ fn build_preview_entries(
                     num: 1,
                     title: "Tailwind",
                     duration: 347,
-                    is_playing: false,
                 },
                 Track {
                     num: 2,
                     title: "Hollow Bones",
                     duration: 258,
-                    is_playing: false,
                 },
                 Track {
                     num: 3,
                     title: "Murmuration",
                     duration: 453,
-                    is_playing: false,
                 },
             ],
         },
     ];
 
     let art_id = CoverArtId(PREVIEW_ART_ID.into());
-    let art_term_rows = super::layout::LARGE_ART_TERM_ROWS;
-    let mut entries = Vec::new();
 
-    // Track index used to find the "selected" track (third track overall).
-    let mut playing_entry_index = None;
-    let mut selected_entry_index = None;
-    let mut track_counter = 0usize;
-
-    for (album_idx, album) in ALBUMS.iter().enumerate() {
-        if album_idx > 0 {
-            for _ in 0..album_spacing {
-                entries.push(LibraryEntry::AlbumGap);
-            }
-        }
-
-        entries.push(LibraryEntry::GroupHeader {
+    let groups = ALBUMS.iter().enumerate().map(|(album_idx, album)| {
+        let header = LibraryEntry::GroupHeader {
             artist: album.artist.to_string(),
             album: album.album.to_string(),
             year: Some(album.year),
@@ -1168,20 +1147,13 @@ fn build_preview_entries(
             starred: album.starred,
             album_id: AlbumId(format!("preview-album-{album_idx}").into()),
             cover_art_id: Some(art_id.clone()),
-        });
+        };
 
-        for (track_idx, track) in album.tracks.iter().enumerate() {
-            let entry_idx = entries.len();
-            if track.is_playing {
-                playing_entry_index = Some(entry_idx);
-            }
-            // Select the third track overall.
-            if track_counter == 2 {
-                selected_entry_index = Some(entry_idx);
-            }
-            track_counter += 1;
-
-            entries.push(LibraryEntry::Track {
+        let tracks: Vec<_> = album
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(track_idx, track)| LibraryEntry::Track {
                 id: TrackId(format!("preview-track-{album_idx}-{track_idx}")),
                 title: track.title.to_string(),
                 artist: None,
@@ -1193,28 +1165,13 @@ fn build_preview_entries(
                 play_count: None,
                 cover_art_id: Some(art_id.clone()),
                 track_index_in_group: track_idx,
-            });
-        }
+            })
+            .collect();
 
-        // In BelowAlbum mode, pad short groups so the art is fully visible.
-        let track_count = album.tracks.len();
-        if album_art_style == AlbumArtStyle::BelowAlbum && track_count < art_term_rows {
-            for spacer_idx in track_count..art_term_rows {
-                entries.push(LibraryEntry::GroupSpacer {
-                    cover_art_id: Some(art_id.clone()),
-                    art_row_index: spacer_idx,
-                });
-            }
-        }
-    }
+        (header, tracks)
+    });
 
-    // Store the playing/selected indices as a convention: the caller
-    // reads these from the first two AlbumGap-free entries. We use a
-    // simpler approach: return them embedded. Since we can't modify the
-    // return type easily, the caller will compute them the same way.
-    let _ = (playing_entry_index, selected_entry_index);
-
-    entries
+    assemble_flat_library(groups, album_art_style, album_spacing)
 }
 
 /// Draws a mini preview of the library using fake data to show the effect of
