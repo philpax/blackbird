@@ -60,10 +60,15 @@ impl Client {
         let response: Response<T> = serde_json::from_slice(bytes)?;
 
         if response.subsonic_response.status == ResponseStatus::Failed {
-            let error = response.subsonic_response.error.unwrap();
-            return Err(ClientError::SubsonicError {
-                code: error.code,
-                message: error.message,
+            return Err(match response.subsonic_response.error {
+                Some(error) => ClientError::SubsonicError {
+                    code: error.code,
+                    message: error.message,
+                },
+                None => ClientError::SubsonicError {
+                    code: 0,
+                    message: Some("server returned an error with no details".to_string()),
+                },
             });
         }
 
