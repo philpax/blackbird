@@ -126,8 +126,41 @@ impl PlaybackThread {
     ) {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
+        use rodio::cpal::traits::HostTrait as _;
 
-        let mut stream_handle = rodio::OutputStreamBuilder::open_default_stream().unwrap();
+        fn error_callback(err: rodio::cpal::StreamError) {
+            tracing::warn!("audio stream error: {err}");
+        }
+
+        // Use a fixed buffer size to avoid underruns on machines where the
+        // default ALSA buffer is too small for real-time resampling.
+        let buffer_size = rodio::cpal::BufferSize::Fixed(2048);
+
+        let mut stream_handle = rodio::OutputStreamBuilder::from_default_device()
+            .and_then(|builder| {
+                builder
+                    .with_buffer_size(buffer_size)
+                    .with_error_callback(error_callback as fn(_))
+                    .open_stream()
+            })
+            .or_else(|original_err| {
+                // Fallback: try other devices with their default configs.
+                let devices = rodio::cpal::default_host()
+                    .output_devices()
+                    .map_err(|_| original_err)?;
+                for device in devices {
+                    if let Ok(builder) = rodio::OutputStreamBuilder::from_device(device)
+                        && let Ok(handle) = builder
+                            .with_buffer_size(buffer_size)
+                            .with_error_callback(error_callback as fn(_))
+                            .open_stream()
+                    {
+                        return Ok(handle);
+                    }
+                }
+                Err(rodio::StreamError::NoDevice)
+            })
+            .unwrap();
         stream_handle.log_on_drop(false);
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(volume * volume);
