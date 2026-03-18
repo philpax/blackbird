@@ -146,13 +146,11 @@ impl Logic {
         let cached_track = self.read_state().queue.audio_cache.get(track_id).cloned();
         if let Some(data) = cached_track {
             tracing::debug!("Playing from cache: {}", track_id.0);
-            self.playback_thread
-                .send_handle()
-                .send(LogicToPlaybackMessage::LoadTrack(
-                    track_id.clone(),
-                    data,
-                    TrackLoadMode::Play,
-                ));
+            self.send_to_playback(LogicToPlaybackMessage::LoadTrack(
+                track_id.clone(),
+                data,
+                TrackLoadMode::Play,
+            ));
         } else {
             tracing::debug!("Loading track {} (req_id={})", track_id.0, req_id);
             self.load_track_internal(track_id.clone(), req_id, TrackLoadBehavior::Play);
@@ -168,9 +166,12 @@ impl Logic {
         request_id: u64,
         behavior: TrackLoadBehavior,
     ) {
+        let Some(ref pt) = self.playback_thread else {
+            return;
+        };
         let client = self.client.clone();
         let state = self.state.clone();
-        let playback_tx = self.playback_thread.send_handle();
+        let playback_tx = pt.send_handle();
         let transcode = self.transcode;
 
         state

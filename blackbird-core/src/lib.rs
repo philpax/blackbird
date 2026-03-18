@@ -36,10 +36,19 @@ pub struct Logic {
     // `PlaybackThreadSendHandle` clones) complete; if that runs before
     // `PlaybackThread::Drop` sends `Shutdown`, audio keeps playing until the
     // runtime finishes shutting down.
-    playback_thread: PlaybackThread,
+    playback_thread: Option<PlaybackThread>,
     tokio_thread: TokioThread,
 
+    /// Broadcast channel for playback events. Owned by `Logic` so that
+    /// subscribers (media controls, TUI event loop) can be created before the
+    /// playback thread exists, and survive across thread restarts.
+    playback_event_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
     playback_to_logic_rx: PlaybackToLogicRx,
+
+    /// Slot where the async `initial_fetch` task deposits a newly created
+    /// `PlaybackThread` once the server connection succeeds. `update()` moves
+    /// it into `self.playback_thread` on the main thread.
+    playback_thread_slot: Arc<std::sync::Mutex<Option<PlaybackThread>>>,
 
     logic_request_tx: LogicRequestHandle,
     logic_request_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
@@ -222,8 +231,12 @@ impl Logic {
         ));
 
         let tokio_thread = TokioThread::new();
-        let playback_thread = PlaybackThread::new(volume);
-        let playback_to_logic_rx = playback_thread.subscribe();
+
+        // Create the broadcast channel for playback events. The playback thread
+        // is created later (after a successful server connection), but
+        // subscribers need to exist from startup.
+        let (playback_event_tx, playback_to_logic_rx) =
+            tokio::sync::broadcast::channel::<PlaybackToLogicMessage>(100);
 
         let (logic_request_tx, logic_request_rx) =
             std::sync::mpsc::channel::<LogicRequestMessage>();
@@ -236,8 +249,10 @@ impl Logic {
         let logic = Logic {
             tokio_thread,
 
-            playback_thread,
+            playback_thread: None,
+            playback_event_tx,
             playback_to_logic_rx,
+            playback_thread_slot: Arc::new(std::sync::Mutex::new(None)),
 
             logic_request_tx: LogicRequestHandle(logic_request_tx),
             logic_request_rx,
@@ -258,6 +273,13 @@ impl Logic {
     }
 
     pub fn update(&mut self) {
+        // Check if the async initial_fetch deposited a playback thread.
+        if self.playback_thread.is_none()
+            && let Some(pt) = self.playback_thread_slot.lock().unwrap().take()
+        {
+            self.playback_thread = Some(pt);
+        }
+
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
             match event {
                 PlaybackToLogicMessage::TrackStarted(track_and_position) => {
@@ -396,11 +418,10 @@ impl Logic {
 
                 if !already_appended && let Some(data) = audio_data {
                     tracing::debug!("Appending next track for gapless playback: {}", next_id.0);
-                    self.playback_thread
-                        .send(LogicToPlaybackMessage::AppendNextTrack(
-                            next_id.clone(),
-                            data,
-                        ));
+                    self.send_to_playback(LogicToPlaybackMessage::AppendNextTrack(
+                        next_id.clone(),
+                        data,
+                    ));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
             }
@@ -409,21 +430,19 @@ impl Logic {
 }
 impl Logic {
     pub fn play_current(&self) {
-        self.playback_thread.send(LogicToPlaybackMessage::Play);
+        self.send_to_playback(LogicToPlaybackMessage::Play);
     }
 
     pub fn pause_current(&self) {
-        self.playback_thread.send(LogicToPlaybackMessage::Pause);
+        self.send_to_playback(LogicToPlaybackMessage::Pause);
     }
 
     pub fn toggle_current(&self) {
-        self.playback_thread
-            .send(LogicToPlaybackMessage::TogglePlayback);
+        self.send_to_playback(LogicToPlaybackMessage::TogglePlayback);
     }
 
     pub fn stop_current(&self) {
-        self.playback_thread
-            .send(LogicToPlaybackMessage::StopPlayback);
+        self.send_to_playback(LogicToPlaybackMessage::StopPlayback);
     }
 
     pub fn seek_current(&self, position: Duration) {
@@ -433,8 +452,7 @@ impl Logic {
         if let Some(tap) = &mut self.write_state().current_track_and_position {
             tap.position = position;
         }
-        self.playback_thread
-            .send(LogicToPlaybackMessage::Seek(position));
+        self.send_to_playback(LogicToPlaybackMessage::Seek(position));
     }
 
     /// Seek without debouncing. Used on scrub bar release to ensure the
@@ -443,8 +461,7 @@ impl Logic {
         if let Some(tap) = &mut self.write_state().current_track_and_position {
             tap.position = position;
         }
-        self.playback_thread
-            .send(LogicToPlaybackMessage::SeekImmediate(position));
+        self.send_to_playback(LogicToPlaybackMessage::SeekImmediate(position));
     }
 
     pub fn next(&self) {
@@ -477,7 +494,7 @@ impl Logic {
         self.logic_request_tx.clone()
     }
     pub fn subscribe_to_playback_events(&self) -> PlaybackToLogicRx {
-        self.playback_thread.subscribe()
+        self.playback_event_tx.subscribe()
     }
 }
 impl Logic {
@@ -723,8 +740,7 @@ impl Logic {
 
         // Tell the playback thread to skip any gapless-queued tracks when the
         // current track finishes, so the new mode's next track is used instead.
-        self.playback_thread
-            .send(LogicToPlaybackMessage::ClearQueuedNextTracks);
+        self.send_to_playback(LogicToPlaybackMessage::ClearQueuedNextTracks);
 
         self.recompute_queue(current_track_id.as_ref());
 
@@ -764,8 +780,7 @@ impl Logic {
 
     pub fn set_volume(&self, volume: f32) {
         self.write_state().volume = volume;
-        self.playback_thread
-            .send(LogicToPlaybackMessage::SetVolume(volume));
+        self.send_to_playback(LogicToPlaybackMessage::SetVolume(volume));
     }
 
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
@@ -969,9 +984,8 @@ impl Logic {
         password: String,
         transcode: bool,
     ) {
-        // Stop current playback.
-        self.playback_thread
-            .send(LogicToPlaybackMessage::StopPlayback);
+        // Shut down the playback thread (closes the audio device).
+        self.playback_thread = None;
 
         // Create a new client with the new credentials.
         self.client = Arc::new(bs::Client::new(
@@ -982,7 +996,7 @@ impl Logic {
         ));
         self.transcode = transcode;
 
-        // Clear the library and queue.
+        // Clear the library, queue, and any previous connection error.
         {
             let mut st = self.write_state();
             st.library = Default::default();
@@ -990,6 +1004,7 @@ impl Logic {
             st.current_track_and_position = None;
             st.started_loading_track = None;
             st.scrobble_state = Default::default();
+            st.error = None;
         }
 
         // Re-fetch the library without restoring a track.
@@ -1000,7 +1015,8 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let library_populated_tx = self.library_populated_tx.clone();
-        let playback_tx = self.playback_thread.send_handle();
+        let playback_event_tx = self.playback_event_tx.clone();
+        let playback_thread_slot = self.playback_thread_slot.clone();
         let transcode = self.transcode;
         self.tokio_thread.spawn(async move {
             let future = {
@@ -1016,6 +1032,7 @@ impl Logic {
                     .await?;
 
                     let req_id;
+                    let volume;
                     {
                         let mut st = state.write().unwrap();
                         let sort_order = st.sort_order;
@@ -1041,7 +1058,15 @@ impl Logic {
                         }
 
                         req_id = st.queue.request_counter;
+                        volume = st.volume;
                     }
+
+                    // Server connection succeeded — start the playback thread
+                    // (opens the audio device). The main thread picks it up in
+                    // `update()`.
+                    let pt = PlaybackThread::new(volume, playback_event_tx);
+                    let playback_tx = pt.send_handle();
+                    *playback_thread_slot.lock().unwrap() = Some(pt);
 
                     // Signal that library population is complete.
                     let _ = library_populated_tx.send(());
@@ -1078,6 +1103,13 @@ impl Logic {
                 });
             }
         })
+    }
+
+    /// Sends a message to the playback thread, if it is running.
+    fn send_to_playback(&self, message: LogicToPlaybackMessage) {
+        if let Some(ref pt) = self.playback_thread {
+            pt.send(message);
+        }
     }
 
     fn write_state(&'_ self) -> RwLockWriteGuard<'_, AppState> {

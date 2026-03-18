@@ -14,7 +14,6 @@ pub struct PlaybackThread {
     /// Kept to prevent the thread from being detached until the struct is
     /// dropped (at which point the process is exiting anyway).
     _playback_thread_handle: Option<std::thread::JoinHandle<()>>,
-    playback_to_logic_rx: PlaybackToLogicRx,
 }
 
 #[derive(Clone)]
@@ -88,11 +87,14 @@ impl Drop for PlaybackThread {
 }
 
 impl PlaybackThread {
-    pub fn new(volume: f32) -> Self {
+    /// Creates a new playback thread with the given volume and broadcast sender.
+    /// The broadcast sender is used to send playback events back to the logic layer.
+    pub fn new(
+        volume: f32,
+        playback_to_logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
+    ) -> Self {
         let (logic_to_playback_tx, logic_to_playback_rx) =
             std::sync::mpsc::channel::<LogicToPlaybackMessage>();
-        let (playback_to_logic_tx, playback_to_logic_rx) =
-            tokio::sync::broadcast::channel::<PlaybackToLogicMessage>(100);
 
         let playback_thread_handle = std::thread::spawn(move || {
             Self::run(logic_to_playback_rx, playback_to_logic_tx, volume);
@@ -101,7 +103,6 @@ impl PlaybackThread {
         Self {
             logic_to_playback_tx: Some(PlaybackThreadSendHandle(logic_to_playback_tx)),
             _playback_thread_handle: Some(playback_thread_handle),
-            playback_to_logic_rx,
         }
     }
 
@@ -115,10 +116,6 @@ impl PlaybackThread {
         self.logic_to_playback_tx
             .clone()
             .expect("playback thread is alive")
-    }
-
-    pub fn subscribe(&self) -> PlaybackToLogicRx {
-        self.playback_to_logic_rx.resubscribe()
     }
 
     #[cfg(feature = "audio")]
