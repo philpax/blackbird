@@ -301,9 +301,9 @@ impl PlaybackThread {
                         let position = Duration::ZERO;
                         if let Err(e) = sink.try_seek(position) {
                             tracing::warn!("Failed to seek to position {position:?}: {e}");
-                        } else {
+                        } else if let Some(track_id) = last_track_id.clone() {
                             let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                                track_id: last_track_id.clone().unwrap(),
+                                track_id,
                                 position,
                             }));
                         }
@@ -315,10 +315,12 @@ impl PlaybackThread {
                             if let Err(e) = sink.try_seek(position) {
                                 tracing::warn!("Failed to seek to position {position:?}: {e}");
                             }
-                            let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                                track_id: last_track_id.clone().unwrap(),
-                                position,
-                            }));
+                            if let Some(track_id) = last_track_id.clone() {
+                                let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                                    track_id,
+                                    position,
+                                }));
+                            }
                         }
                     }
                     LTPM::SeekImmediate(position) => {
@@ -326,10 +328,12 @@ impl PlaybackThread {
                         if let Err(e) = sink.try_seek(position) {
                             tracing::warn!("Failed to seek to position {position:?}: {e}");
                         }
-                        let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                            track_id: last_track_id.clone().unwrap(),
-                            position,
-                        }));
+                        if let Some(track_id) = last_track_id.clone() {
+                            let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
+                                track_id,
+                                position,
+                            }));
+                        }
                     }
                     LTPM::SetVolume(volume) => {
                         sink.set_volume(volume * volume);
@@ -387,9 +391,12 @@ impl PlaybackThread {
             let now = std::time::Instant::now();
             if now.duration_since(last_position_update) >= Duration::from_millis(250) {
                 last_position_update = now;
-                if !sink.empty() && !sink.is_paused() {
+                if !sink.empty()
+                    && !sink.is_paused()
+                    && let Some(track_id) = last_track_id.clone()
+                {
                     let _ = logic_tx.send(PTLM::PositionChanged(TrackAndPosition {
-                        track_id: last_track_id.clone().unwrap(),
+                        track_id,
                         position: current_position,
                     }));
                 }
