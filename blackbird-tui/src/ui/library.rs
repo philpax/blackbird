@@ -10,8 +10,8 @@ use ratatui::{
     Frame,
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{List, ListItem, ListState},
+    text::{Line, Span, Text},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -870,6 +870,56 @@ impl LibraryState {
     }
 }
 
+/// Draws a centered error message when the server connection fails,
+/// directing the user to the settings panel or config file.
+fn draw_connection_error(
+    frame: &mut Frame,
+    style: &blackbird_client_shared::style::Style,
+    error: &str,
+    area: Rect,
+) {
+    let accent = style.track_name_playing_color();
+    let dim = style.track_duration_color();
+    let text_color = style.text_color();
+
+    let config_path = blackbird_client_shared::config::config_path(crate::config::Config::FILENAME);
+    let config_path_str = config_path.display().to_string();
+
+    let lines = vec![
+        Line::from(Span::styled(
+            "connection failed",
+            Style::default().fg(accent).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(text_color),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Press ", Style::default().fg(dim)),
+            Span::styled(
+                "i",
+                Style::default().fg(accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to open settings and check your server configuration.",
+                Style::default().fg(dim),
+            ),
+        ]),
+        Line::from(Span::styled(
+            format!("Config file: {config_path_str}"),
+            Style::default().fg(dim),
+        )),
+    ];
+
+    let text = Text::from(lines);
+    let paragraph = Paragraph::new(text)
+        .wrap(ratatui::widgets::Wrap { trim: false })
+        .centered();
+    frame.render_widget(paragraph, area);
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
     let background_color = app.config.style.background_color();
@@ -890,6 +940,12 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = area;
 
     if !has_loaded {
+        // Check if the initial fetch failed (server unreachable, auth error, etc.).
+        if let Some(bc::AppStateError::InitialFetchFailed { ref error }) = app.logic.get_error() {
+            draw_connection_error(frame, &app.config.style, error, inner);
+            return;
+        }
+
         let track_count = app
             .logic
             .get_state()
@@ -910,8 +966,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let entries: Vec<LibraryEntry> = app.library.get_flat_library(&app.logic).to_vec();
 
     if entries.is_empty() {
-        let empty = ratatui::widgets::Paragraph::new("No tracks found")
-            .style(Style::default().fg(track_duration_color));
+        let empty =
+            Paragraph::new("No tracks found").style(Style::default().fg(track_duration_color));
         frame.render_widget(empty, inner);
         return;
     }
