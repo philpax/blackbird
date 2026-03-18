@@ -1061,7 +1061,10 @@ const PREVIEW_ART_ID: &str = "__preview_placeholder__";
 
 /// Builds fake `LibraryEntry` values for the settings preview, using bird-themed
 /// placeholder data. The entries include album gaps matching the configured spacing.
-fn build_preview_entries(album_spacing: usize) -> Vec<LibraryEntry> {
+fn build_preview_entries(
+    album_spacing: usize,
+    album_art_style: AlbumArtStyle,
+) -> Vec<LibraryEntry> {
     struct Album {
         artist: &'static str,
         album: &'static str,
@@ -1193,9 +1196,9 @@ fn build_preview_entries(album_spacing: usize) -> Vec<LibraryEntry> {
             });
         }
 
-        // Add spacer rows if needed for BelowAlbum art.
+        // In BelowAlbum mode, pad short groups so the art is fully visible.
         let track_count = album.tracks.len();
-        if track_count < art_term_rows {
+        if album_art_style == AlbumArtStyle::BelowAlbum && track_count < art_term_rows {
             for spacer_idx in track_count..art_term_rows {
                 entries.push(LibraryEntry::GroupSpacer {
                     cover_art_id: Some(art_id.clone()),
@@ -1235,7 +1238,7 @@ fn draw_library_preview(
     }
 
     let album_art_style = config.shared.layout.album_art_style;
-    let entries = build_preview_entries(config.shared.layout.album_spacing);
+    let entries = build_preview_entries(config.shared.layout.album_spacing, album_art_style);
 
     // Build art lookup maps with the placeholder image.
     let art_id = CoverArtId(PREVIEW_ART_ID.into());
