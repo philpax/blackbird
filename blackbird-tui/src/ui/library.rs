@@ -405,6 +405,24 @@ pub(crate) fn render_library_entry<'a>(
     }
 }
 
+/// Converts a line offset to an item offset. Uses `>` so that an item whose
+/// span *contains* the offset is included (important for 2-line group headers
+/// whose first line may be above the viewport).
+fn compute_item_offset(entries: &[LibraryEntry], line_offset: usize) -> usize {
+    let mut item_offset = 0usize;
+    let mut current_line = 0usize;
+    for (i, entry) in entries.iter().enumerate() {
+        let next_line = current_line + entry.height();
+        if next_line > line_offset {
+            item_offset = i;
+            return item_offset.min(entries.len().saturating_sub(1));
+        }
+        current_line = next_line;
+        item_offset = i + 1;
+    }
+    item_offset.min(entries.len().saturating_sub(1))
+}
+
 /// Returns the width of the scroll indicator based on sort order.
 /// Alphabetical uses single letters (1 char), year-based modes use full years (4 chars).
 /// Modes without labels still need 1 column for the scrollbar track.
@@ -619,10 +637,23 @@ impl LibraryState {
 
     /// Returns the cached flat library, rebuilding if needed.
     pub fn get_flat_library(&mut self, logic: &bc::Logic) -> &[LibraryEntry] {
+        self.ensure_flat_library(logic);
+        &self.cached_flat_library
+    }
+
+    /// Ensures the flat library cache is up to date, rebuilding if dirty.
+    /// Call this before using [`flat_library`] to avoid stale data.
+    pub fn ensure_flat_library(&mut self, logic: &bc::Logic) {
         if self.flat_library_dirty {
             self.rebuild_flat_library(logic);
             self.flat_library_dirty = false;
         }
+    }
+
+    /// Returns a shared reference to the cached flat library.
+    /// The caller must ensure the cache is fresh by calling
+    /// [`ensure_flat_library`] first.
+    pub fn flat_library(&self) -> &[LibraryEntry] {
         &self.cached_flat_library
     }
 
@@ -633,10 +664,7 @@ impl LibraryState {
 
     /// Returns a clone of the entry at the given index, if it exists.
     pub fn get_library_entry(&mut self, logic: &bc::Logic, index: usize) -> Option<LibraryEntry> {
-        if self.flat_library_dirty {
-            self.rebuild_flat_library(logic);
-            self.flat_library_dirty = false;
-        }
+        self.ensure_flat_library(logic);
         self.cached_flat_library.get(index).cloned()
     }
 
@@ -972,11 +1000,16 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Copy values we need before borrowing entries.
     let selected_index = app.library.selected_index;
     let playing_track_id = app.logic.get_playing_track_id();
+    let album_art_style = app.config.layout.base.album_art_style;
 
-    // Clone entries to avoid borrow conflicts when accessing cover_art_cache later.
-    let entries: Vec<LibraryEntry> = app.library.get_flat_library(&app.logic).to_vec();
+    // Ensure the flat library cache is fresh and perform all library mutations
+    // before taking an immutable borrow on entries.
+    app.library.ensure_flat_library(&app.logic);
+    app.library.set_album_art_style(album_art_style);
+    app.library
+        .set_album_spacing(app.config.layout.base.album_spacing);
 
-    if entries.is_empty() {
+    if app.library.flat_library().is_empty() {
         let empty =
             Paragraph::new("No tracks found").style(Style::default().fg(track_duration_color));
         frame.render_widget(empty, inner);
@@ -984,7 +1017,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Calculate total content height in lines to determine if scrollbar is needed.
-    let total_lines = total_entry_lines(&entries);
+    let total_lines = total_entry_lines(app.library.flat_library());
     let sort_order = app.logic.get_sort_order();
     let indicator_width = scroll_indicator_width(sort_order);
     let visible_height = inner.height as usize;
@@ -1000,21 +1033,8 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         .viewport_line
         .min(total_lines.saturating_sub(visible_height));
 
-    // Convert line offset back to item offset for ListState. Use `>` so that
-    // an item whose span *contains* centered_offset is included (important for
-    // 2-line group headers whose first line may be above the viewport).
-    let mut item_offset = 0usize;
-    let mut current_line = 0usize;
-    for (i, entry) in entries.iter().enumerate() {
-        let next_line = current_line + entry.height();
-        if next_line > centered_offset {
-            item_offset = i;
-            break;
-        }
-        current_line = next_line;
-        item_offset = i + 1;
-    }
-    item_offset = item_offset.min(entries.len().saturating_sub(1));
+    // Convert line offset back to item offset for ListState.
+    let item_offset = compute_item_offset(app.library.flat_library(), centered_offset);
 
     // Update scroll_offset now so that hover hit-testing (below) uses the
     // current viewport position rather than the stale value from last frame.
@@ -1027,6 +1047,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // During a content drag, keep the underline on the drag-selected row;
     // otherwise fall back to the normal hover detection.
     let underline_index = app.library.drag_selected_index.or(hovered_entry_index);
+
+    // Now take the immutable borrow on entries for the rest of rendering.
+    let entries = app.library.flat_library();
 
     // Determine the visible item range: walk forward from item_offset until we
     // exceed the visible height (plus a small buffer for partially visible items).
@@ -1042,11 +1065,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         visible_item_end += 1;
     }
     visible_item_end = visible_item_end.min(entries.len());
-
-    let album_art_style = app.config.layout.base.album_art_style;
-    app.library.set_album_art_style(album_art_style);
-    app.library
-        .set_album_spacing(app.config.layout.base.album_spacing);
 
     // Pre-compute quadrant colors only for visible group headers (used in LeftOfAlbum mode).
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
@@ -1144,7 +1162,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Render combined scrollbar + library indicator on the right column.
     render_scrollbar_with_library_indicator(
         frame,
-        &entries,
+        entries,
         inner,
         geo.visible_height,
         geo.total_lines,
@@ -1202,7 +1220,8 @@ fn is_over_below_album_art(
 }
 
 /// Computes which library entry's heart is being hovered by the mouse, if any.
-fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
+/// The caller must ensure the flat library cache is fresh before calling this.
+fn compute_hovered_heart_index(app: &App, area: Rect) -> Option<usize> {
     // Suppress hover when the playback mode dropdown is covering the library.
     if app.playback_mode_dropdown {
         return None;
@@ -1215,10 +1234,9 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
         return None;
     }
 
-    // Capture scroll_offset before borrowing entries.
     let scroll_offset = app.library.scroll_offset;
     let album_art_style = app.config.layout.base.album_art_style;
-    let entries = app.library.get_flat_library(&app.logic);
+    let entries = app.library.flat_library();
 
     // Compute list_width and heart column.
     let total_lines = total_entry_lines(entries);
@@ -1265,7 +1283,8 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
 /// Computes which library entry is being hovered by the mouse, if any.
 /// Unlike `compute_hovered_heart_index`, this triggers on any X position within the row,
 /// not just the heart column. For group headers, only the second line (album line) counts.
-fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
+/// The caller must ensure the flat library cache is fresh before calling this.
+fn compute_hovered_entry_index(app: &App, area: Rect) -> Option<usize> {
     // Suppress hover when the playback mode dropdown is covering the library.
     if app.playback_mode_dropdown {
         return None;
@@ -1280,7 +1299,7 @@ fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
 
     let scroll_offset = app.library.scroll_offset;
     let album_art_style = app.config.layout.base.album_art_style;
-    let entries = app.library.get_flat_library(&app.logic);
+    let entries = app.library.flat_library();
 
     let inner_y = my.saturating_sub(area.y) as usize;
 
@@ -1612,7 +1631,8 @@ pub fn handle_key(app: &mut App, action: Action) {
 /// Handle click in the library area.
 pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     app.library.cancel_inertia(&app.logic);
-    let entries = app.library.get_flat_library(&app.logic).to_vec();
+    app.library.ensure_flat_library(&app.logic);
+    let total_lines = total_entry_lines(app.library.flat_library());
 
     // Determine the scroll indicator area (rightmost columns based on sort order).
     let indicator_width = scroll_indicator_width(app.logic.get_sort_order()) as u16;
@@ -1620,12 +1640,12 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
 
     // Click on scroll indicator area.
     if x >= scroll_area_start {
-        scroll_to_y(app, &entries, library_area, y);
+        scroll_to_y(app, total_lines, library_area, y);
         app.library.scrollbar_dragging = true;
         return;
     }
 
-    // Calculate which entry was clicked
+    // Calculate which entry was clicked.
     let inner_y = y.saturating_sub(library_area.y);
     let scroll_offset = app.library.scroll_offset;
 
@@ -1633,6 +1653,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let mut clicked_index = None;
     let mut click_line_in_entry = 0usize;
 
+    let entries = app.library.flat_library();
     for (i, entry) in entries.iter().enumerate().skip(scroll_offset) {
         let h = entry.height();
 
@@ -1647,29 +1668,29 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let Some(index) = clicked_index else {
         return;
     };
-    let Some(entry) = entries.get(index).cloned() else {
-        return;
-    };
 
-    // Check if clicking on the heart (last content character before scrollbar).
-    let total_lines = total_entry_lines(&entries);
+    // Gather click geometry.
     let indicator_width = scroll_indicator_width(app.logic.get_sort_order());
     let geo = super::layout::library_geometry(library_area, total_lines, indicator_width);
     let heart_col = geo.heart_col;
     let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
-
     let album_art_style = app.config.layout.base.album_art_style;
 
+    // Extract the data we need from the entry before dropping the borrow.
+    let entries = app.library.flat_library();
+    let Some(entry) = entries.get(index) else {
+        return;
+    };
+
     // In BelowAlbum mode, clicking the art area on a track or spacer opens the overlay.
-    if is_over_below_album_art(album_art_style, x, library_area, &entry) {
-        let cover_art_id = match &entry {
+    if is_over_below_album_art(album_art_style, x, library_area, entry) {
+        let cover_art_id = match entry {
             LibraryEntry::Track { cover_art_id, .. }
             | LibraryEntry::GroupSpacer { cover_art_id, .. } => cover_art_id.clone(),
             _ => None,
         };
         if let Some(id) = cover_art_id {
-            // Find the group header for the overlay title.
-            let title = find_group_title_for_entry(&entries, index);
+            let title = find_group_title_for_entry(entries, index);
             app.album_art_overlay = Some(AlbumArtOverlay {
                 cover_art_id: id,
                 title,
@@ -1678,10 +1699,12 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
         return;
     }
 
-    match &entry {
+    match entry {
         LibraryEntry::Track { id, starred, .. } => {
             if is_heart_click {
-                app.logic.set_track_starred(id, !starred);
+                let id = id.clone();
+                let starred = *starred;
+                app.logic.set_track_starred(&id, !starred);
                 app.library.mark_dirty();
             } else {
                 app.library.click_pending = Some((x, y, index));
@@ -1706,7 +1729,9 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                     });
                 }
             } else if is_heart_click && click_line_in_entry == 1 {
-                app.logic.set_album_starred(album_id, !starred);
+                let album_id = album_id.clone();
+                let starred = *starred;
+                app.logic.set_album_starred(&album_id, !starred);
                 app.library.mark_dirty();
             } else {
                 app.library.click_pending = Some((x, y, index));
@@ -1737,13 +1762,16 @@ fn find_group_title_for_entry(entries: &[LibraryEntry], index: usize) -> String 
 
 /// Handle mouse drag in the library area. Returns `true` if the drag was handled.
 pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> bool {
+    // Compute total lines once (avoids repeated cloning of entries).
+    app.library.ensure_flat_library(&app.logic);
+    let total_lines = total_entry_lines(app.library.flat_library());
+
     // Scrollbar drag — once started, continues regardless of x position
     if app.library.scrollbar_dragging
         && y >= library_area.y
         && y < library_area.y + library_area.height
     {
-        let entries = app.library.get_flat_library(&app.logic).to_vec();
-        scroll_to_y(app, &entries, library_area, y);
+        scroll_to_y(app, total_lines, library_area, y);
         app.library.click_pending = None;
         app.library.dragging = true;
         return true;
@@ -1754,8 +1782,7 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
     let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
 
     if x >= scroll_area_start && y >= library_area.y && y < library_area.y + library_area.height {
-        let entries = app.library.get_flat_library(&app.logic).to_vec();
-        scroll_to_y(app, &entries, library_area, y);
+        scroll_to_y(app, total_lines, library_area, y);
         app.library.click_pending = None;
         app.library.dragging = true;
         app.library.scrollbar_dragging = true;
@@ -1765,8 +1792,6 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
     // Content drag → pan library by tracking viewport line offset.
     if app.library.click_pending.is_some() || app.library.dragging {
         app.library.inertia_velocity = 0.0;
-        let entries = app.library.get_flat_library(&app.logic).to_vec();
-        let total_lines = total_entry_lines(&entries);
         let visible_height = library_area.height as usize;
 
         // On first drag, reset drag velocity tracking.
@@ -1800,14 +1825,15 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
         // Select the entry under the cursor.
         let cursor_content_line =
             app.library.viewport_line + y.saturating_sub(library_area.y) as usize;
-        if let Some(entry_index) = entry_at_line(&entries, cursor_content_line) {
+        let flat = app.library.flat_library();
+        if let Some(entry_index) = entry_at_line(flat, cursor_content_line) {
             // Snap to the entry itself, or the nearest track if it's a header.
-            let target = match entries.get(entry_index) {
+            let target = match flat.get(entry_index) {
                 Some(LibraryEntry::Track { .. }) => Some(entry_index),
                 Some(LibraryEntry::GroupHeader { .. }) => {
                     // Try the next entry (first track in the group).
                     let next = entry_index + 1;
-                    match entries.get(next) {
+                    match flat.get(next) {
                         Some(LibraryEntry::Track { .. }) => Some(next),
                         _ => None,
                     }
@@ -1879,12 +1905,11 @@ pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
 }
 
 /// Scroll library to a position based on Y coordinate (for scrollbar dragging).
-pub fn scroll_to_y(app: &mut App, entries: &[LibraryEntry], library_area: Rect, y: u16) {
+pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16) {
     let visible_height = library_area.height as usize;
     let inner_y = y.saturating_sub(library_area.y);
     let ratio = inner_y as f32 / visible_height as f32;
 
-    let total_lines = total_entry_lines(entries);
     let max_viewport = total_lines.saturating_sub(visible_height);
 
     app.library.viewport_line = ((total_lines as f32) * ratio) as usize;
