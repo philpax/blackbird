@@ -373,7 +373,7 @@ pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
     let block = Block::bordered().style(
         Style::default()
             .fg(style.text_color())
-            .bg(style.background_color()),
+            .bg(super::effective_bg(&app.config)),
     );
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
@@ -406,7 +406,8 @@ pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
         };
 
         frame.render_widget(
-            Paragraph::new(label).style(Style::default().fg(fg).bg(style.background_color())),
+            Paragraph::new(label)
+                .style(Style::default().fg(fg).bg(super::effective_bg(&app.config))),
             row_rect,
         );
     }

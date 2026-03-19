@@ -28,7 +28,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     let cover_art_id = overlay.cover_art_id.clone();
     let title_text = format!(" {} ", overlay.title);
 
-    let background_color = app.config.style.background_color();
+    let background_color = super::effective_bg(&app.config);
     let text_color = app.config.style.text_color();
 
     let aspect_ratio = app.cover_art_cache.get_aspect_ratio(Some(&cover_art_id));

@@ -138,7 +138,7 @@ impl App {
                 let panel_open = self.focused_panel == FocusedPanel::Lyrics;
                 if self.lyrics.shared.on_track_started(
                     &tap.track_id,
-                    self.config.shared.layout.show_inline_lyrics,
+                    self.config.layout.base.show_inline_lyrics,
                     panel_open,
                 ) {
                     self.logic.request_lyrics(&tap.track_id);
@@ -280,11 +280,11 @@ impl App {
         let mut config = self.config.clone();
         config.general.volume = self.logic.get_volume();
         if let Some(tap) = self.logic.get_playing_track_and_position() {
-            config.shared.last_playback.track_id = Some(tap.track_id);
-            config.shared.last_playback.track_position_secs = tap.position.as_secs_f64();
+            config.last_playback.track_id = Some(tap.track_id);
+            config.last_playback.track_position_secs = tap.position.as_secs_f64();
         }
-        config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
-        config.shared.last_playback.sort_order = self.logic.get_sort_order();
+        config.last_playback.playback_mode = self.logic.get_playback_mode();
+        config.last_playback.sort_order = self.logic.get_sort_order();
         config.save();
     }
 

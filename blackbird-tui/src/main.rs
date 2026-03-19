@@ -55,14 +55,14 @@ fn main() -> anyhow::Result<()> {
     let (track_updated_tx, track_updated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
-        base_url: config.shared.server.base_url.clone(),
-        username: config.shared.server.username.clone(),
-        password: config.shared.server.password.clone(),
-        transcode: config.shared.server.transcode,
+        base_url: config.server.base_url.clone(),
+        username: config.server.username.clone(),
+        password: config.server.password.clone(),
+        transcode: config.server.transcode,
         volume: config.general.volume,
-        sort_order: config.shared.last_playback.sort_order,
-        playback_mode: config.shared.last_playback.playback_mode,
-        last_playback: config.shared.last_playback.as_track_and_position(),
+        sort_order: config.last_playback.sort_order,
+        playback_mode: config.last_playback.playback_mode,
+        last_playback: config.last_playback.as_track_and_position(),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
@@ -189,7 +189,14 @@ fn run_app(
             // caused by external library output (e.g. glib warnings).
             // Unlike `terminal.clear()`, this doesn't send a clear
             // escape sequence, so there's no visible flicker.
-            if last_full_redraw.elapsed() >= FULL_REDRAW_INTERVAL {
+            //
+            // When using the terminal's native background, swap every frame
+            // to force full redraws. Without this, ratatui's diff skips cells
+            // that haven't changed from the default state, causing artifacts
+            // during rapid scrolling.
+            if app.config.layout.use_terminal_background
+                || last_full_redraw.elapsed() >= FULL_REDRAW_INTERVAL
+            {
                 terminal.swap_buffers();
                 last_full_redraw = Instant::now();
             }
@@ -387,10 +394,10 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
                 if server_changed {
                     app.config.save();
                     app.logic.reload_library(
-                        app.config.shared.server.base_url.clone(),
-                        app.config.shared.server.username.clone(),
-                        app.config.shared.server.password.clone(),
-                        app.config.shared.server.transcode,
+                        app.config.server.base_url.clone(),
+                        app.config.server.username.clone(),
+                        app.config.server.password.clone(),
+                        app.config.server.transcode,
                     );
                 }
                 // Config changes are applied in-memory for live preview;
@@ -422,7 +429,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
     // Check whether the cursor is over the inline lyrics overlay so we can
     // block interactions that would otherwise reach the library underneath.
-    let over_inline_lyrics = app.config.shared.layout.show_inline_lyrics
+    let over_inline_lyrics = app.config.layout.base.show_inline_lyrics
         && app.lyrics.shared.has_synced_lyrics()
         && ui::layout::inline_lyrics_overlay(main.content)
             .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
@@ -539,10 +546,10 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     if server_changed {
                         app.config.save();
                         app.logic.reload_library(
-                            app.config.shared.server.base_url.clone(),
-                            app.config.shared.server.username.clone(),
-                            app.config.shared.server.password.clone(),
-                            app.config.shared.server.transcode,
+                            app.config.server.base_url.clone(),
+                            app.config.server.username.clone(),
+                            app.config.server.password.clone(),
+                            app.config.server.transcode,
                         );
                     }
                 }

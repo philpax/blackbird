@@ -91,6 +91,16 @@ The `--no-default-features` checks do not require system libraries and can be ru
 - **Always** import types or functions at the very top of the module, with the one exception being `cfg()`-gated functions. Never import types or modules within function contexts, other than this `cfg()`-gated exception.
 - It is okay to import enum variants for pattern matching, though.
 
+### Configuration and shared settings
+
+The `blackbird-client-shared` crate defines configuration structs (e.g., `Layout`, `Style`) shared across all clients. All clients read the same `config.toml`.
+
+When a client needs a setting that only it uses, create a wrapper struct in the client that embeds the shared struct via `#[serde(flatten)]` and adds the client-specific fields. For example, the TUI defines its own `Layout` that flattens `blackbird_client_shared::config::Layout` and adds `use_terminal_background`. This keeps the shared crate focused on truly shared fields while letting each client extend the same TOML section with its own settings.
+
+- Embed shared structs with `#[serde(flatten)]` in client-specific wrapper types to extend them.
+- Use `#[serde(default)]` on new fields so they are backwards-compatible.
+- Include `#[serde(flatten)] pub extra: toml::Table` catch-all fields in wrapper structs. This preserves unknown fields from other clients during roundtripping, so saving config from one client won't lose settings only used by the other.
+
 ### Memory and performance
 
 - Use `Arc` or borrows for shared immutable data.

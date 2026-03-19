@@ -170,32 +170,32 @@ fn build_rows() -> Vec<SettingsRow> {
         SettingsRow::StringField {
             label: "Base URL",
             section: Section::Server,
-            get: |c| c.shared.server.base_url.clone(),
-            set: |c, v| c.shared.server.base_url = v,
+            get: |c| c.server.base_url.clone(),
+            set: |c, v| c.server.base_url = v,
             default: || blackbird_shared::config::Server::default().base_url,
             password: false,
         },
         SettingsRow::StringField {
             label: "Username",
             section: Section::Server,
-            get: |c| c.shared.server.username.clone(),
-            set: |c, v| c.shared.server.username = v,
+            get: |c| c.server.username.clone(),
+            set: |c, v| c.server.username = v,
             default: || blackbird_shared::config::Server::default().username,
             password: false,
         },
         SettingsRow::StringField {
             label: "Password",
             section: Section::Server,
-            get: |c| c.shared.server.password.clone(),
-            set: |c, v| c.shared.server.password = v,
+            get: |c| c.server.password.clone(),
+            set: |c, v| c.server.password = v,
             default: || blackbird_shared::config::Server::default().password,
             password: true,
         },
         SettingsRow::BoolField {
             label: "Transcode",
             section: Section::Server,
-            get: |c| c.shared.server.transcode,
-            set: |c, v| c.shared.server.transcode = v,
+            get: |c| c.server.transcode,
+            set: |c, v| c.server.transcode = v,
             default: || blackbird_shared::config::Server::default().transcode,
         },
         // Layout section.
@@ -204,25 +204,32 @@ fn build_rows() -> Vec<SettingsRow> {
         SettingsRow::BoolField {
             label: "Show inline lyrics",
             section: Section::Layout,
-            get: |c| c.shared.layout.show_inline_lyrics,
-            set: |c, v| c.shared.layout.show_inline_lyrics = v,
+            get: |c| c.layout.base.show_inline_lyrics,
+            set: |c, v| c.layout.base.show_inline_lyrics = v,
             default: || Layout::default().show_inline_lyrics,
         },
         SettingsRow::EnumField {
             label: "Album art style",
             section: Section::Layout,
-            get: |c| c.shared.layout.album_art_style,
-            set: |c, v| c.shared.layout.album_art_style = v,
+            get: |c| c.layout.base.album_art_style,
+            set: |c, v| c.layout.base.album_art_style = v,
             default: || Layout::default().album_art_style,
         },
         SettingsRow::UsizeField {
             label: "Album spacing",
             section: Section::Layout,
-            get: |c| c.shared.layout.album_spacing,
-            set: |c, v| c.shared.layout.album_spacing = v,
+            get: |c| c.layout.base.album_spacing,
+            set: |c, v| c.layout.base.album_spacing = v,
             default: || Layout::default().album_spacing,
             min: 0,
             max: 10,
+        },
+        SettingsRow::BoolField {
+            label: "Use terminal background",
+            section: Section::Layout,
+            get: |c| c.layout.use_terminal_background,
+            set: |c, v| c.layout.use_terminal_background = v,
+            default: || crate::config::Layout::default().use_terminal_background,
         },
         // Colors section.
         SettingsRow::SectionSpacer,
@@ -242,8 +249,8 @@ fn build_rows() -> Vec<SettingsRow> {
         SettingsRow::F32Field {
             label: "Scroll multiplier",
             section: Section::General,
-            get: |c| c.shared.layout.scroll_multiplier,
-            set: |c, v| c.shared.layout.scroll_multiplier = v,
+            get: |c| c.layout.base.scroll_multiplier,
+            set: |c, v| c.layout.base.scroll_multiplier = v,
             default: || Layout::default().scroll_multiplier,
             min: 1.0,
             max: 200.0,
@@ -982,11 +989,11 @@ pub fn handle_key(
             if let Some(section) = section {
                 match section {
                     Section::Server => {
-                        config.shared.server = blackbird_shared::config::Server::default();
+                        config.server = blackbird_shared::config::Server::default();
                         server_changed = true;
                     }
                     Section::Layout => {
-                        config.shared.layout = Layout::default();
+                        config.layout = crate::config::Layout::default();
                     }
                     Section::Colors => {
                         config.style = shared_style::Style::default();
@@ -1194,8 +1201,8 @@ fn draw_library_preview(
         return;
     }
 
-    let album_art_style = config.shared.layout.album_art_style;
-    let entries = build_preview_entries(config.shared.layout.album_spacing, album_art_style);
+    let album_art_style = config.layout.base.album_art_style;
+    let entries = build_preview_entries(config.layout.base.album_spacing, album_art_style);
 
     // Build art lookup maps with the placeholder image.
     let art_id = CoverArtId(PREVIEW_ART_ID.into());
@@ -1245,7 +1252,7 @@ fn draw_library_preview(
         album_art_style,
         list_width: inner.width as usize,
         large_art_cols,
-        background_color: style.background_color(),
+        background_color: super::effective_bg(config),
         album_color: style.album_color(),
         album_year_color: style.album_year_color(),
         album_length_color: style.album_length_color(),
@@ -1270,7 +1277,7 @@ fn draw_library_preview(
         .map(|(i, entry)| render_library_entry(entry, i, &render_ctx))
         .collect();
 
-    let list = List::new(items).style(Style::default().bg(style.background_color()));
+    let list = List::new(items).style(Style::default().bg(super::effective_bg(config)));
     let mut list_state = ListState::default();
     *list_state.offset_mut() = 0;
     frame.render_stateful_widget(list, inner, &mut list_state);

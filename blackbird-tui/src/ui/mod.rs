@@ -26,6 +26,16 @@ use crate::{
     keys,
 };
 
+/// Returns the effective background color: either the configured background
+/// or `Color::Reset` (terminal native) when `use_terminal_background` is set.
+pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
+    if config.layout.use_terminal_background {
+        Color::Reset
+    } else {
+        config.style.background_color()
+    }
+}
+
 /// Extension trait for using shared style colors with ratatui.
 /// Uses gamma-corrected colors to match egui's appearance.
 pub trait StyleExt {
@@ -155,8 +165,20 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
 
     // Fill entire terminal with background color.
-    let bg = Block::default().style(Style::default().bg(app.config.style.background_color()));
-    frame.render_widget(bg, size);
+    //
+    // When using the terminal's native background (`Color::Reset`), we set a
+    // non-default fg color on the fill. Since every cell is a space, the fg is
+    // invisible, but it ensures cells differ from the default buffer state so
+    // ratatui's diff includes them. Combined with `swap_buffers()` in the main
+    // loop, this forces a full redraw every frame, preventing artifacts during
+    // rapid scrolling.
+    let bg_color = effective_bg(&app.config);
+    let fill_style = if app.config.layout.use_terminal_background {
+        Style::default().bg(bg_color).fg(Color::DarkGray)
+    } else {
+        Style::default().bg(bg_color)
+    };
+    frame.render_widget(Block::default().style(fill_style), size);
 
     // Main layout: [NowPlaying] | [Scrub+Volume] | [Content] | [Help].
     let main = layout::split_main(size);
@@ -207,7 +229,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // Draw inline lyrics as an overlay at the bottom of the content area.
     if !is_loading
-        && app.config.shared.layout.show_inline_lyrics
+        && app.config.layout.base.show_inline_lyrics
         && app.lyrics.shared.has_synced_lyrics()
         && let Some(overlay) = layout::inline_lyrics_overlay(main.content)
     {
@@ -236,8 +258,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let popup_area = Rect::new(x, y, popup_width, popup_height);
 
         // Clear the area behind the popup.
-        let clear =
-            Block::default().style(Style::default().bg(app.config.style.background_color()));
+        let clear = Block::default().style(Style::default().bg(bg_color));
         frame.render_widget(clear, popup_area);
 
         let popup = Paragraph::new(format!(" {prompt}"))
@@ -300,7 +321,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let has_half = filled_half_blocks % 2 == 1;
 
     let fg = style.track_name_playing_color();
-    let bg = style.background_color();
+    let bg = effective_bg(&app.config);
     let buf = frame.buffer_mut();
     let y = sv.scrub_bar.y;
 
@@ -363,7 +384,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         Span::styled(
             "\u{2591}".repeat(empty),
-            Style::default().fg(style.background_color()),
+            Style::default().fg(effective_bg(&app.config)),
         ),
         Span::styled(format!(" {vol_pct}"), Style::default().fg(vol_active_color)),
     ]);
@@ -402,7 +423,7 @@ fn draw_inline_lyrics(frame: &mut Frame, app: &App, area: Rect) {
 
     let paragraph = Paragraph::new(line).style(
         Style::default()
-            .bg(style.background_color())
+            .bg(effective_bg(&app.config))
             .fg(style.track_duration_color()),
     );
     // Use top and bottom borders to visually separate inline lyrics from
@@ -527,6 +548,6 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let help_line = Line::from(spans);
-    let help = Paragraph::new(help_line).style(Style::default().bg(style.background_color()));
+    let help = Paragraph::new(help_line).style(Style::default().bg(effective_bg(&app.config)));
     frame.render_widget(help, area);
 }

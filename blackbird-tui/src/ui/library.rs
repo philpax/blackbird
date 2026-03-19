@@ -933,7 +933,7 @@ fn draw_connection_error(
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
-    let background_color = app.config.style.background_color();
+    let background_color = super::effective_bg(&app.config);
     let text_color = app.config.style.text_color();
     let album_color = app.config.style.album_color();
     let album_year_color = app.config.style.album_year_color();
@@ -1043,10 +1043,10 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     visible_item_end = visible_item_end.min(entries.len());
 
-    let album_art_style = app.config.shared.layout.album_art_style;
+    let album_art_style = app.config.layout.base.album_art_style;
     app.library.set_album_art_style(album_art_style);
     app.library
-        .set_album_spacing(app.config.shared.layout.album_spacing);
+        .set_album_spacing(app.config.layout.base.album_spacing);
 
     // Pre-compute quadrant colors only for visible group headers (used in LeftOfAlbum mode).
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
@@ -1217,7 +1217,7 @@ fn compute_hovered_heart_index(app: &mut App, area: Rect) -> Option<usize> {
 
     // Capture scroll_offset before borrowing entries.
     let scroll_offset = app.library.scroll_offset;
-    let album_art_style = app.config.shared.layout.album_art_style;
+    let album_art_style = app.config.layout.base.album_art_style;
     let entries = app.library.get_flat_library(&app.logic);
 
     // Compute list_width and heart column.
@@ -1279,7 +1279,7 @@ fn compute_hovered_entry_index(app: &mut App, area: Rect) -> Option<usize> {
     }
 
     let scroll_offset = app.library.scroll_offset;
-    let album_art_style = app.config.shared.layout.album_art_style;
+    let album_art_style = app.config.layout.base.album_art_style;
     let entries = app.library.get_flat_library(&app.logic);
 
     let inner_y = my.saturating_sub(area.y) as usize;
@@ -1658,7 +1658,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     let heart_col = geo.heart_col;
     let is_heart_click = x as usize >= heart_col && x as usize <= heart_col + 1;
 
-    let album_art_style = app.config.shared.layout.album_art_style;
+    let album_art_style = app.config.layout.base.album_art_style;
 
     // In BelowAlbum mode, clicking the art area on a track or spacer opens the overlay.
     if is_over_below_album_art(album_art_style, x, library_area, &entry) {
