@@ -649,6 +649,7 @@ dependencies = [
  "rand 0.9.2",
  "rodio",
  "serde",
+ "smallvec",
  "smol_str 0.3.5",
  "tokio",
  "tracing",

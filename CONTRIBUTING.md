@@ -105,6 +105,7 @@ When a client needs a setting that only it uses, create a wrapper struct in the 
 
 - Use `Arc` or borrows for shared immutable data.
 - Use `smol_str` for efficient small string storage.
+- Use `smallvec` for collections that are usually small, to avoid heap allocations in the common case.
 - Careful attention to cloning referencing. Avoid cloning if code has a natural tree structure.
 - Stream data (e.g. iterators) where possible rather than buffering.
 

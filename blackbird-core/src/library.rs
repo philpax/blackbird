@@ -1,9 +1,12 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
+    ops::Bound,
     sync::Arc,
 };
 
 use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
+use smallvec::SmallVec;
+use smol_str::SmolStr;
 
 use crate::SortOrder;
 
@@ -22,9 +25,11 @@ pub struct Library {
     pub track_to_group_index: HashMap<TrackId, usize>,
     pub track_to_group_track_index: HashMap<TrackId, usize>,
 
-    track_search_queries: Vec<String>,
+    /// Inverted search index: normalized word → track indices (into `track_ids`).
+    /// Each posting list is sorted and deduplicated.
+    word_index: BTreeMap<SmolStr, Vec<u32>>,
 
-    /// Search cache: stores last [`SEARCH_CACHE_SIZE`] queries
+    /// Search cache: stores last [`SEARCH_CACHE_SIZE`] queries.
     search_cache: HashMap<String, Vec<TrackId>>,
     search_cache_order: VecDeque<String>,
 }
@@ -77,27 +82,17 @@ impl Library {
     }
 
     pub fn search(&mut self, query: &str) -> Vec<TrackId> {
-        let query = query.to_lowercase();
+        let cache_key = query.to_lowercase();
 
-        // Check if the query is in the cache
-        if let Some(cached_result) = self.search_cache.get(&query) {
+        if let Some(cached_result) = self.search_cache.get(&cache_key) {
             return cached_result.clone();
         }
 
-        // Perform the search
-        let results = self
-            .track_search_queries
-            .iter()
-            .enumerate()
-            .filter(|(_, q)| q.contains(&query))
-            .map(|(idx, _)| self.track_ids[idx].clone())
-            .collect::<Vec<_>>();
+        let results = self.run_search(query);
 
-        // Add to cache
-        self.search_cache.insert(query.clone(), results.clone());
-        self.search_cache_order.push_back(query.clone());
+        self.search_cache.insert(cache_key.clone(), results.clone());
+        self.search_cache_order.push_back(cache_key);
 
-        // Maintain cache size limit
         if self.search_cache_order.len() > SEARCH_CACHE_SIZE
             && let Some(oldest_query) = self.search_cache_order.pop_front()
         {
@@ -105,6 +100,63 @@ impl Library {
         }
 
         results
+    }
+
+    fn run_search(&self, query: &str) -> Vec<TrackId> {
+        let variants = normalize_variants(query);
+
+        // Union of matches across all query variants.
+        let mut matching_indices: BTreeSet<u32> = BTreeSet::new();
+
+        for variant in &variants {
+            let tokens: SmallVec<[&str; 4]> = variant.split_whitespace().collect();
+            if tokens.is_empty() {
+                continue;
+            }
+
+            // Intersect per-token match sets within a single variant: a track
+            // matches the variant only if every token has a prefix match on at
+            // least one of the track's indexed words.
+            let mut variant_matches: Option<BTreeSet<u32>> = None;
+            for token in &tokens {
+                let token_matches = self.indices_with_word_prefix(token);
+                variant_matches = Some(match variant_matches {
+                    None => token_matches,
+                    Some(existing) => existing
+                        .intersection(&token_matches)
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                });
+                if variant_matches.as_ref().is_some_and(|m| m.is_empty()) {
+                    break;
+                }
+            }
+
+            if let Some(vm) = variant_matches {
+                matching_indices.extend(vm);
+            }
+        }
+
+        matching_indices
+            .into_iter()
+            .map(|idx| self.track_ids[idx as usize].clone())
+            .collect()
+    }
+
+    /// Returns the set of track indices for any indexed word that starts with
+    /// `prefix`, discovered via a BTreeMap range scan over the index.
+    fn indices_with_word_prefix(&self, prefix: &str) -> BTreeSet<u32> {
+        let mut matches = BTreeSet::new();
+        for (word, indices) in self
+            .word_index
+            .range::<str, _>((Bound::Included(prefix), Bound::Unbounded))
+        {
+            if !word.starts_with(prefix) {
+                break;
+            }
+            matches.extend(indices.iter().copied());
+        }
+        matches
     }
 
     /// Resorts the library groups based on the given sort order and rebuilds all lookup structures.
@@ -238,9 +290,10 @@ impl Library {
         self.search_cache.clear();
         self.search_cache_order.clear();
 
-        // Rebuild track search queries to match new order.
-        self.track_search_queries.clear();
-        for track_id in &self.track_ids {
+        // Rebuild the inverted word index to match the new track order.
+        self.word_index.clear();
+        for (idx, track_id) in self.track_ids.iter().enumerate() {
+            let idx = idx as u32;
             let track = self.track_map.get(track_id).unwrap();
             let album = track.album_id.as_ref().and_then(|id| self.albums.get(id));
             let artist = track
@@ -248,17 +301,256 @@ impl Library {
                 .as_deref()
                 .or(album.as_ref().map(|a| a.artist.as_str()));
 
-            let mut query = String::new();
+            let mut raw = String::new();
             if let Some(artist) = artist {
-                query.push_str(&artist.to_lowercase());
-                query.push(' ');
+                raw.push_str(artist);
+                raw.push(' ');
             }
             if let Some(album) = album {
-                query.push_str(&album.name.to_lowercase());
-                query.push(' ');
+                raw.push_str(&album.name);
+                raw.push(' ');
             }
-            query.push_str(&track.title.to_lowercase());
-            self.track_search_queries.push(query);
+            raw.push_str(&track.title);
+
+            for variant in normalize_variants(&raw) {
+                for word in variant.split_whitespace() {
+                    // Tracks are iterated in ascending order, so the posting
+                    // list for a word grows monotonically. Checking `last()` is
+                    // enough to avoid duplicates without a post-pass.
+                    let postings = self.word_index.entry(SmolStr::new(word)).or_default();
+                    if postings.last() != Some(&idx) {
+                        postings.push(idx);
+                    }
+                }
+            }
         }
+    }
+}
+
+/// Returns deduplicated normalized variants of `s` for indexing or querying.
+///
+/// This currently emits up to two forms:
+/// - `stripped`: lowercase, with ASCII punctuation removed outright.
+/// - `spaced`: lowercase, with ASCII punctuation replaced by spaces and runs of
+///   whitespace collapsed.
+///
+/// The two forms coincide when `s` contains no punctuation (or when punctuation
+/// is already adjacent to whitespace), so in the common case only one variant
+/// is returned. Indexing and querying both apply this function, so e.g. a
+/// query of `"ac dc"` finds a track titled `"AC/DC"` via the spaced variant,
+/// while `"acdc"` finds it via the stripped variant.
+fn normalize_variants(s: &str) -> SmallVec<[SmolStr; 2]> {
+    let stripped: String = s
+        .chars()
+        .filter(|c| !c.is_ascii_punctuation())
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+
+    let spaced_raw: String = s
+        .chars()
+        .map(|c| if c.is_ascii_punctuation() { ' ' } else { c })
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    let mut spaced = String::with_capacity(spaced_raw.len());
+    for word in spaced_raw.split_whitespace() {
+        if !spaced.is_empty() {
+            spaced.push(' ');
+        }
+        spaced.push_str(word);
+    }
+
+    let mut variants: SmallVec<[SmolStr; 2]> = SmallVec::new();
+    variants.push(SmolStr::new(&stripped));
+    if spaced != stripped {
+        variants.push(SmolStr::new(&spaced));
+    }
+    variants
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variants(s: &str) -> Vec<String> {
+        normalize_variants(s)
+            .into_iter()
+            .map(|v| v.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn normalize_variants_collapses_when_equal() {
+        // No punctuation: one variant.
+        assert_eq!(variants("Hello World"), vec!["hello world"]);
+        // Punctuation adjacent to whitespace yields identical forms.
+        assert_eq!(variants("Mr. Invisible"), vec!["mr invisible"]);
+    }
+
+    #[test]
+    fn normalize_variants_emits_both_for_intra_word_punctuation() {
+        assert_eq!(variants("AC/DC"), vec!["acdc", "ac dc"]);
+        assert_eq!(variants("Sci-Fi"), vec!["scifi", "sci fi"]);
+        assert_eq!(variants("John's"), vec!["johns", "john s"]);
+    }
+
+    #[test]
+    fn normalize_variants_handles_runs_of_punctuation() {
+        // Multiple punctuation chars collapse to a single space in the spaced
+        // form, matching how a user would type the query.
+        assert_eq!(
+            variants("J.R.R. Tolkien"),
+            vec!["jrr tolkien", "j r r tolkien"]
+        );
+    }
+
+    /// A single track specification for test fixtures: `(track_id, title, artist, album_id, album_name)`.
+    type TrackSpec = (
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+        &'static str,
+    );
+
+    fn build_library(specs: &[TrackSpec]) -> Library {
+        let mut track_map: HashMap<TrackId, Track> = HashMap::new();
+        let mut albums: HashMap<AlbumId, Album> = HashMap::new();
+        let mut group_tracks: HashMap<AlbumId, Vec<TrackId>> = HashMap::new();
+
+        for (tid, title, artist, aid, aname) in specs {
+            let track_id = TrackId((*tid).into());
+            let album_id = AlbumId((*aid).into());
+
+            track_map.insert(
+                track_id.clone(),
+                Track {
+                    id: track_id.clone(),
+                    title: (*title).into(),
+                    artist: Some((*artist).into()),
+                    track: None,
+                    year: None,
+                    _genre: None,
+                    duration: None,
+                    disc_number: None,
+                    album_id: Some(album_id.clone()),
+                    starred: false,
+                    play_count: None,
+                },
+            );
+            albums.entry(album_id.clone()).or_insert_with(|| Album {
+                id: album_id.clone(),
+                name: (*aname).into(),
+                artist: (*artist).into(),
+                artist_id: None,
+                cover_art_id: None,
+                track_count: 0,
+                duration: 0,
+                year: None,
+                _genre: None,
+                starred: false,
+                created: "".into(),
+            });
+            group_tracks.entry(album_id).or_default().push(track_id);
+        }
+
+        let groups: Vec<Arc<Group>> = group_tracks
+            .into_iter()
+            .map(|(album_id, tracks)| {
+                let album = &albums[&album_id];
+                Arc::new(Group {
+                    artist: album.artist.clone(),
+                    sort_artist: album.artist.clone(),
+                    album: album.name.clone(),
+                    year: None,
+                    duration: 0,
+                    tracks,
+                    cover_art_id: None,
+                    album_id,
+                    starred: false,
+                })
+            })
+            .collect();
+
+        let mut library = Library::default();
+        library.populate(vec![], track_map, groups, albums, SortOrder::Alphabetical);
+        library
+    }
+
+    fn search_ids(library: &mut Library, query: &str) -> Vec<String> {
+        library.search(query).into_iter().map(|id| id.0).collect()
+    }
+
+    #[test]
+    fn search_finds_track_with_punctuation_in_title() {
+        let mut lib = build_library(&[
+            ("t1", "Mr. Invisible", "Some Artist", "a1", "Album One"),
+            ("t2", "Something Else", "Other Artist", "a2", "Album Two"),
+        ]);
+
+        // The original motivating case.
+        assert_eq!(search_ids(&mut lib, "mr invisible"), vec!["t1"]);
+        // Punctuation in the query itself is also normalized.
+        assert_eq!(search_ids(&mut lib, "Mr. Invisible"), vec!["t1"]);
+    }
+
+    #[test]
+    fn search_matches_both_intra_word_forms() {
+        let mut lib = build_library(&[
+            ("t1", "Thunderstruck", "AC/DC", "a1", "The Razors Edge"),
+            ("t2", "Starlight", "Muse", "a2", "Black Holes"),
+        ]);
+
+        // Collapsed form.
+        assert_eq!(search_ids(&mut lib, "acdc"), vec!["t1"]);
+        // Spaced form.
+        assert_eq!(search_ids(&mut lib, "ac dc"), vec!["t1"]);
+        // Original form.
+        assert_eq!(search_ids(&mut lib, "AC/DC"), vec!["t1"]);
+    }
+
+    #[test]
+    fn search_intersects_tokens_regardless_of_order() {
+        let mut lib = build_library(&[
+            ("t1", "Invisible Touch", "Genesis", "a1", "Invisible Touch"),
+            ("t2", "Mr. Invisible", "Genesis", "a1", "Invisible Touch"),
+            (
+                "t3",
+                "Land of Confusion",
+                "Genesis",
+                "a1",
+                "Invisible Touch",
+            ),
+        ]);
+
+        // All three tracks are on the "Invisible Touch" album, so all three
+        // index the word "invisible". Adding "mr" narrows to t2 only, and
+        // order of the query tokens should not matter.
+        let forward = search_ids(&mut lib, "mr invisible");
+        let reverse = search_ids(&mut lib, "invisible mr");
+        assert_eq!(forward, vec!["t2"]);
+        assert_eq!(forward, reverse);
+    }
+
+    #[test]
+    fn search_uses_prefix_matching_per_token() {
+        let mut lib = build_library(&[
+            ("t1", "Invisible Touch", "Genesis", "a1", "Invisible Touch"),
+            ("t2", "Mr. Invisible", "Genesis", "a1", "Invisible Touch"),
+        ]);
+
+        // Prefix of a word matches.
+        let mut got = search_ids(&mut lib, "invis");
+        got.sort();
+        assert_eq!(got, vec!["t1", "t2"]);
+        // A non-prefix substring does not match (this is the intentional
+        // semantic change from the previous substring-on-full-haystack
+        // behavior).
+        assert!(search_ids(&mut lib, "sible").is_empty());
+    }
+
+    #[test]
+    fn search_returns_empty_for_no_match() {
+        let mut lib = build_library(&[("t1", "Hello World", "Artist", "a1", "Album")]);
+        assert!(search_ids(&mut lib, "xyz").is_empty());
     }
 }
