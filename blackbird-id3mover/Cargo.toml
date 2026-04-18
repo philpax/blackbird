@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 anyhow = { workspace = true }
 
-clap = { version = "4.5.40", features = ["derive"] }
-lofty = "0.22.4"
-sanitize-filename = "0.6.0"
-walkdir = "2.5.0"
+clap = { workspace = true }
+lofty = { workspace = true }
+sanitize-filename = { workspace = true }
+walkdir = { workspace = true }

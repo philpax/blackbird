@@ -20,15 +20,10 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 toml = { workspace = true }
 
-egui = "0.32.0"
-eframe = "0.32.0"
-egui_extras = { version = "0.32.0", features = ["image"] }
-image = { version = "0.25", default-features = false, features = [
-    "jpeg",
-    "png",
-    "webp",
-    "gif",
-] }
-egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
-raw-window-handle = "0.6"
-global-hotkey = "0.6"
+egui = { workspace = true }
+eframe = { workspace = true }
+egui_extras = { workspace = true }
+image = { workspace = true }
+egui-phosphor = { workspace = true }
+raw-window-handle = { workspace = true }
+global-hotkey = { workspace = true }

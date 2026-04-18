@@ -7,8 +7,8 @@ edition = "2024"
 blackbird-shared = { path = "../blackbird-shared" }
 blackbird-state = { path = "../blackbird-state" }
 
-chrono = { version = "0.4.41", features = ["serde"] }
-futures = "0.3"
+chrono = { workspace = true }
+futures = { workspace = true }
 
 anyhow = { workspace = true }
 serde = { workspace = true }

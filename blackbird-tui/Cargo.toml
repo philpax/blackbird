@@ -20,16 +20,11 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true }
 toml = { workspace = true }
 
-ratatui = "0.30"
-crossterm = "0.29"
-smol_str = "0.3"
-unicode-width = "0.2"
-image = { version = "0.25", default-features = false, features = [
-    "jpeg",
-    "png",
-    "webp",
-    "gif",
-] }
+ratatui = { workspace = true }
+crossterm = { workspace = true }
+smol_str = { workspace = true }
+unicode-width = { workspace = true }
+image = { workspace = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+windows = { workspace = true }
