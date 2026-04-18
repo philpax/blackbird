@@ -5,6 +5,8 @@ use std::{
 };
 
 use blackbird_state::{Album, AlbumId, Group, Track, TrackId};
+use icu_normalizer::DecomposingNormalizer;
+use icu_properties::{CodePointMapData, props::CanonicalCombiningClass};
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 
@@ -327,26 +329,48 @@ impl Library {
     }
 }
 
+/// Folds diacritics so that e.g. `"Röyksopp"` becomes `"Royksopp"`.
+///
+/// Uses NFKD decomposition (breaking precomposed accented characters into a
+/// base plus combining marks) and then strips anything with a non-zero
+/// canonical combining class. Non-Latin scripts without combining marks
+/// (Cyrillic, CJK, etc.) pass through unchanged.
+///
+/// This mirrors the "primary strength" collation that `blackbird-state` uses
+/// for sorting — the goal is to treat `"é"` and `"e"` as the same character
+/// for search, just as they compare equal for sort ordering.
+fn fold_diacritics(s: &str) -> String {
+    let nfkd = DecomposingNormalizer::new_nfkd();
+    let ccc = CodePointMapData::<CanonicalCombiningClass>::new();
+    nfkd.normalize_iter(s.chars())
+        .filter(|c| ccc.get(*c) == CanonicalCombiningClass::NotReordered)
+        .collect()
+}
+
 /// Returns deduplicated normalized variants of `s` for indexing or querying.
 ///
-/// This currently emits up to two forms:
+/// The input is first folded via [`fold_diacritics`], then up to two further
+/// forms are emitted:
 /// - `stripped`: lowercase, with ASCII punctuation removed outright.
-/// - `spaced`: lowercase, with ASCII punctuation replaced by spaces and runs of
-///   whitespace collapsed.
+/// - `spaced`: lowercase, with ASCII punctuation replaced by spaces and runs
+///   of whitespace collapsed.
 ///
-/// The two forms coincide when `s` contains no punctuation (or when punctuation
-/// is already adjacent to whitespace), so in the common case only one variant
-/// is returned. Indexing and querying both apply this function, so e.g. a
-/// query of `"ac dc"` finds a track titled `"AC/DC"` via the spaced variant,
-/// while `"acdc"` finds it via the stripped variant.
+/// The two forms coincide when the folded input contains no punctuation (or
+/// when punctuation is already adjacent to whitespace), so in the common case
+/// only one variant is returned. Indexing and querying both apply this
+/// function, so e.g. a query of `"ac dc"` finds a track titled `"AC/DC"` via
+/// the spaced variant, while `"acdc"` finds it via the stripped variant, and
+/// `"royksopp"` finds `"Röyksopp"` via the fold.
 fn normalize_variants(s: &str) -> SmallVec<[SmolStr; 2]> {
-    let stripped: String = s
+    let folded = fold_diacritics(s);
+
+    let stripped: String = folded
         .chars()
         .filter(|c| !c.is_ascii_punctuation())
         .flat_map(|c| c.to_lowercase())
         .collect();
 
-    let spaced_raw: String = s
+    let spaced_raw: String = folded
         .chars()
         .map(|c| if c.is_ascii_punctuation() { ' ' } else { c })
         .flat_map(|c| c.to_lowercase())
@@ -401,6 +425,14 @@ mod tests {
             variants("J.R.R. Tolkien"),
             vec!["jrr tolkien", "j r r tolkien"]
         );
+    }
+
+    #[test]
+    fn normalize_variants_folds_diacritics() {
+        assert_eq!(variants("Röyksopp"), vec!["royksopp"]);
+        assert_eq!(variants("Sigur Rós"), vec!["sigur ros"]);
+        assert_eq!(variants("Café del Mar"), vec!["cafe del mar"]);
+        assert_eq!(variants("Mötley Crüe"), vec!["motley crue"]);
     }
 
     /// A single track specification for test fixtures: `(track_id, title, artist, album_id, album_name)`.
@@ -546,6 +578,23 @@ mod tests {
         // semantic change from the previous substring-on-full-haystack
         // behavior).
         assert!(search_ids(&mut lib, "sible").is_empty());
+    }
+
+    #[test]
+    fn search_folds_diacritics_both_sides() {
+        let mut lib = build_library(&[
+            ("t1", "Eple", "Röyksopp", "a1", "Melody A.M."),
+            ("t2", "Starálfur", "Sigur Rós", "a2", "Takk..."),
+        ]);
+
+        // Indexed with diacritics, queried without: the motivating case.
+        assert_eq!(search_ids(&mut lib, "royksopp"), vec!["t1"]);
+        // Indexed with diacritics, queried with diacritics: also works.
+        assert_eq!(search_ids(&mut lib, "Röyksopp"), vec!["t1"]);
+        // Works across tokens: "Sigur Rós" is indexed with the fold applied.
+        assert_eq!(search_ids(&mut lib, "sigur ros"), vec!["t2"]);
+        // And so is the track title ("Starálfur" -> "staralfur").
+        assert_eq!(search_ids(&mut lib, "staralfur"), vec!["t2"]);
     }
 
     #[test]

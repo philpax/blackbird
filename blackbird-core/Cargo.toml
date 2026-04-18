@@ -16,6 +16,8 @@ tracing = { workspace = true }
 blackbird-subsonic = { path = "../blackbird-subsonic" }
 blackbird-state = { path = "../blackbird-state" }
 
+icu_normalizer = { workspace = true }
+icu_properties = { workspace = true }
 rodio = { workspace = true, optional = true }
 smallvec = { workspace = true }
 smol_str = { workspace = true }
