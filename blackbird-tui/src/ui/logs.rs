@@ -136,29 +136,23 @@ pub fn handle_key(logs: &mut LogsState, action: Action) -> Option<LogsAction> {
         Action::MoveUp => {
             logs.scroll_offset = logs.scroll_offset.saturating_sub(1);
         }
-        Action::MoveDown => {
-            if log_len > 0 {
-                logs.scroll_offset = (logs.scroll_offset + 1).min(log_len - 1);
-            }
+        Action::MoveDown if log_len > 0 => {
+            logs.scroll_offset = (logs.scroll_offset + 1).min(log_len - 1);
         }
         Action::PageUp => {
             logs.scroll_offset = logs
                 .scroll_offset
                 .saturating_sub(super::layout::PAGE_SCROLL_SIZE);
         }
-        Action::PageDown => {
-            if log_len > 0 {
-                logs.scroll_offset =
-                    (logs.scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
-            }
+        Action::PageDown if log_len > 0 => {
+            logs.scroll_offset =
+                (logs.scroll_offset + super::layout::PAGE_SCROLL_SIZE).min(log_len - 1);
         }
         Action::GotoTop => {
             logs.scroll_offset = 0;
         }
-        Action::GotoBottom => {
-            if log_len > 0 {
-                logs.scroll_offset = log_len - 1;
-            }
+        Action::GotoBottom if log_len > 0 => {
+            logs.scroll_offset = log_len - 1;
         }
         _ => {}
     }

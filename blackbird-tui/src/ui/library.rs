@@ -1118,7 +1118,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let render_ctx = EntryRenderContext {
         album_art_style,
         list_width,
-        large_art_cols: large_art_cols as usize,
+        large_art_cols,
         background_color,
         album_color,
         album_year_color,
@@ -1568,28 +1568,26 @@ pub fn handle_key(app: &mut App, action: Action) {
                 app.library.ensure_viewport_shows_selection();
             }
         }
-        Action::PageDown => {
-            if entries_len > 0 {
-                let target = (app.library.selected_index + super::layout::PAGE_SCROLL_SIZE)
-                    .min(entries_len - 1);
-                let mut new_index = target;
-                loop {
-                    if let Some(LibraryEntry::Track { .. }) =
-                        app.library.get_library_entry(&app.logic, new_index)
-                    {
-                        break;
-                    }
-                    if new_index == 0 {
-                        break;
-                    }
-                    new_index -= 1;
-                }
+        Action::PageDown if entries_len > 0 => {
+            let target =
+                (app.library.selected_index + super::layout::PAGE_SCROLL_SIZE).min(entries_len - 1);
+            let mut new_index = target;
+            loop {
                 if let Some(LibraryEntry::Track { .. }) =
                     app.library.get_library_entry(&app.logic, new_index)
                 {
-                    app.library.selected_index = new_index;
-                    app.library.ensure_viewport_shows_selection();
+                    break;
                 }
+                if new_index == 0 {
+                    break;
+                }
+                new_index -= 1;
+            }
+            if let Some(LibraryEntry::Track { .. }) =
+                app.library.get_library_entry(&app.logic, new_index)
+            {
+                app.library.selected_index = new_index;
+                app.library.ensure_viewport_shows_selection();
             }
         }
         Action::GotoTop => {
@@ -1603,16 +1601,14 @@ pub fn handle_key(app: &mut App, action: Action) {
                 }
             }
         }
-        Action::GotoBottom => {
-            if entries_len > 0 {
-                for i in (0..entries_len).rev() {
-                    if let Some(LibraryEntry::Track { .. }) =
-                        app.library.get_library_entry(&app.logic, i)
-                    {
-                        app.library.selected_index = i;
-                        app.library.center_viewport_on_selection();
-                        break;
-                    }
+        Action::GotoBottom if entries_len > 0 => {
+            for i in (0..entries_len).rev() {
+                if let Some(LibraryEntry::Track { .. }) =
+                    app.library.get_library_entry(&app.logic, i)
+                {
+                    app.library.selected_index = i;
+                    app.library.center_viewport_on_selection();
+                    break;
                 }
             }
         }

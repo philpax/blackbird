@@ -711,15 +711,11 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
             app.library.scroll_to_track = scroll_target;
         }
         Action::Settings => app.toggle_settings(),
-        Action::Select => {
-            if app.focused_panel == FocusedPanel::Library {
-                ui::library::handle_key(app, Action::Select);
-            }
+        Action::Select if app.focused_panel == FocusedPanel::Library => {
+            ui::library::handle_key(app, Action::Select);
         }
-        Action::Back => {
-            if app.focused_panel != FocusedPanel::Library {
-                app.focused_panel = FocusedPanel::Library;
-            }
+        Action::Back if app.focused_panel != FocusedPanel::Library => {
+            app.focused_panel = FocusedPanel::Library;
         }
         _ => {}
     }

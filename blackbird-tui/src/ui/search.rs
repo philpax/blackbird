@@ -200,15 +200,13 @@ pub fn handle_key(
                 return Some(SearchAction::ToggleSearch);
             }
         }
-        Action::MoveUp => {
-            if search.selected_index > 0 {
-                search.selected_index -= 1;
-            }
+        Action::MoveUp if search.selected_index > 0 => {
+            search.selected_index -= 1;
         }
-        Action::MoveDown => {
-            if !search.results.is_empty() && search.selected_index < search.results.len() - 1 {
-                search.selected_index += 1;
-            }
+        Action::MoveDown
+            if !search.results.is_empty() && search.selected_index < search.results.len() - 1 =>
+        {
+            search.selected_index += 1;
         }
         Action::DeleteChar => {
             search.query.pop();

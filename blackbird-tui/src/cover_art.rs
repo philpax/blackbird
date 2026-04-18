@@ -579,13 +579,14 @@ pub(crate) fn compute_art_grid(image_data: &[u8], cols: usize, rows: usize) -> A
                 }
             }
 
-            if count > 0 {
-                *cell = Color::Rgb(
-                    (r_sum / count) as u8,
-                    (g_sum / count) as u8,
-                    (b_sum / count) as u8,
-                );
-            }
+            // The bounds above guarantee x1 > x0 and y1 > y0 (both clamped via
+            // `.max(+1)`), so the inner loops always iterate at least once and
+            // `count` is strictly positive.
+            *cell = Color::Rgb(
+                (r_sum / count) as u8,
+                (g_sum / count) as u8,
+                (b_sum / count) as u8,
+            );
         }
     }
 
