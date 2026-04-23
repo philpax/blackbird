@@ -23,6 +23,9 @@ pub struct Config {
     /// Last playback state, persisted across sessions.
     #[serde(default)]
     pub last_playback: blackbird_client_shared::config::LastPlayback,
+    /// Playback-related settings shared across clients.
+    #[serde(default)]
+    pub playback: blackbird_client_shared::config::Playback,
     /// Catch-all for unknown top-level sections (e.g. keybindings from GUI).
     #[serde(flatten)]
     pub extra: toml::Table,

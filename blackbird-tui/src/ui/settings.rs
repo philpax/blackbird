@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::LazyLock};
 
 use blackbird_client_shared::{
-    config::{AlbumArtStyle, Layout},
+    config::{AlbumArtStyle, Layout, Playback},
     style as shared_style,
 };
 use blackbird_core::blackbird_state::{AlbumId, CoverArtId, TrackId};
@@ -101,6 +101,7 @@ enum SettingsRow {
 enum Section {
     Server,
     Layout,
+    Playback,
     Colors,
     General,
 }
@@ -230,6 +231,16 @@ fn build_rows() -> Vec<SettingsRow> {
             get: |c| c.layout.use_terminal_background,
             set: |c, v| c.layout.use_terminal_background = v,
             default: || crate::config::Layout::default().use_terminal_background,
+        },
+        // Playback section.
+        SettingsRow::SectionSpacer,
+        SettingsRow::SectionHeader("Playback"),
+        SettingsRow::BoolField {
+            label: "Apply ReplayGain",
+            section: Section::Playback,
+            get: |c| c.playback.apply_replaygain,
+            set: |c, v| c.playback.apply_replaygain = v,
+            default: || Playback::default().apply_replaygain,
         },
         // Colors section.
         SettingsRow::SectionSpacer,
@@ -994,6 +1005,9 @@ pub fn handle_key(
                     }
                     Section::Layout => {
                         config.layout = crate::config::Layout::default();
+                    }
+                    Section::Playback => {
+                        config.playback = Playback::default();
                     }
                     Section::Colors => {
                         config.style = shared_style::Style::default();

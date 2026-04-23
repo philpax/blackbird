@@ -104,10 +104,29 @@ pub struct Config {
     /// Layout configuration for the library and player UI.
     #[serde(default)]
     pub layout: Layout,
+    /// Playback-related settings shared across clients.
+    #[serde(default)]
+    pub playback: Playback,
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// Playback-related settings shared across clients.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Playback {
+    /// Whether ReplayGain volume adjustments should be applied during playback.
+    #[serde(default = "default_true")]
+    pub apply_replaygain: bool,
+}
+impl Default for Playback {
+    fn default() -> Self {
+        Self {
+            apply_replaygain: true,
+        }
+    }
 }
 
 /// Last playback state, persisted across sessions.
