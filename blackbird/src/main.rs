@@ -321,8 +321,8 @@ impl eframe::App for App {
 
         #[cfg(feature = "media-controls")]
         self.controls.update();
-        // Keep ReplayGain application in sync with the config; cheap since it
-        // is only used when loading the next track.
+        // Keep ReplayGain application in sync with the config. Cheap:
+        // `set_apply_replaygain` is a no-op when the value is unchanged.
         self.logic
             .set_apply_replaygain(self.config.read().unwrap().shared.playback.apply_replaygain);
         self.logic.update();

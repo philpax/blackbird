@@ -6,6 +6,10 @@ use crate::app_state::TrackAndPosition;
 
 #[cfg(feature = "audio")]
 use std::collections::VecDeque;
+#[cfg(feature = "audio")]
+use std::sync::Arc;
+#[cfg(feature = "audio")]
+use std::sync::atomic::AtomicBool;
 
 pub struct PlaybackThread {
     /// Wrapped in `Option` so that `Drop` can close the channel before joining
@@ -46,16 +50,20 @@ pub struct TrackPlayback {
 
 #[cfg(feature = "audio")]
 impl TrackPlayback {
-    /// Decodes the audio payload and appends it to `sink`, applying `gain` as
-    /// an amplification factor when set. Returns the `TrackId` back for use
-    /// in subsequent bookkeeping on success, or alongside the decode error on
-    /// failure so the caller can report which track failed.
+    /// Decodes the audio payload and appends it to `sink`, wrapping the
+    /// decoded source in a [`RuntimeReplayGain`] that reads its enabled flag
+    /// from `apply_replaygain` per sample. This means toggling the shared
+    /// flag affects every source currently queued on the sink — including
+    /// the one playing right now — without any master-volume trickery.
+    ///
+    /// Returns the `TrackId` back for use in subsequent bookkeeping, or
+    /// alongside the decode error on failure so the caller can report
+    /// which track failed.
     fn decode_and_append(
         self,
         sink: &rodio::Sink,
+        apply_replaygain: Arc<AtomicBool>,
     ) -> Result<TrackId, (TrackId, rodio::decoder::DecoderError)> {
-        use rodio::Source as _;
-
         let decoder = rodio::decoder::DecoderBuilder::new()
             .with_byte_len(self.data.len() as u64)
             .with_data(std::io::Cursor::new(self.data))
@@ -64,11 +72,88 @@ impl TrackPlayback {
             Ok(d) => d,
             Err(e) => return Err((self.track_id, e)),
         };
-        match self.gain {
-            Some(factor) => sink.append(decoder.amplify(factor)),
-            None => sink.append(decoder),
-        }
+        sink.append(RuntimeReplayGain::new(
+            decoder,
+            self.gain.unwrap_or(1.0),
+            apply_replaygain,
+        ));
         Ok(self.track_id)
+    }
+}
+
+/// A rodio [`Source`](rodio::Source) wrapper that multiplies each sample by
+/// `factor` when `enabled` is true, and passes samples through unchanged
+/// otherwise. The flag is shared via [`Arc`] so that it can be flipped from
+/// outside the audio thread to take effect mid-track.
+#[cfg(feature = "audio")]
+struct RuntimeReplayGain<I> {
+    input: I,
+    factor: f32,
+    enabled: Arc<AtomicBool>,
+}
+
+#[cfg(feature = "audio")]
+impl<I> RuntimeReplayGain<I> {
+    fn new(input: I, factor: f32, enabled: Arc<AtomicBool>) -> Self {
+        Self {
+            input,
+            factor,
+            enabled,
+        }
+    }
+}
+
+#[cfg(feature = "audio")]
+impl<I> Iterator for RuntimeReplayGain<I>
+where
+    I: rodio::Source,
+{
+    type Item = I::Item;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let sample = self.input.next()?;
+        if self.enabled.load(std::sync::atomic::Ordering::Relaxed) {
+            Some(sample * self.factor)
+        } else {
+            Some(sample)
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.input.size_hint()
+    }
+}
+
+#[cfg(feature = "audio")]
+impl<I> rodio::Source for RuntimeReplayGain<I>
+where
+    I: rodio::Source,
+{
+    #[inline]
+    fn current_span_len(&self) -> Option<usize> {
+        self.input.current_span_len()
+    }
+
+    #[inline]
+    fn channels(&self) -> rodio::ChannelCount {
+        self.input.channels()
+    }
+
+    #[inline]
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.input.sample_rate()
+    }
+
+    #[inline]
+    fn total_duration(&self) -> Option<Duration> {
+        self.input.total_duration()
+    }
+
+    #[inline]
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.input.try_seek(pos)
     }
 }
 
@@ -92,6 +177,9 @@ pub enum LogicToPlaybackMessage {
     /// final position is always applied.
     SeekImmediate(Duration),
     SetVolume(f32),
+    /// Enables or disables ReplayGain application for every queued source,
+    /// including the one currently playing.
+    SetApplyReplayGain(bool),
     /// Sent during shutdown to exit the playback loop immediately. Needed
     /// because cloned `PlaybackThreadSendHandle`s in tokio tasks keep the
     /// channel open, so disconnect alone is not reliable.
@@ -130,17 +218,24 @@ impl Drop for PlaybackThread {
 }
 
 impl PlaybackThread {
-    /// Creates a new playback thread with the given volume and broadcast sender.
-    /// The broadcast sender is used to send playback events back to the logic layer.
+    /// Creates a new playback thread with the given volume, ReplayGain toggle,
+    /// and broadcast sender. The broadcast sender is used to send playback
+    /// events back to the logic layer.
     pub fn new(
         volume: f32,
+        apply_replaygain: bool,
         playback_to_logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
     ) -> Self {
         let (logic_to_playback_tx, logic_to_playback_rx) =
             std::sync::mpsc::channel::<LogicToPlaybackMessage>();
 
         let playback_thread_handle = std::thread::spawn(move || {
-            Self::run(logic_to_playback_rx, playback_to_logic_tx, volume);
+            Self::run(
+                logic_to_playback_rx,
+                playback_to_logic_tx,
+                volume,
+                apply_replaygain,
+            );
         });
 
         Self {
@@ -166,10 +261,15 @@ impl PlaybackThread {
         playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
         logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         volume: f32,
+        apply_replaygain: bool,
     ) {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
         use rodio::cpal::traits::HostTrait as _;
+
+        // Shared with every source appended to the sink so that flipping the
+        // flag takes effect mid-track, not just on the next load.
+        let apply_replaygain = Arc::new(AtomicBool::new(apply_replaygain));
 
         fn error_callback(err: rodio::cpal::StreamError) {
             tracing::warn!("audio stream error: {err}");
@@ -251,25 +351,26 @@ impl PlaybackThread {
 
                         // Append new track first, then clear old tracks.
                         // This ensures the sink is never completely empty.
-                        let track_id = match track.decode_and_append(&sink) {
-                            Ok(track_id) => track_id,
-                            Err((track_id, err)) => {
-                                // Send a dummy track-started to ensure core is aware of what the
-                                // track was that caused the failure.
-                                let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
-                                    track_id: track_id.clone(),
-                                    position: Duration::from_secs(0),
-                                }));
-                                update_and_send_state(
-                                    &logic_tx,
-                                    &mut state,
-                                    PlaybackState::Stopped,
-                                );
-                                let _ = logic_tx
-                                    .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
-                                continue;
-                            }
-                        };
+                        let track_id =
+                            match track.decode_and_append(&sink, apply_replaygain.clone()) {
+                                Ok(track_id) => track_id,
+                                Err((track_id, err)) => {
+                                    // Send a dummy track-started to ensure core is aware of what the
+                                    // track was that caused the failure.
+                                    let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
+                                        track_id: track_id.clone(),
+                                        position: Duration::from_secs(0),
+                                    }));
+                                    update_and_send_state(
+                                        &logic_tx,
+                                        &mut state,
+                                        PlaybackState::Stopped,
+                                    );
+                                    let _ = logic_tx
+                                        .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
+                                    continue;
+                                }
+                            };
 
                         // Skip all old tracks (everything except the one we just appended).
                         let tracks_to_skip = queued_tracks.len();
@@ -305,19 +406,20 @@ impl PlaybackThread {
                     }
                     LTPM::AppendNextTrack(track) => {
                         // Append to sink for gapless playback.
-                        let track_id = match track.decode_and_append(&sink) {
-                            Ok(track_id) => track_id,
-                            Err((track_id, err)) => {
-                                tracing::warn!(
-                                    "Failed to decode next track {}: {}",
-                                    track_id.0,
-                                    err
-                                );
-                                let _ = logic_tx
-                                    .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
-                                continue;
-                            }
-                        };
+                        let track_id =
+                            match track.decode_and_append(&sink, apply_replaygain.clone()) {
+                                Ok(track_id) => track_id,
+                                Err((track_id, err)) => {
+                                    tracing::warn!(
+                                        "Failed to decode next track {}: {}",
+                                        track_id.0,
+                                        err
+                                    );
+                                    let _ = logic_tx
+                                        .send(PTLM::FailedToPlayTrack(track_id, err.to_string()));
+                                    continue;
+                                }
+                            };
                         queued_tracks.push_back(track_id.clone());
                         tracing::debug!(
                             "Appended next track {} (queue length: {})",
@@ -397,6 +499,9 @@ impl PlaybackThread {
                     LTPM::SetVolume(volume) => {
                         sink.set_volume(volume * volume);
                     }
+                    LTPM::SetApplyReplayGain(enabled) => {
+                        apply_replaygain.store(enabled, std::sync::atomic::Ordering::Relaxed);
+                    }
                     LTPM::Shutdown => return,
                 }
             }
@@ -471,6 +576,7 @@ impl PlaybackThread {
         _playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
         _logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         _volume: f32,
+        _apply_replaygain: bool,
     ) {
         unimplemented!(
             "Audio playback is disabled - blackbird-core was built without the 'audio' feature"

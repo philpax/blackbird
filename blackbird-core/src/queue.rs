@@ -15,33 +15,28 @@ use crate::{
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle, TrackPlayback},
 };
 
-/// Convenience that reads the relevant bits of [`AppState`] and computes the
-/// ReplayGain factor for `track_id`, returning `None` if the track is not in
-/// the library or no gain applies.
+/// Convenience that reads the track's ReplayGain metadata from the library
+/// and computes the linear factor. Returns `None` if the track is unknown or
+/// has no usable gain data.
+///
+/// The returned factor is unconditional — whether it is actually applied is
+/// decided inside the playback thread via the shared atomic toggle, so that
+/// flipping the setting affects the currently playing source.
 pub(crate) fn gain_for_track(state: &AppState, track_id: &TrackId) -> Option<f32> {
     let track = state.library.track_map.get(track_id)?;
-    compute_replaygain_factor(state.apply_replaygain, track.replay_gain.as_ref())
+    compute_replaygain_factor(track.replay_gain.as_ref())
 }
 
-/// Computes the linear amplification factor to apply to a track for
-/// ReplayGain, if any.
+/// Computes the linear amplification factor described by `replay_gain`.
 ///
-/// Returns `None` if ReplayGain is disabled, no metadata is available, or no
-/// gain value can be determined.
-///
-/// Prefers album gain over track gain (matching the default of foobar2000,
-/// MPD, and similar players) so that intra-album loudness relationships are
-/// preserved. `baseGain` (if present) is added to the chosen gain, and
-/// `fallbackGain` is used if neither track nor album gain is available. The
-/// resulting linear factor is clamped so that `factor * peak <= 1.0`,
-/// preventing digital clipping.
-pub(crate) fn compute_replaygain_factor(
-    apply_replaygain: bool,
-    replay_gain: Option<&ReplayGain>,
-) -> Option<f32> {
-    if !apply_replaygain {
-        return None;
-    }
+/// Returns `None` if no metadata is present or no gain value can be
+/// determined. Prefers album gain over track gain (matching the default of
+/// foobar2000, MPD, and similar players) so that intra-album loudness
+/// relationships are preserved. `baseGain` (if present) is added to the
+/// chosen gain, and `fallbackGain` is used if neither track nor album gain is
+/// available. The resulting linear factor is clamped so that
+/// `factor * peak <= 1.0`, preventing digital clipping.
+pub(crate) fn compute_replaygain_factor(replay_gain: Option<&ReplayGain>) -> Option<f32> {
     let rg = replay_gain?;
 
     let (gain_db, peak) = match (rg.album_gain, rg.track_gain) {
@@ -1001,17 +996,8 @@ mod tests {
     }
 
     #[test]
-    fn replaygain_disabled_returns_none() {
-        let rg = ReplayGain {
-            track_gain: Some(-6.0),
-            ..Default::default()
-        };
-        assert!(compute_replaygain_factor(false, Some(&rg)).is_none());
-    }
-
-    #[test]
     fn replaygain_missing_metadata_returns_none() {
-        assert!(compute_replaygain_factor(true, None).is_none());
+        assert!(compute_replaygain_factor(None).is_none());
     }
 
     #[test]
@@ -1021,7 +1007,7 @@ mod tests {
             album_gain: Some(-3.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(true, Some(&rg)).unwrap();
+        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
         // -3 dB = 10^(-0.15) ≈ 0.708.
         assert!(approx_eq(factor, 0.708));
     }
@@ -1032,7 +1018,7 @@ mod tests {
             track_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(true, Some(&rg)).unwrap();
+        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
         // -6 dB = 10^(-0.3) ≈ 0.501.
         assert!(approx_eq(factor, 0.501));
     }
@@ -1043,7 +1029,7 @@ mod tests {
             fallback_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(true, Some(&rg)).unwrap();
+        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
         assert!(approx_eq(factor, 0.501));
     }
 
@@ -1054,7 +1040,7 @@ mod tests {
             base_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(true, Some(&rg)).unwrap();
+        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
         // -12 dB = 10^(-0.6) ≈ 0.251.
         assert!(approx_eq(factor, 0.251));
     }
@@ -1066,7 +1052,7 @@ mod tests {
             album_peak: Some(0.9),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(true, Some(&rg)).unwrap();
+        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
         // Unclamped 10^(0.3) ≈ 1.995 would clip at peak 0.9; clamped to 1/0.9 ≈ 1.111.
         assert!(approx_eq(factor, 1.0 / 0.9));
     }

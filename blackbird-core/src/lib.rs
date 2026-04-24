@@ -788,16 +788,24 @@ impl Logic {
         self.send_to_playback(LogicToPlaybackMessage::SetVolume(volume));
     }
 
-    /// Returns whether ReplayGain is currently being applied at load time.
+    /// Returns whether ReplayGain is currently being applied.
     pub fn get_apply_replaygain(&self) -> bool {
         self.read_state().apply_replaygain
     }
 
-    /// Enables or disables ReplayGain application. Changes take effect for
-    /// subsequently loaded tracks; the currently playing track keeps the gain
-    /// it was loaded with.
+    /// Enables or disables ReplayGain application. Takes effect immediately
+    /// for every queued source, including the one playing right now. No-op
+    /// if the value is unchanged.
     pub fn set_apply_replaygain(&self, enabled: bool) {
-        self.write_state().apply_replaygain = enabled;
+        let changed = {
+            let mut st = self.write_state();
+            let changed = st.apply_replaygain != enabled;
+            st.apply_replaygain = enabled;
+            changed
+        };
+        if changed {
+            self.send_to_playback(LogicToPlaybackMessage::SetApplyReplayGain(enabled));
+        }
     }
 
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
@@ -1050,6 +1058,7 @@ impl Logic {
 
                     let req_id;
                     let volume;
+                    let apply_replaygain;
                     {
                         let mut st = state.write().unwrap();
                         let sort_order = st.sort_order;
@@ -1076,12 +1085,13 @@ impl Logic {
 
                         req_id = st.queue.request_counter;
                         volume = st.volume;
+                        apply_replaygain = st.apply_replaygain;
                     }
 
                     // Server connection succeeded — start the playback thread
                     // (opens the audio device). The main thread picks it up in
                     // `update()`.
-                    let pt = PlaybackThread::new(volume, playback_event_tx);
+                    let pt = PlaybackThread::new(volume, apply_replaygain, playback_event_tx);
                     let playback_tx = pt.send_handle();
                     *playback_thread_slot.lock().unwrap() = Some(pt);
 
