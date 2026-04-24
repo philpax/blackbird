@@ -60,6 +60,7 @@ fn main() -> anyhow::Result<()> {
         password: config.server.password.clone(),
         transcode: config.server.transcode,
         volume: config.general.volume,
+        apply_replaygain: config.playback.apply_replaygain,
         sort_order: config.last_playback.sort_order,
         playback_mode: config.last_playback.playback_mode,
         last_playback: config.last_playback.as_track_and_position(),

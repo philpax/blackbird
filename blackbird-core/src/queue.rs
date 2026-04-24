@@ -6,7 +6,7 @@ use std::{
 };
 
 use blackbird_state::TrackId;
-use blackbird_subsonic::ClientResult;
+use blackbird_subsonic::{ClientResult, ReplayGain};
 
 use crate::{
     AppState, Logic, PlaybackMode, TrackLoadMode,
@@ -14,6 +14,63 @@ use crate::{
     library::Library,
     playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle},
 };
+
+/// Convenience that reads the relevant bits of [`AppState`] and computes the
+/// ReplayGain factor for `track_id`, returning `None` if the track is not in
+/// the library or no gain applies.
+pub(crate) fn gain_for_track(state: &AppState, track_id: &TrackId) -> Option<f32> {
+    let track = state.library.track_map.get(track_id)?;
+    compute_replaygain_factor(
+        state.apply_replaygain,
+        track.replay_gain.as_ref(),
+        state.playback_mode,
+    )
+}
+
+/// Computes the linear amplification factor to apply to a track for
+/// ReplayGain, if any.
+///
+/// Returns `None` if ReplayGain is disabled, no metadata is available, or no
+/// gain value can be determined.
+///
+/// Picks album gain in group modes, falling back to track gain; picks track
+/// gain otherwise, falling back to album gain. `base_gain` (if present) is
+/// added to the chosen gain, and `fallback_gain` is used if neither
+/// track nor album gain is available. The resulting linear factor is clamped
+/// so that `factor * peak <= 1.0`, preventing digital clipping.
+pub(crate) fn compute_replaygain_factor(
+    apply_replaygain: bool,
+    replay_gain: Option<&ReplayGain>,
+    mode: PlaybackMode,
+) -> Option<f32> {
+    if !apply_replaygain {
+        return None;
+    }
+    let rg = replay_gain?;
+
+    let (primary_gain, primary_peak, secondary_gain, secondary_peak) = if mode.is_group_mode() {
+        (rg.album_gain, rg.album_peak, rg.track_gain, rg.track_peak)
+    } else {
+        (rg.track_gain, rg.track_peak, rg.album_gain, rg.album_peak)
+    };
+
+    let (gain_db, peak) = match (primary_gain, secondary_gain) {
+        (Some(g), _) => (g, primary_peak.or(secondary_peak)),
+        (None, Some(g)) => (g, secondary_peak.or(primary_peak)),
+        (None, None) => (rg.fallback_gain?, primary_peak.or(secondary_peak)),
+    };
+
+    let total_db = gain_db + rg.base_gain.unwrap_or(0.0);
+    let factor = 10f32.powf(total_db / 20.0);
+
+    // Prevent clipping: scale down so the loudest sample stays at or below 1.0.
+    let clipping_ceiling = peak
+        .filter(|p| *p > 0.0)
+        .map(|p| 1.0 / p)
+        .unwrap_or(f32::INFINITY);
+
+    Some(factor.min(clipping_ceiling))
+}
 
 /// How a loaded track should be handled after streaming.
 pub(crate) enum TrackLoadBehavior {
@@ -143,13 +200,20 @@ impl Logic {
         };
 
         // If already cached, play immediately.
-        let cached_track = self.read_state().queue.audio_cache.get(track_id).cloned();
-        if let Some(data) = cached_track {
+        let cached = {
+            let st = self.read_state();
+            st.queue.audio_cache.get(track_id).cloned().map(|data| {
+                let gain = gain_for_track(&st, track_id);
+                (data, gain)
+            })
+        };
+        if let Some((data, gain)) = cached {
             tracing::debug!("Playing from cache: {}", track_id.0);
             self.send_to_playback(LogicToPlaybackMessage::LoadTrack(
                 track_id.clone(),
                 data,
                 TrackLoadMode::Play,
+                gain,
             ));
         } else {
             tracing::debug!("Loading track {} (req_id={})", track_id.0, req_id);
@@ -329,14 +393,13 @@ pub(crate) fn handle_load_response(
 ) {
     match response {
         Ok(data) => {
-            let is_current_target =
-                state.read().unwrap().queue.current_target.as_ref() == Some(&track_id);
-            state
-                .write()
-                .unwrap()
-                .queue
-                .audio_cache
-                .insert(track_id.clone(), data.clone());
+            let (is_current_target, gain) = {
+                let mut st = state.write().unwrap();
+                st.queue.audio_cache.insert(track_id.clone(), data.clone());
+                let is_current = st.queue.current_target.as_ref() == Some(&track_id);
+                let gain = gain_for_track(&st, &track_id);
+                (is_current, gain)
+            };
 
             match behavior {
                 TrackLoadBehavior::Play if is_current_target => {
@@ -349,6 +412,7 @@ pub(crate) fn handle_load_response(
                         track_id.clone(),
                         data,
                         TrackLoadMode::Play,
+                        gain,
                     ));
                 }
                 TrackLoadBehavior::Paused(position) if is_current_target => {
@@ -361,6 +425,7 @@ pub(crate) fn handle_load_response(
                         track_id.clone(),
                         data,
                         TrackLoadMode::Paused(position),
+                        gain,
                     ));
                 }
                 _ => {
@@ -647,6 +712,7 @@ mod tests {
             starred: idx.is_multiple_of(3), // every 3rd track is starred
             play_count: None,
             album_id: None,
+            replay_gain: None,
         }
     }
 
@@ -932,5 +998,90 @@ mod tests {
         let queue = make_queue();
         let window = compute_window_from_queue(&queue, 2);
         assert!(window.is_empty());
+    }
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn replaygain_disabled_returns_none() {
+        let rg = ReplayGain {
+            track_gain: Some(-6.0),
+            ..Default::default()
+        };
+        assert!(compute_replaygain_factor(false, Some(&rg), PlaybackMode::Sequential).is_none());
+    }
+
+    #[test]
+    fn replaygain_missing_metadata_returns_none() {
+        assert!(compute_replaygain_factor(true, None, PlaybackMode::Sequential).is_none());
+    }
+
+    #[test]
+    fn replaygain_track_mode_uses_track_gain() {
+        let rg = ReplayGain {
+            track_gain: Some(-6.0),
+            album_gain: Some(-3.0),
+            ..Default::default()
+        };
+        let factor = compute_replaygain_factor(true, Some(&rg), PlaybackMode::Sequential).unwrap();
+        assert!(approx_eq(factor, 0.501));
+    }
+
+    #[test]
+    fn replaygain_group_mode_uses_album_gain() {
+        let rg = ReplayGain {
+            track_gain: Some(-6.0),
+            album_gain: Some(-3.0),
+            ..Default::default()
+        };
+        let factor =
+            compute_replaygain_factor(true, Some(&rg), PlaybackMode::GroupShuffle).unwrap();
+        assert!(approx_eq(factor, 0.708));
+    }
+
+    #[test]
+    fn replaygain_falls_back_across_track_and_album() {
+        let rg = ReplayGain {
+            album_gain: Some(-6.0),
+            ..Default::default()
+        };
+        let factor = compute_replaygain_factor(true, Some(&rg), PlaybackMode::Sequential).unwrap();
+        assert!(approx_eq(factor, 0.501));
+    }
+
+    #[test]
+    fn replaygain_uses_fallback_gain_when_no_track_or_album() {
+        let rg = ReplayGain {
+            fallback_gain: Some(-6.0),
+            ..Default::default()
+        };
+        let factor = compute_replaygain_factor(true, Some(&rg), PlaybackMode::Sequential).unwrap();
+        assert!(approx_eq(factor, 0.501));
+    }
+
+    #[test]
+    fn replaygain_adds_base_gain() {
+        let rg = ReplayGain {
+            track_gain: Some(-6.0),
+            base_gain: Some(-6.0),
+            ..Default::default()
+        };
+        let factor = compute_replaygain_factor(true, Some(&rg), PlaybackMode::Sequential).unwrap();
+        // -12 dB = 10^(-0.6) ≈ 0.251.
+        assert!(approx_eq(factor, 0.251));
+    }
+
+    #[test]
+    fn replaygain_clamps_to_peak_to_prevent_clipping() {
+        let rg = ReplayGain {
+            track_gain: Some(6.0),
+            track_peak: Some(0.9),
+            ..Default::default()
+        };
+        let factor = compute_replaygain_factor(true, Some(&rg), PlaybackMode::Sequential).unwrap();
+        // Unclamped 10^(0.3) ≈ 1.995 would clip at peak 0.9; clamped to 1/0.9 ≈ 1.111.
+        assert!(approx_eq(factor, 1.0 / 0.9));
     }
 }

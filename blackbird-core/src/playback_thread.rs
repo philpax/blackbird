@@ -37,8 +37,12 @@ pub enum TrackLoadMode {
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     /// Load a track with the specified mode (play or paused at position).
-    LoadTrack(TrackId, Vec<u8>, TrackLoadMode),
-    AppendNextTrack(TrackId, Vec<u8>),
+    /// `gain` is an optional linear amplification factor (e.g. from ReplayGain)
+    /// applied on top of the decoded samples.
+    LoadTrack(TrackId, Vec<u8>, TrackLoadMode, Option<f32>),
+    /// Append a track to the gapless queue. `gain` has the same meaning as in
+    /// [`LogicToPlaybackMessage::LoadTrack`].
+    AppendNextTrack(TrackId, Vec<u8>, Option<f32>),
     ClearQueuedNextTracks,
     TogglePlayback,
     Play,
@@ -126,6 +130,7 @@ impl PlaybackThread {
     ) {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
+        use rodio::Source as _;
         use rodio::cpal::traits::HostTrait as _;
 
         fn error_callback(err: rodio::cpal::StreamError) {
@@ -195,7 +200,7 @@ impl PlaybackThread {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 };
                 match msg {
-                    LTPM::LoadTrack(track_id, data, mode) => {
+                    LTPM::LoadTrack(track_id, data, mode, gain) => {
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
                             .with_data(std::io::Cursor::new(data))
@@ -233,7 +238,10 @@ impl PlaybackThread {
 
                         // Append new track first, then clear old tracks.
                         // This ensures the sink is never completely empty.
-                        sink.append(decoder);
+                        match gain {
+                            Some(factor) => sink.append(decoder.amplify(factor)),
+                            None => sink.append(decoder),
+                        }
 
                         // Skip all old tracks (everything except the one we just appended).
                         let tracks_to_skip = queued_tracks.len();
@@ -267,7 +275,7 @@ impl PlaybackThread {
                         };
                         update_and_send_state(&logic_tx, &mut state, new_state);
                     }
-                    LTPM::AppendNextTrack(track_id, data) => {
+                    LTPM::AppendNextTrack(track_id, data, gain) => {
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
                             .with_data(std::io::Cursor::new(data))
@@ -287,8 +295,11 @@ impl PlaybackThread {
                             }
                         };
 
-                        // Append to sink for gapless playback
-                        sink.append(decoder);
+                        // Append to sink for gapless playback.
+                        match gain {
+                            Some(factor) => sink.append(decoder.amplify(factor)),
+                            None => sink.append(decoder),
+                        }
                         queued_tracks.push_back(track_id.clone());
                         tracing::debug!(
                             "Appended next track {} (queue length: {})",

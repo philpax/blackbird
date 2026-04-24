@@ -467,6 +467,7 @@ mod tests {
                     album_id: Some(album_id.clone()),
                     starred: false,
                     play_count: None,
+                    replay_gain: None,
                 },
             );
             albums.entry(album_id.clone()).or_insert_with(|| Album {

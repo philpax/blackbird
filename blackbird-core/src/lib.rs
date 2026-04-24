@@ -191,6 +191,7 @@ pub struct LogicArgs {
     pub password: String,
     pub transcode: bool,
     pub volume: f32,
+    pub apply_replaygain: bool,
     pub sort_order: SortOrder,
     pub playback_mode: PlaybackMode,
     pub last_playback: Option<(TrackId, Duration)>,
@@ -208,6 +209,7 @@ impl Logic {
             password,
             transcode,
             volume,
+            apply_replaygain,
             sort_order,
             playback_mode,
             last_playback,
@@ -219,6 +221,7 @@ impl Logic {
     ) -> Self {
         let state = Arc::new(RwLock::new(AppState {
             volume,
+            apply_replaygain,
             sort_order,
             playback_mode,
             ..AppState::default()
@@ -408,11 +411,12 @@ impl Logic {
 
             // Don't append if we're in the middle of changing tracks
             if !pending_track_change && let Some(next_id) = self.compute_next_track_id() {
-                let (already_appended, audio_data) = {
+                let (already_appended, audio_data, gain) = {
                     let st = self.read_state();
                     (
                         st.queue.next_track_appended.as_ref() == Some(&next_id),
                         st.queue.audio_cache.get(&next_id).cloned(),
+                        queue::gain_for_track(&st, &next_id),
                     )
                 };
 
@@ -421,6 +425,7 @@ impl Logic {
                     self.send_to_playback(LogicToPlaybackMessage::AppendNextTrack(
                         next_id.clone(),
                         data,
+                        gain,
                     ));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
@@ -781,6 +786,18 @@ impl Logic {
     pub fn set_volume(&self, volume: f32) {
         self.write_state().volume = volume;
         self.send_to_playback(LogicToPlaybackMessage::SetVolume(volume));
+    }
+
+    /// Returns whether ReplayGain is currently being applied at load time.
+    pub fn get_apply_replaygain(&self) -> bool {
+        self.read_state().apply_replaygain
+    }
+
+    /// Enables or disables ReplayGain application. Changes take effect for
+    /// subsequently loaded tracks; the currently playing track keeps the gain
+    /// it was loaded with.
+    pub fn set_apply_replaygain(&self, enabled: bool) {
+        self.write_state().apply_replaygain = enabled;
     }
 
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.

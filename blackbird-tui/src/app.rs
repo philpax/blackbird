@@ -112,6 +112,10 @@ impl App {
 
     pub fn tick(&mut self) {
         self.tick_count = self.tick_count.wrapping_add(1);
+        // Keep ReplayGain application in sync with the config; cheap since it
+        // is only used when loading the next track.
+        self.logic
+            .set_apply_replaygain(self.config.playback.apply_replaygain);
         self.logic.update();
         self.cover_art_cache.update();
         self.cover_art_cache

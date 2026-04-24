@@ -54,6 +54,7 @@ fn main() {
         password: config.shared.server.password.clone(),
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
+        apply_replaygain: config.shared.playback.apply_replaygain,
         sort_order: config.shared.last_playback.sort_order,
         playback_mode: config.shared.last_playback.playback_mode,
         last_playback: config.shared.last_playback.as_track_and_position(),
@@ -320,6 +321,10 @@ impl eframe::App for App {
 
         #[cfg(feature = "media-controls")]
         self.controls.update();
+        // Keep ReplayGain application in sync with the config; cheap since it
+        // is only used when loading the next track.
+        self.logic
+            .set_apply_replaygain(self.config.read().unwrap().shared.playback.apply_replaygain);
         self.logic.update();
         self.cover_art_cache.update(ctx);
         // Preload album art for tracks surrounding the next track in queue
