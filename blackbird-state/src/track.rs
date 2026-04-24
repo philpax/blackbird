@@ -37,6 +37,8 @@ pub struct Track {
     pub starred: bool,
     /// The number of times this track has been played
     pub play_count: Option<u64>,
+    /// ReplayGain metadata, if provided by the server.
+    pub replay_gain: Option<bs::ReplayGain>,
 }
 impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
@@ -55,6 +57,7 @@ impl From<bs::Child> for Track {
             album_id: child.album_id.map(|id| AlbumId(id.into())),
             starred: child.starred.is_some(),
             play_count: child.play_count,
+            replay_gain: child.replay_gain,
         }
     }
 }

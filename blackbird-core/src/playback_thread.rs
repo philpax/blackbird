@@ -6,6 +6,10 @@ use crate::app_state::TrackAndPosition;
 
 #[cfg(feature = "audio")]
 use std::collections::VecDeque;
+#[cfg(feature = "audio")]
+use std::sync::Arc;
+#[cfg(feature = "audio")]
+use std::sync::atomic::{AtomicBool, AtomicU32};
 
 pub struct PlaybackThread {
     /// Wrapped in `Option` so that `Drop` can close the channel before joining
@@ -33,12 +37,184 @@ pub enum TrackLoadMode {
     Paused(Duration),
 }
 
+/// The ReplayGain-derived coefficients for a single track. The playback
+/// thread combines `factor` with a live preamp and clamps the product to
+/// `inv_peak` to prevent clipping.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub struct ReplayGainTrackInfo {
+    /// Base linear factor computed from the track's `trackGain`/`albumGain`
+    /// plus `baseGain`. Does not include the user-configurable preamp.
+    pub factor: f32,
+    /// `1 / peak` — the maximum linear multiplier that keeps the loudest
+    /// sample at or below 1.0. `f32::INFINITY` if no peak is available.
+    pub inv_peak: f32,
+}
+
+/// A track's decoded-audio payload as sent to the playback thread.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TrackPlayback {
+    pub track_id: TrackId,
+    pub data: Vec<u8>,
+    /// ReplayGain coefficients. `None` means the track has no metadata and
+    /// will be played back untouched (no preamp or clipping-clamp applied).
+    pub replaygain: Option<ReplayGainTrackInfo>,
+}
+
+/// Shared state read per sample by every queued [`RuntimeReplayGain`]
+/// source. Owned by the playback thread and updated via
+/// [`LogicToPlaybackMessage::SetApplyReplayGain`] / [`SetReplayGainPreamp`].
+#[cfg(feature = "audio")]
+#[derive(Clone)]
+struct ReplayGainControl {
+    enabled: Arc<AtomicBool>,
+    /// Preamp as a linear factor (i.e. `10^(preamp_db / 20)`) stored as
+    /// `f32::to_bits` so the atomic load is lock-free.
+    preamp_linear_bits: Arc<AtomicU32>,
+}
+
+#[cfg(feature = "audio")]
+impl ReplayGainControl {
+    fn new(enabled: bool, preamp_db: f32) -> Self {
+        Self {
+            enabled: Arc::new(AtomicBool::new(enabled)),
+            preamp_linear_bits: Arc::new(AtomicU32::new(db_to_linear(preamp_db).to_bits())),
+        }
+    }
+
+    fn set_enabled(&self, enabled: bool) {
+        self.enabled
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn set_preamp_db(&self, preamp_db: f32) {
+        self.preamp_linear_bits.store(
+            db_to_linear(preamp_db).to_bits(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+}
+
+#[cfg(feature = "audio")]
+fn db_to_linear(db: f32) -> f32 {
+    10f32.powf(db / 20.0)
+}
+
+#[cfg(feature = "audio")]
+impl TrackPlayback {
+    /// Decodes the audio payload and appends it to `sink`. When the track
+    /// has ReplayGain metadata, the decoded source is wrapped in a
+    /// [`RuntimeReplayGain`] that reads `control` per sample, so toggling
+    /// the setting or moving the preamp takes effect mid-track.
+    ///
+    /// Returns the `TrackId` back for use in subsequent bookkeeping, or
+    /// alongside the decode error on failure so the caller can report
+    /// which track failed.
+    fn decode_and_append(
+        self,
+        sink: &rodio::Sink,
+        control: ReplayGainControl,
+    ) -> Result<TrackId, (TrackId, rodio::decoder::DecoderError)> {
+        let decoder = rodio::decoder::DecoderBuilder::new()
+            .with_byte_len(self.data.len() as u64)
+            .with_data(std::io::Cursor::new(self.data))
+            .build();
+        let decoder = match decoder {
+            Ok(d) => d,
+            Err(e) => return Err((self.track_id, e)),
+        };
+        match self.replaygain {
+            Some(info) => sink.append(RuntimeReplayGain {
+                input: decoder,
+                info,
+                control,
+            }),
+            None => sink.append(decoder),
+        }
+        Ok(self.track_id)
+    }
+}
+
+/// A rodio [`Source`](rodio::Source) wrapper that applies `info.factor *
+/// preamp` to each sample when enabled, clamped to `info.inv_peak` to avoid
+/// clipping. The enabled flag and preamp value are read per sample from a
+/// shared [`ReplayGainControl`] so they can be updated live from outside the
+/// audio thread.
+#[cfg(feature = "audio")]
+struct RuntimeReplayGain<I> {
+    input: I,
+    info: ReplayGainTrackInfo,
+    control: ReplayGainControl,
+}
+
+#[cfg(feature = "audio")]
+impl<I> Iterator for RuntimeReplayGain<I>
+where
+    I: rodio::Source,
+{
+    type Item = I::Item;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let sample = self.input.next()?;
+        if self.control.enabled.load(Relaxed) {
+            let preamp = f32::from_bits(self.control.preamp_linear_bits.load(Relaxed));
+            let multiplier = (self.info.factor * preamp).min(self.info.inv_peak);
+            Some(sample * multiplier)
+        } else {
+            Some(sample)
+        }
+    }
+
+    #[inline]
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.input.size_hint()
+    }
+}
+
+#[cfg(feature = "audio")]
+impl<I> rodio::Source for RuntimeReplayGain<I>
+where
+    I: rodio::Source,
+{
+    #[inline]
+    fn current_span_len(&self) -> Option<usize> {
+        self.input.current_span_len()
+    }
+
+    #[inline]
+    fn channels(&self) -> rodio::ChannelCount {
+        self.input.channels()
+    }
+
+    #[inline]
+    fn sample_rate(&self) -> rodio::SampleRate {
+        self.input.sample_rate()
+    }
+
+    #[inline]
+    fn total_duration(&self) -> Option<Duration> {
+        self.input.total_duration()
+    }
+
+    #[inline]
+    fn try_seek(&mut self, pos: Duration) -> Result<(), rodio::source::SeekError> {
+        self.input.try_seek(pos)
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     /// Load a track with the specified mode (play or paused at position).
-    LoadTrack(TrackId, Vec<u8>, TrackLoadMode),
-    AppendNextTrack(TrackId, Vec<u8>),
+    LoadTrack {
+        track: TrackPlayback,
+        mode: TrackLoadMode,
+    },
+    /// Append a track to the gapless queue.
+    AppendNextTrack(TrackPlayback),
     ClearQueuedNextTracks,
     TogglePlayback,
     Play,
@@ -49,6 +225,12 @@ pub enum LogicToPlaybackMessage {
     /// final position is always applied.
     SeekImmediate(Duration),
     SetVolume(f32),
+    /// Enables or disables ReplayGain application for every queued source,
+    /// including the one currently playing.
+    SetApplyReplayGain(bool),
+    /// Adjusts the ReplayGain preamp (in dB) for every queued source,
+    /// including the one currently playing.
+    SetReplayGainPreamp(f32),
     /// Sent during shutdown to exit the playback loop immediately. Needed
     /// because cloned `PlaybackThreadSendHandle`s in tokio tasks keep the
     /// channel open, so disconnect alone is not reliable.
@@ -87,17 +269,26 @@ impl Drop for PlaybackThread {
 }
 
 impl PlaybackThread {
-    /// Creates a new playback thread with the given volume and broadcast sender.
-    /// The broadcast sender is used to send playback events back to the logic layer.
+    /// Creates a new playback thread with the given volume, ReplayGain
+    /// settings, and broadcast sender. The broadcast sender is used to send
+    /// playback events back to the logic layer.
     pub fn new(
         volume: f32,
+        apply_replaygain: bool,
+        replaygain_preamp_db: f32,
         playback_to_logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
     ) -> Self {
         let (logic_to_playback_tx, logic_to_playback_rx) =
             std::sync::mpsc::channel::<LogicToPlaybackMessage>();
 
         let playback_thread_handle = std::thread::spawn(move || {
-            Self::run(logic_to_playback_rx, playback_to_logic_tx, volume);
+            Self::run(
+                logic_to_playback_rx,
+                playback_to_logic_tx,
+                volume,
+                apply_replaygain,
+                replaygain_preamp_db,
+            );
         });
 
         Self {
@@ -123,10 +314,17 @@ impl PlaybackThread {
         playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
         logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         volume: f32,
+        apply_replaygain: bool,
+        replaygain_preamp_db: f32,
     ) {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
         use rodio::cpal::traits::HostTrait as _;
+
+        // Shared with every source appended to the sink so that flipping the
+        // toggle or moving the preamp takes effect mid-track, not just on
+        // the next load.
+        let replaygain = ReplayGainControl::new(apply_replaygain, replaygain_preamp_db);
 
         fn error_callback(err: rodio::cpal::StreamError) {
             tracing::warn!("audio stream error: {err}");
@@ -195,15 +393,22 @@ impl PlaybackThread {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 };
                 match msg {
-                    LTPM::LoadTrack(track_id, data, mode) => {
-                        let decoder = rodio::decoder::DecoderBuilder::new()
-                            .with_byte_len(data.len() as u64)
-                            .with_data(std::io::Cursor::new(data))
-                            .build();
+                    LTPM::LoadTrack { track, mode } => {
+                        // For paused loads, pause the sink *before* appending so that
+                        // playback does not start automatically.
+                        let paused_position = match &mode {
+                            TrackLoadMode::Play => None,
+                            TrackLoadMode::Paused(pos) => {
+                                sink.pause();
+                                Some(*pos)
+                            }
+                        };
 
-                        let decoder = match decoder {
-                            Ok(decoder) => decoder,
-                            Err(err) => {
+                        // Append new track first, then clear old tracks.
+                        // This ensures the sink is never completely empty.
+                        let track_id = match track.decode_and_append(&sink, replaygain.clone()) {
+                            Ok(track_id) => track_id,
+                            Err((track_id, err)) => {
                                 // Send a dummy track-started to ensure core is aware of what the
                                 // track was that caused the failure.
                                 let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
@@ -220,20 +425,6 @@ impl PlaybackThread {
                                 continue;
                             }
                         };
-
-                        // For paused loads, pause the sink *before* appending so that
-                        // playback does not start automatically.
-                        let paused_position = match &mode {
-                            TrackLoadMode::Play => None,
-                            TrackLoadMode::Paused(pos) => {
-                                sink.pause();
-                                Some(*pos)
-                            }
-                        };
-
-                        // Append new track first, then clear old tracks.
-                        // This ensures the sink is never completely empty.
-                        sink.append(decoder);
 
                         // Skip all old tracks (everything except the one we just appended).
                         let tracks_to_skip = queued_tracks.len();
@@ -267,15 +458,11 @@ impl PlaybackThread {
                         };
                         update_and_send_state(&logic_tx, &mut state, new_state);
                     }
-                    LTPM::AppendNextTrack(track_id, data) => {
-                        let decoder = rodio::decoder::DecoderBuilder::new()
-                            .with_byte_len(data.len() as u64)
-                            .with_data(std::io::Cursor::new(data))
-                            .build();
-
-                        let decoder = match decoder {
-                            Ok(decoder) => decoder,
-                            Err(err) => {
+                    LTPM::AppendNextTrack(track) => {
+                        // Append to sink for gapless playback.
+                        let track_id = match track.decode_and_append(&sink, replaygain.clone()) {
+                            Ok(track_id) => track_id,
+                            Err((track_id, err)) => {
                                 tracing::warn!(
                                     "Failed to decode next track {}: {}",
                                     track_id.0,
@@ -286,9 +473,6 @@ impl PlaybackThread {
                                 continue;
                             }
                         };
-
-                        // Append to sink for gapless playback
-                        sink.append(decoder);
                         queued_tracks.push_back(track_id.clone());
                         tracing::debug!(
                             "Appended next track {} (queue length: {})",
@@ -368,6 +552,12 @@ impl PlaybackThread {
                     LTPM::SetVolume(volume) => {
                         sink.set_volume(volume * volume);
                     }
+                    LTPM::SetApplyReplayGain(enabled) => {
+                        replaygain.set_enabled(enabled);
+                    }
+                    LTPM::SetReplayGainPreamp(preamp_db) => {
+                        replaygain.set_preamp_db(preamp_db);
+                    }
                     LTPM::Shutdown => return,
                 }
             }
@@ -442,6 +632,8 @@ impl PlaybackThread {
         _playback_rx: std::sync::mpsc::Receiver<LogicToPlaybackMessage>,
         _logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
         _volume: f32,
+        _apply_replaygain: bool,
+        _replaygain_preamp_db: f32,
     ) {
         unimplemented!(
             "Audio playback is disabled - blackbird-core was built without the 'audio' feature"

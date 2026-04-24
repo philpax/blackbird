@@ -2,6 +2,32 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Client, ClientResult};
 
+/// Per-track ReplayGain metadata, as returned by OpenSubsonic-compatible
+/// servers. All fields are optional because servers may return any subset.
+/// Gains are in decibels; peaks are sample magnitudes in the range `[0.0, 1.0+]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplayGain {
+    /// Track-level gain adjustment, in dB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_gain: Option<f32>,
+    /// Album-level gain adjustment, in dB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_gain: Option<f32>,
+    /// Peak sample magnitude for the track.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub track_peak: Option<f32>,
+    /// Peak sample magnitude for the album.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub album_peak: Option<f32>,
+    /// Server-side base gain to apply on top of track/album gain, in dB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_gain: Option<f32>,
+    /// Gain to use when neither track nor album gain is available, in dB.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_gain: Option<f32>,
+}
+
 /// Represents a child item (file or directory) in the Subsonic API
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,6 +122,9 @@ pub struct Child {
     /// The original height of the media
     #[serde(skip_serializing_if = "Option::is_none")]
     pub original_height: Option<u32>,
+    /// ReplayGain metadata (OpenSubsonic extension).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_gain: Option<ReplayGain>,
 }
 
 impl Client {

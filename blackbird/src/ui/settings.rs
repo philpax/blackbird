@@ -105,6 +105,35 @@ pub fn ui(ctx: &Context, config: &mut Config, settings: &mut SettingsState) -> b
                         });
                     });
 
+                    // ── Playback ────────────────────────────────────
+                    let playback_default = blackbird_client_shared::config::Playback::default();
+                    section(ui, "Playback", |ui| {
+                        changed |= bool_row(
+                            ui,
+                            "Apply ReplayGain",
+                            &mut config.shared.playback.apply_replaygain,
+                            &playback_default.apply_replaygain,
+                        );
+                        changed |= f32_row(
+                            ui,
+                            "ReplayGain preamp (dB)",
+                            &mut config.shared.playback.replaygain_preamp_db,
+                            &playback_default.replaygain_preamp_db,
+                            -12.0,
+                            12.0,
+                            0.5,
+                        );
+
+                        reset_section_button(
+                            ui,
+                            config.shared.playback != playback_default,
+                            || {
+                                config.shared.playback = playback_default;
+                                changed = true;
+                            },
+                        );
+                    });
+
                     // ── Colors ──────────────────────────────────────
                     let style_default = shared_style::Style::default();
                     CollapsingHeader::new(RichText::new("Colors").heading())

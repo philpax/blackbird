@@ -124,6 +124,10 @@ pub struct AppState {
     pub sort_order: SortOrder,
     pub queue: QueueState,
     pub volume: f32,
+    /// Whether to apply ReplayGain adjustments to tracks loaded for playback.
+    pub apply_replaygain: bool,
+    /// Preamp added on top of the ReplayGain-computed gain, in dB.
+    pub replaygain_preamp_db: f32,
 
     pub scrobble_state: ScrobbleState,
 
@@ -142,6 +146,8 @@ impl Default for AppState {
             sort_order: SortOrder::default(),
             queue: QueueState::new(),
             volume: 0.0,
+            apply_replaygain: false,
+            replaygain_preamp_db: 0.0,
             scrobble_state: ScrobbleState::default(),
             error: None,
         }
