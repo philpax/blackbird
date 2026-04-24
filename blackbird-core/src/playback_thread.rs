@@ -33,16 +33,27 @@ pub enum TrackLoadMode {
     Paused(Duration),
 }
 
+/// A track's decoded-audio payload as sent to the playback thread.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct TrackPlayback {
+    pub track_id: TrackId,
+    pub data: Vec<u8>,
+    /// Optional linear amplification factor (e.g. from ReplayGain) applied on
+    /// top of the decoded samples.
+    pub gain: Option<f32>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
     /// Load a track with the specified mode (play or paused at position).
-    /// `gain` is an optional linear amplification factor (e.g. from ReplayGain)
-    /// applied on top of the decoded samples.
-    LoadTrack(TrackId, Vec<u8>, TrackLoadMode, Option<f32>),
-    /// Append a track to the gapless queue. `gain` has the same meaning as in
-    /// [`LogicToPlaybackMessage::LoadTrack`].
-    AppendNextTrack(TrackId, Vec<u8>, Option<f32>),
+    LoadTrack {
+        track: TrackPlayback,
+        mode: TrackLoadMode,
+    },
+    /// Append a track to the gapless queue.
+    AppendNextTrack(TrackPlayback),
     ClearQueuedNextTracks,
     TogglePlayback,
     Play,
@@ -200,7 +211,15 @@ impl PlaybackThread {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 };
                 match msg {
-                    LTPM::LoadTrack(track_id, data, mode, gain) => {
+                    LTPM::LoadTrack {
+                        track:
+                            TrackPlayback {
+                                track_id,
+                                data,
+                                gain,
+                            },
+                        mode,
+                    } => {
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
                             .with_data(std::io::Cursor::new(data))
@@ -275,7 +294,11 @@ impl PlaybackThread {
                         };
                         update_and_send_state(&logic_tx, &mut state, new_state);
                     }
-                    LTPM::AppendNextTrack(track_id, data, gain) => {
+                    LTPM::AppendNextTrack(TrackPlayback {
+                        track_id,
+                        data,
+                        gain,
+                    }) => {
                         let decoder = rodio::decoder::DecoderBuilder::new()
                             .with_byte_len(data.len() as u64)
                             .with_data(std::io::Cursor::new(data))

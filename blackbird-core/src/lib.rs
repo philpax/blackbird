@@ -14,7 +14,7 @@ mod render;
 pub use render::VisibleGroupSet;
 
 mod playback_thread;
-use playback_thread::{LogicToPlaybackMessage, PlaybackThread, TrackLoadMode};
+use playback_thread::{LogicToPlaybackMessage, PlaybackThread, TrackLoadMode, TrackPlayback};
 pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogicRx};
 
 mod tokio_thread;
@@ -422,11 +422,11 @@ impl Logic {
 
                 if !already_appended && let Some(data) = audio_data {
                     tracing::debug!("Appending next track for gapless playback: {}", next_id.0);
-                    self.send_to_playback(LogicToPlaybackMessage::AppendNextTrack(
-                        next_id.clone(),
+                    self.send_to_playback(LogicToPlaybackMessage::AppendNextTrack(TrackPlayback {
+                        track_id: next_id.clone(),
                         data,
                         gain,
-                    ));
+                    }));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
             }
