@@ -12,31 +12,42 @@ use crate::{
     AppState, Logic, PlaybackMode, TrackLoadMode,
     app_state::AppStateError,
     library::Library,
-    playback_thread::{LogicToPlaybackMessage, PlaybackThreadSendHandle, TrackPlayback},
+    playback_thread::{
+        LogicToPlaybackMessage, PlaybackThreadSendHandle, ReplayGainTrackInfo, TrackPlayback,
+    },
 };
 
 /// Convenience that reads the track's ReplayGain metadata from the library
-/// and computes the linear factor. Returns `None` if the track is unknown or
-/// has no usable gain data.
+/// and computes the per-track factor/ceiling pair. Returns `None` if the
+/// track is unknown or has no usable gain data.
 ///
 /// The returned factor is unconditional — whether it is actually applied is
-/// decided inside the playback thread via the shared atomic toggle, so that
+/// decided inside the playback thread via a shared atomic toggle, so that
 /// flipping the setting affects the currently playing source.
-pub(crate) fn gain_for_track(state: &AppState, track_id: &TrackId) -> Option<f32> {
+pub(crate) fn replaygain_for_track(
+    state: &AppState,
+    track_id: &TrackId,
+) -> Option<ReplayGainTrackInfo> {
     let track = state.library.track_map.get(track_id)?;
-    compute_replaygain_factor(track.replay_gain.as_ref())
+    compute_replaygain_info(track.replay_gain.as_ref())
 }
 
-/// Computes the linear amplification factor described by `replay_gain`.
+/// Computes the ReplayGain factor and peak-clipping ceiling described by
+/// `replay_gain`.
 ///
 /// Returns `None` if no metadata is present or no gain value can be
 /// determined. Prefers album gain over track gain (matching the default of
 /// foobar2000, MPD, and similar players) so that intra-album loudness
 /// relationships are preserved. `baseGain` (if present) is added to the
 /// chosen gain, and `fallbackGain` is used if neither track nor album gain is
-/// available. The resulting linear factor is clamped so that
-/// `factor * peak <= 1.0`, preventing digital clipping.
-pub(crate) fn compute_replaygain_factor(replay_gain: Option<&ReplayGain>) -> Option<f32> {
+/// available.
+///
+/// The peak-clipping clamp is *not* applied here — it is returned alongside
+/// the factor so the playback thread can recompute the effective gain when
+/// the live preamp changes.
+pub(crate) fn compute_replaygain_info(
+    replay_gain: Option<&ReplayGain>,
+) -> Option<ReplayGainTrackInfo> {
     let rg = replay_gain?;
 
     let (gain_db, peak) = match (rg.album_gain, rg.track_gain) {
@@ -47,14 +58,12 @@ pub(crate) fn compute_replaygain_factor(replay_gain: Option<&ReplayGain>) -> Opt
 
     let total_db = gain_db + rg.base_gain.unwrap_or(0.0);
     let factor = 10f32.powf(total_db / 20.0);
-
-    // Prevent clipping: scale down so the loudest sample stays at or below 1.0.
-    let clipping_ceiling = peak
+    let inv_peak = peak
         .filter(|p| *p > 0.0)
         .map(|p| 1.0 / p)
         .unwrap_or(f32::INFINITY);
 
-    Some(factor.min(clipping_ceiling))
+    Some(ReplayGainTrackInfo { factor, inv_peak })
 }
 
 /// How a loaded track should be handled after streaming.
@@ -188,11 +197,11 @@ impl Logic {
         let cached = {
             let st = self.read_state();
             st.queue.audio_cache.get(track_id).cloned().map(|data| {
-                let gain = gain_for_track(&st, track_id);
+                let replaygain = replaygain_for_track(&st, track_id);
                 TrackPlayback {
                     track_id: track_id.clone(),
                     data,
-                    gain,
+                    replaygain,
                 }
             })
         };
@@ -380,12 +389,12 @@ pub(crate) fn handle_load_response(
 ) {
     match response {
         Ok(data) => {
-            let (is_current_target, gain) = {
+            let (is_current_target, replaygain) = {
                 let mut st = state.write().unwrap();
                 st.queue.audio_cache.insert(track_id.clone(), data.clone());
                 let is_current = st.queue.current_target.as_ref() == Some(&track_id);
-                let gain = gain_for_track(&st, &track_id);
-                (is_current, gain)
+                let replaygain = replaygain_for_track(&st, &track_id);
+                (is_current, replaygain)
             };
 
             match behavior {
@@ -399,7 +408,7 @@ pub(crate) fn handle_load_response(
                         track: TrackPlayback {
                             track_id: track_id.clone(),
                             data,
-                            gain,
+                            replaygain,
                         },
                         mode: TrackLoadMode::Play,
                     });
@@ -414,7 +423,7 @@ pub(crate) fn handle_load_response(
                         track: TrackPlayback {
                             track_id: track_id.clone(),
                             data,
-                            gain,
+                            replaygain,
                         },
                         mode: TrackLoadMode::Paused(position),
                     });
@@ -997,7 +1006,7 @@ mod tests {
 
     #[test]
     fn replaygain_missing_metadata_returns_none() {
-        assert!(compute_replaygain_factor(None).is_none());
+        assert!(compute_replaygain_info(None).is_none());
     }
 
     #[test]
@@ -1007,9 +1016,10 @@ mod tests {
             album_gain: Some(-3.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
+        let info = compute_replaygain_info(Some(&rg)).unwrap();
         // -3 dB = 10^(-0.15) ≈ 0.708.
-        assert!(approx_eq(factor, 0.708));
+        assert!(approx_eq(info.factor, 0.708));
+        assert!(info.inv_peak.is_infinite());
     }
 
     #[test]
@@ -1018,9 +1028,9 @@ mod tests {
             track_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
+        let info = compute_replaygain_info(Some(&rg)).unwrap();
         // -6 dB = 10^(-0.3) ≈ 0.501.
-        assert!(approx_eq(factor, 0.501));
+        assert!(approx_eq(info.factor, 0.501));
     }
 
     #[test]
@@ -1029,8 +1039,8 @@ mod tests {
             fallback_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
-        assert!(approx_eq(factor, 0.501));
+        let info = compute_replaygain_info(Some(&rg)).unwrap();
+        assert!(approx_eq(info.factor, 0.501));
     }
 
     #[test]
@@ -1040,20 +1050,22 @@ mod tests {
             base_gain: Some(-6.0),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
+        let info = compute_replaygain_info(Some(&rg)).unwrap();
         // -12 dB = 10^(-0.6) ≈ 0.251.
-        assert!(approx_eq(factor, 0.251));
+        assert!(approx_eq(info.factor, 0.251));
     }
 
     #[test]
-    fn replaygain_clamps_to_peak_to_prevent_clipping() {
+    fn replaygain_reports_inv_peak_without_clamping_factor() {
         let rg = ReplayGain {
             album_gain: Some(6.0),
             album_peak: Some(0.9),
             ..Default::default()
         };
-        let factor = compute_replaygain_factor(Some(&rg)).unwrap();
-        // Unclamped 10^(0.3) ≈ 1.995 would clip at peak 0.9; clamped to 1/0.9 ≈ 1.111.
-        assert!(approx_eq(factor, 1.0 / 0.9));
+        let info = compute_replaygain_info(Some(&rg)).unwrap();
+        // Factor is returned unclamped so the playback thread can combine it
+        // with the live preamp before clipping protection kicks in.
+        assert!(approx_eq(info.factor, 10f32.powf(0.3)));
+        assert!(approx_eq(info.inv_peak, 1.0 / 0.9));
     }
 }

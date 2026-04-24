@@ -242,6 +242,15 @@ fn build_rows() -> Vec<SettingsRow> {
             set: |c, v| c.playback.apply_replaygain = v,
             default: || Playback::default().apply_replaygain,
         },
+        SettingsRow::F32Field {
+            label: "ReplayGain preamp (dB)",
+            section: Section::Playback,
+            get: |c| c.playback.replaygain_preamp_db,
+            set: |c, v| c.playback.replaygain_preamp_db = v,
+            default: || Playback::default().replaygain_preamp_db,
+            min: -12.0,
+            max: 12.0,
+        },
         // Colors section.
         SettingsRow::SectionSpacer,
         SettingsRow::SectionHeader("Colors"),

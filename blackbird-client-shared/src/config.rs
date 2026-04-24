@@ -120,11 +120,18 @@ pub struct Playback {
     /// Whether ReplayGain volume adjustments should be applied during playback.
     #[serde(default = "default_true")]
     pub apply_replaygain: bool,
+    /// Preamp added on top of the ReplayGain-computed gain, in dB. Useful for
+    /// compensating for ReplayGain's ~−18 LUFS reference level, which can feel
+    /// quiet next to unprocessed modern masters. Clipping protection still
+    /// applies, so tracks with high peaks may be attenuated below this value.
+    #[serde(default)]
+    pub replaygain_preamp_db: f32,
 }
 impl Default for Playback {
     fn default() -> Self {
         Self {
             apply_replaygain: true,
+            replaygain_preamp_db: 0.0,
         }
     }
 }

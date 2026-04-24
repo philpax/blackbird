@@ -55,6 +55,7 @@ fn main() {
         transcode: config.shared.server.transcode,
         volume: config.general.volume,
         apply_replaygain: config.shared.playback.apply_replaygain,
+        replaygain_preamp_db: config.shared.playback.replaygain_preamp_db,
         sort_order: config.shared.last_playback.sort_order,
         playback_mode: config.shared.last_playback.playback_mode,
         last_playback: config.shared.last_playback.as_track_and_position(),
@@ -321,10 +322,15 @@ impl eframe::App for App {
 
         #[cfg(feature = "media-controls")]
         self.controls.update();
-        // Keep ReplayGain application in sync with the config. Cheap:
-        // `set_apply_replaygain` is a no-op when the value is unchanged.
-        self.logic
-            .set_apply_replaygain(self.config.read().unwrap().shared.playback.apply_replaygain);
+        // Keep ReplayGain settings in sync with the config. Cheap: the
+        // setters are no-ops when the value is unchanged.
+        {
+            let cfg = self.config.read().unwrap();
+            self.logic
+                .set_apply_replaygain(cfg.shared.playback.apply_replaygain);
+            self.logic
+                .set_replaygain_preamp_db(cfg.shared.playback.replaygain_preamp_db);
+        }
         self.logic.update();
         self.cover_art_cache.update(ctx);
         // Preload album art for tracks surrounding the next track in queue

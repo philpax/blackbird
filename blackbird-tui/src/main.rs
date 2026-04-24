@@ -61,6 +61,7 @@ fn main() -> anyhow::Result<()> {
         transcode: config.server.transcode,
         volume: config.general.volume,
         apply_replaygain: config.playback.apply_replaygain,
+        replaygain_preamp_db: config.playback.replaygain_preamp_db,
         sort_order: config.last_playback.sort_order,
         playback_mode: config.last_playback.playback_mode,
         last_playback: config.last_playback.as_track_and_position(),

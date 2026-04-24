@@ -114,6 +114,15 @@ pub fn ui(ctx: &Context, config: &mut Config, settings: &mut SettingsState) -> b
                             &mut config.shared.playback.apply_replaygain,
                             &playback_default.apply_replaygain,
                         );
+                        changed |= f32_row(
+                            ui,
+                            "ReplayGain preamp (dB)",
+                            &mut config.shared.playback.replaygain_preamp_db,
+                            &playback_default.replaygain_preamp_db,
+                            -12.0,
+                            12.0,
+                            0.5,
+                        );
 
                         reset_section_button(
                             ui,

@@ -192,6 +192,7 @@ pub struct LogicArgs {
     pub transcode: bool,
     pub volume: f32,
     pub apply_replaygain: bool,
+    pub replaygain_preamp_db: f32,
     pub sort_order: SortOrder,
     pub playback_mode: PlaybackMode,
     pub last_playback: Option<(TrackId, Duration)>,
@@ -210,6 +211,7 @@ impl Logic {
             transcode,
             volume,
             apply_replaygain,
+            replaygain_preamp_db,
             sort_order,
             playback_mode,
             last_playback,
@@ -222,6 +224,7 @@ impl Logic {
         let state = Arc::new(RwLock::new(AppState {
             volume,
             apply_replaygain,
+            replaygain_preamp_db,
             sort_order,
             playback_mode,
             ..AppState::default()
@@ -411,12 +414,12 @@ impl Logic {
 
             // Don't append if we're in the middle of changing tracks
             if !pending_track_change && let Some(next_id) = self.compute_next_track_id() {
-                let (already_appended, audio_data, gain) = {
+                let (already_appended, audio_data, replaygain) = {
                     let st = self.read_state();
                     (
                         st.queue.next_track_appended.as_ref() == Some(&next_id),
                         st.queue.audio_cache.get(&next_id).cloned(),
-                        queue::gain_for_track(&st, &next_id),
+                        queue::replaygain_for_track(&st, &next_id),
                     )
                 };
 
@@ -425,7 +428,7 @@ impl Logic {
                     self.send_to_playback(LogicToPlaybackMessage::AppendNextTrack(TrackPlayback {
                         track_id: next_id.clone(),
                         data,
-                        gain,
+                        replaygain,
                     }));
                     self.write_state().queue.next_track_appended = Some(next_id);
                 }
@@ -808,6 +811,25 @@ impl Logic {
         }
     }
 
+    /// Returns the current ReplayGain preamp, in dB.
+    pub fn get_replaygain_preamp_db(&self) -> f32 {
+        self.read_state().replaygain_preamp_db
+    }
+
+    /// Sets the ReplayGain preamp in dB. Takes effect immediately for every
+    /// queued source. No-op if the value is unchanged.
+    pub fn set_replaygain_preamp_db(&self, preamp_db: f32) {
+        let changed = {
+            let mut st = self.write_state();
+            let changed = st.replaygain_preamp_db != preamp_db;
+            st.replaygain_preamp_db = preamp_db;
+            changed
+        };
+        if changed {
+            self.send_to_playback(LogicToPlaybackMessage::SetReplayGainPreamp(preamp_db));
+        }
+    }
+
     /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
     /// Returns an empty vector if there is no next track or if the library is not populated.
     pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<CoverArtId> {
@@ -1059,6 +1081,7 @@ impl Logic {
                     let req_id;
                     let volume;
                     let apply_replaygain;
+                    let replaygain_preamp_db;
                     {
                         let mut st = state.write().unwrap();
                         let sort_order = st.sort_order;
@@ -1086,12 +1109,18 @@ impl Logic {
                         req_id = st.queue.request_counter;
                         volume = st.volume;
                         apply_replaygain = st.apply_replaygain;
+                        replaygain_preamp_db = st.replaygain_preamp_db;
                     }
 
                     // Server connection succeeded — start the playback thread
                     // (opens the audio device). The main thread picks it up in
                     // `update()`.
-                    let pt = PlaybackThread::new(volume, apply_replaygain, playback_event_tx);
+                    let pt = PlaybackThread::new(
+                        volume,
+                        apply_replaygain,
+                        replaygain_preamp_db,
+                        playback_event_tx,
+                    );
                     let playback_tx = pt.send_handle();
                     *playback_thread_slot.lock().unwrap() = Some(pt);
 
