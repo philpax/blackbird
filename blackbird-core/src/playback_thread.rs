@@ -44,6 +44,34 @@ pub struct TrackPlayback {
     pub gain: Option<f32>,
 }
 
+#[cfg(feature = "audio")]
+impl TrackPlayback {
+    /// Decodes the audio payload and appends it to `sink`, applying `gain` as
+    /// an amplification factor when set. Returns the `TrackId` back for use
+    /// in subsequent bookkeeping on success, or alongside the decode error on
+    /// failure so the caller can report which track failed.
+    fn decode_and_append(
+        self,
+        sink: &rodio::Sink,
+    ) -> Result<TrackId, (TrackId, rodio::decoder::DecoderError)> {
+        use rodio::Source as _;
+
+        let decoder = rodio::decoder::DecoderBuilder::new()
+            .with_byte_len(self.data.len() as u64)
+            .with_data(std::io::Cursor::new(self.data))
+            .build();
+        let decoder = match decoder {
+            Ok(d) => d,
+            Err(e) => return Err((self.track_id, e)),
+        };
+        match self.gain {
+            Some(factor) => sink.append(decoder.amplify(factor)),
+            None => sink.append(decoder),
+        }
+        Ok(self.track_id)
+    }
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum LogicToPlaybackMessage {
@@ -141,7 +169,6 @@ impl PlaybackThread {
     ) {
         use LogicToPlaybackMessage as LTPM;
         use PlaybackToLogicMessage as PTLM;
-        use rodio::Source as _;
         use rodio::cpal::traits::HostTrait as _;
 
         fn error_callback(err: rodio::cpal::StreamError) {
@@ -211,23 +238,22 @@ impl PlaybackThread {
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
                 };
                 match msg {
-                    LTPM::LoadTrack {
-                        track:
-                            TrackPlayback {
-                                track_id,
-                                data,
-                                gain,
-                            },
-                        mode,
-                    } => {
-                        let decoder = rodio::decoder::DecoderBuilder::new()
-                            .with_byte_len(data.len() as u64)
-                            .with_data(std::io::Cursor::new(data))
-                            .build();
+                    LTPM::LoadTrack { track, mode } => {
+                        // For paused loads, pause the sink *before* appending so that
+                        // playback does not start automatically.
+                        let paused_position = match &mode {
+                            TrackLoadMode::Play => None,
+                            TrackLoadMode::Paused(pos) => {
+                                sink.pause();
+                                Some(*pos)
+                            }
+                        };
 
-                        let decoder = match decoder {
-                            Ok(decoder) => decoder,
-                            Err(err) => {
+                        // Append new track first, then clear old tracks.
+                        // This ensures the sink is never completely empty.
+                        let track_id = match track.decode_and_append(&sink) {
+                            Ok(track_id) => track_id,
+                            Err((track_id, err)) => {
                                 // Send a dummy track-started to ensure core is aware of what the
                                 // track was that caused the failure.
                                 let _ = logic_tx.send(PTLM::TrackStarted(TrackAndPosition {
@@ -244,23 +270,6 @@ impl PlaybackThread {
                                 continue;
                             }
                         };
-
-                        // For paused loads, pause the sink *before* appending so that
-                        // playback does not start automatically.
-                        let paused_position = match &mode {
-                            TrackLoadMode::Play => None,
-                            TrackLoadMode::Paused(pos) => {
-                                sink.pause();
-                                Some(*pos)
-                            }
-                        };
-
-                        // Append new track first, then clear old tracks.
-                        // This ensures the sink is never completely empty.
-                        match gain {
-                            Some(factor) => sink.append(decoder.amplify(factor)),
-                            None => sink.append(decoder),
-                        }
 
                         // Skip all old tracks (everything except the one we just appended).
                         let tracks_to_skip = queued_tracks.len();
@@ -294,19 +303,11 @@ impl PlaybackThread {
                         };
                         update_and_send_state(&logic_tx, &mut state, new_state);
                     }
-                    LTPM::AppendNextTrack(TrackPlayback {
-                        track_id,
-                        data,
-                        gain,
-                    }) => {
-                        let decoder = rodio::decoder::DecoderBuilder::new()
-                            .with_byte_len(data.len() as u64)
-                            .with_data(std::io::Cursor::new(data))
-                            .build();
-
-                        let decoder = match decoder {
-                            Ok(decoder) => decoder,
-                            Err(err) => {
+                    LTPM::AppendNextTrack(track) => {
+                        // Append to sink for gapless playback.
+                        let track_id = match track.decode_and_append(&sink) {
+                            Ok(track_id) => track_id,
+                            Err((track_id, err)) => {
                                 tracing::warn!(
                                     "Failed to decode next track {}: {}",
                                     track_id.0,
@@ -317,12 +318,6 @@ impl PlaybackThread {
                                 continue;
                             }
                         };
-
-                        // Append to sink for gapless playback.
-                        match gain {
-                            Some(factor) => sink.append(decoder.amplify(factor)),
-                            None => sink.append(decoder),
-                        }
                         queued_tracks.push_back(track_id.clone());
                         tracing::debug!(
                             "Appended next track {} (queue length: {})",
