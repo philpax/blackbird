@@ -112,20 +112,25 @@ impl App {
 
     pub fn tick(&mut self) {
         self.tick_count = self.tick_count.wrapping_add(1);
+
         // Keep ReplayGain settings in sync with the config. Cheap: the
         // setters are no-ops when the value is unchanged.
         self.logic
             .set_apply_replaygain(self.config.playback.apply_replaygain);
         self.logic
             .set_replaygain_preamp_db(self.config.playback.replaygain_preamp_db);
-        self.logic.update();
-        self.cover_art_cache.update();
+
+        let mut changed = false;
+
+        changed |= self.logic.update();
+        changed |= self.cover_art_cache.update();
         self.cover_art_cache
             .preload_next_track_surrounding_art(&self.logic);
         self.cover_art_cache.tick_prefetch(&self.logic);
 
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
+            changed = true;
             if let PlaybackToLogicMessage::TrackStarted(tap) = event {
                 // Scroll to the new track unless it is already visible.
                 let visible = {
@@ -154,11 +159,13 @@ impl App {
 
         // Process lyrics data.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
+            changed = true;
             self.lyrics.shared.on_lyrics_loaded(&lyrics_data);
         }
 
         // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
+            changed = true;
             self.library.mark_dirty();
             if self.library.needs_scroll_to_playing
                 && let Some(track_id) = self.logic.get_playing_track_id()
@@ -183,6 +190,7 @@ impl App {
 
         // Process track updates (e.g. play count changes after scrobble).
         while let Ok(()) = self.track_updated_rx.try_recv() {
+            changed = true;
             self.library.mark_dirty();
         }
 
@@ -193,6 +201,7 @@ impl App {
             if let Some(index) = self.library.find_flat_index_for_track(&state, &track_id) {
                 self.library.selected_index = index;
                 self.library.center_viewport_on_selection();
+                changed = true;
             } else {
                 // Track not in library yet, re-queue.
                 self.library.scroll_to_track = Some(track_id);
@@ -209,20 +218,27 @@ impl App {
             if new_config != self.config {
                 self.config = new_config;
                 self.config.save();
+                changed = true;
             }
         }
 
         // Apply inertia scrolling when the library panel is focused.
         if self.focused_panel == FocusedPanel::Library {
-            self.library.tick_inertia(&self.logic);
+            changed |= self.library.tick_inertia(&self.logic);
         }
 
         if self.logic.should_shutdown() {
             self.should_quit = true;
         }
 
-        // Tick processes playback updates, scrub bar advancement, etc.
-        self.needs_redraw = true;
+        // Redraw when the scrub bar position is advancing during playback.
+        if self.logic.get_playback_state() == bc::PlaybackState::Playing {
+            changed = true;
+        }
+
+        if changed {
+            self.needs_redraw = true;
+        }
     }
 
     pub fn toggle_search(&mut self) {

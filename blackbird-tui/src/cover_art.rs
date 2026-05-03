@@ -161,8 +161,15 @@ impl CoverArtCache {
         }
     }
 
-    pub fn update(&mut self) {
+    /// Processes incoming cover art data and color/grid computations.
+    /// Returns `true` if any visual state changed.
+    pub fn update(&mut self) -> bool {
+        let mut changed = false;
+
         let result = self.inner.update();
+        if !result.evicted.is_empty() || !result.upgraded.is_empty() {
+            changed = true;
+        }
         for id in &result.evicted {
             // Remove all resolution-keyed entries for this id.
             self.computing.remove(&(id.clone(), Resolution::Low));
@@ -186,6 +193,7 @@ impl CoverArtCache {
         }
 
         for (id, resolution, colors) in self.color_rx.try_iter() {
+            changed = true;
             self.computing.remove(&(id.clone(), resolution));
             self.inner
                 .with_client_data_mut_at(&id, resolution, |data, _raw| {
@@ -194,6 +202,7 @@ impl CoverArtCache {
         }
 
         for (id, source_resolution, grid) in self.grid_rx.try_iter() {
+            changed = true;
             self.grid_computing.remove(&id);
             let key = (id, grid.cols, grid.rows);
             // Only replace the cached grid if this one is from an equal or
@@ -212,6 +221,8 @@ impl CoverArtCache {
                 );
             }
         }
+
+        changed
     }
 
     /// Get quadrant colors for a cover art entry at low resolution.

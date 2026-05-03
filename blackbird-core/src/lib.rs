@@ -278,15 +278,22 @@ impl Logic {
         logic
     }
 
-    pub fn update(&mut self) {
+    /// Processes pending events from the playback thread and logic request
+    /// channels. Returns `true` if any events were processed (i.e. state may
+    /// have changed).
+    pub fn update(&mut self) -> bool {
+        let mut changed = false;
+
         // Check if the async initial_fetch deposited a playback thread.
         if self.playback_thread.is_none()
             && let Some(pt) = self.playback_thread_slot.lock().unwrap().take()
         {
             self.playback_thread = Some(pt);
+            changed = true;
         }
 
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {
+            changed = true;
             match event {
                 PlaybackToLogicMessage::TrackStarted(track_and_position) => {
                     tracing::debug!(
@@ -359,14 +366,16 @@ impl Logic {
             }
         }
 
-        // Handle deferred auto-skip after load error
+        // Handle deferred auto-skip after load error.
         let should_skip = self.read_state().queue.pending_skip_after_error;
         if should_skip {
             self.schedule_next_track();
             self.write_state().queue.pending_skip_after_error = false;
+            changed = true;
         }
 
         while let Ok(event) = self.logic_request_rx.try_recv() {
+            changed = true;
             match event {
                 LogicRequestMessage::PlayCurrent => self.play_current(),
                 LogicRequestMessage::PauseCurrent => self.pause_current(),
@@ -434,6 +443,8 @@ impl Logic {
                 }
             }
         }
+
+        changed
     }
 }
 impl Logic {
