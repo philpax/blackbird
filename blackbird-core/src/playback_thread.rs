@@ -395,18 +395,26 @@ impl PlaybackThread {
                 };
                 match msg {
                     LTPM::LoadTrack { track, mode } => {
-                        // For paused loads, pause the sink *before* appending so that
-                        // playback does not start automatically.
+                        // Atomically mark every queued source for skipping so
+                        // any gapless-appended next tracks are dropped before
+                        // the user's selection plays. Calling `skip_one` in a
+                        // loop is unsafe on rodio's `Player`: each call also
+                        // decrements `sound_count`, and the internal guard
+                        // `if len > to_clear { to_clear += 1; }` then drops
+                        // skip requests once `len` has fallen below
+                        // `to_clear`, so an unrelated queued track plays
+                        // before the new one. `clear()` sets `to_clear` in
+                        // one shot and avoids that race. It also pauses the
+                        // sink, which is fine because the branches below
+                        // either `play()` or stay paused for session
+                        // restore.
+                        sink.clear();
+
                         let paused_position = match &mode {
                             TrackLoadMode::Play => None,
-                            TrackLoadMode::Paused(pos) => {
-                                sink.pause();
-                                Some(*pos)
-                            }
+                            TrackLoadMode::Paused(pos) => Some(*pos),
                         };
 
-                        // Append new track first, then clear old tracks.
-                        // This ensures the sink is never completely empty.
                         let track_id = match track.decode_and_append(&sink, replaygain.clone()) {
                             Ok(track_id) => track_id,
                             Err((track_id, err)) => {
@@ -416,6 +424,8 @@ impl PlaybackThread {
                                     track_id: track_id.clone(),
                                     position: Duration::from_secs(0),
                                 }));
+                                queued_tracks.clear();
+                                skip_on_transition = 0;
                                 update_and_send_state(
                                     &logic_tx,
                                     &mut state,
@@ -426,12 +436,6 @@ impl PlaybackThread {
                                 continue;
                             }
                         };
-
-                        // Skip all old tracks (everything except the one we just appended).
-                        let tracks_to_skip = queued_tracks.len();
-                        for _ in 0..tracks_to_skip {
-                            sink.skip_one();
-                        }
 
                         if let Some(position) = paused_position {
                             if let Err(e) = sink.try_seek(position) {
