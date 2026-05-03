@@ -113,7 +113,7 @@ impl TrackPlayback {
     /// which track failed.
     fn decode_and_append(
         self,
-        sink: &rodio::Sink,
+        sink: &rodio::Player,
         control: ReplayGainControl,
     ) -> Result<TrackId, (TrackId, rodio::decoder::DecoderError)> {
         let decoder = rodio::decoder::DecoderBuilder::new()
@@ -262,9 +262,10 @@ impl Drop for PlaybackThread {
         if let Some(tx) = self.logic_to_playback_tx.take() {
             let _ = tx.0.send(LogicToPlaybackMessage::Shutdown);
         }
-        // Don't join — rodio's Sink/OutputStream cleanup can block while audio
-        // buffers drain, which stalls the main thread and keeps audio playing.
-        // The process exit will kill the thread and close audio devices immediately.
+        // Don't join — rodio's Player/MixerDeviceSink cleanup can block while
+        // audio buffers drain, which stalls the main thread and keeps audio
+        // playing. The process exit will kill the thread and close audio
+        // devices immediately.
     }
 }
 
@@ -326,7 +327,7 @@ impl PlaybackThread {
         // the next load.
         let replaygain = ReplayGainControl::new(apply_replaygain, replaygain_preamp_db);
 
-        fn error_callback(err: rodio::cpal::StreamError) {
+        fn error_callback(err: rodio::cpal::Error) {
             tracing::warn!("audio stream error: {err}");
         }
 
@@ -334,7 +335,7 @@ impl PlaybackThread {
         // default ALSA buffer is too small for real-time resampling.
         let buffer_size = rodio::cpal::BufferSize::Fixed(2048);
 
-        let mut stream_handle = rodio::OutputStreamBuilder::from_default_device()
+        let mut stream_handle = rodio::DeviceSinkBuilder::from_default_device()
             .and_then(|builder| {
                 builder
                     .with_buffer_size(buffer_size)
@@ -347,7 +348,7 @@ impl PlaybackThread {
                     .output_devices()
                     .map_err(|_| original_err)?;
                 for device in devices {
-                    if let Ok(builder) = rodio::OutputStreamBuilder::from_device(device)
+                    if let Ok(builder) = rodio::DeviceSinkBuilder::from_device(device)
                         && let Ok(handle) = builder
                             .with_buffer_size(buffer_size)
                             .with_error_callback(error_callback as fn(_))
@@ -356,11 +357,11 @@ impl PlaybackThread {
                         return Ok(handle);
                     }
                 }
-                Err(rodio::StreamError::NoDevice)
+                Err(rodio::DeviceSinkError::NoDevice)
             })
             .unwrap();
         stream_handle.log_on_drop(false);
-        let sink = rodio::Sink::connect_new(stream_handle.mixer());
+        let sink = rodio::Player::connect_new(stream_handle.mixer());
         sink.set_volume(volume * volume);
 
         const SEEK_DEBOUNCE_DURATION: Duration = Duration::from_millis(250);
