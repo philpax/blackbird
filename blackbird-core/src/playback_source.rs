@@ -326,9 +326,11 @@ impl Iterator for PlaybackSource {
             state.current = None;
             let Some(next) = state.next.take() else {
                 let _ = state.event_tx.send(PlaybackToLogicMessage::TrackEnded);
-                let _ = state.event_tx.send(PlaybackToLogicMessage::PlaybackStateChanged(
-                    PlaybackState::Stopped,
-                ));
+                let _ = state
+                    .event_tx
+                    .send(PlaybackToLogicMessage::PlaybackStateChanged(
+                        PlaybackState::Stopped,
+                    ));
                 return Some(0.0);
             };
             let track_id = next.track_id.clone();
