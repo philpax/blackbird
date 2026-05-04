@@ -73,6 +73,3 @@ opt-level = 3
 [profile.profiling]
 inherits = "release"
 debug = true
-
-[patch.crates-io]
-cpal = { git = "https://github.com/philpax/cpal.git", branch = "audio-device-fix-updated" }
