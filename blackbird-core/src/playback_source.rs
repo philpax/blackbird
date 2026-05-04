@@ -315,37 +315,34 @@ impl Iterator for PlaybackSource {
 
         let volume = state.volume;
         loop {
-            match state.current.as_mut() {
-                Some(track) => match track.inner.next() {
-                    Some(sample) => return Some(sample * volume),
-                    None => {
-                        // Current source exhausted; advance.
-                        state.current = None;
-                        if let Some(next) = state.next.take() {
-                            let track_id = next.track_id.clone();
-                            let position = next.position();
-                            state.silence_channels = next.channels();
-                            state.silence_sample_rate = next.sample_rate();
-                            state.current = Some(next);
-                            let _ = state.event_tx.send(PlaybackToLogicMessage::TrackStarted(
-                                TrackAndPosition { track_id, position },
-                            ));
-                            // Loop again to pull a sample from the new current.
-                        } else {
-                            // Nothing queued; transition to stopped silence.
-                            let _ = state.event_tx.send(PlaybackToLogicMessage::TrackEnded);
-                            let _ =
-                                state
-                                    .event_tx
-                                    .send(PlaybackToLogicMessage::PlaybackStateChanged(
-                                        PlaybackState::Stopped,
-                                    ));
-                            return Some(0.0);
-                        }
-                    }
-                },
-                None => return Some(0.0),
+            let Some(track) = state.current.as_mut() else {
+                return Some(0.0);
+            };
+            if let Some(sample) = track.inner.next() {
+                return Some(sample * volume);
             }
+            // Current source exhausted; advance to the staged next slot,
+            // or transition to stopped silence if nothing is queued.
+            state.current = None;
+            let Some(next) = state.next.take() else {
+                let _ = state.event_tx.send(PlaybackToLogicMessage::TrackEnded);
+                let _ = state.event_tx.send(PlaybackToLogicMessage::PlaybackStateChanged(
+                    PlaybackState::Stopped,
+                ));
+                return Some(0.0);
+            };
+            let track_id = next.track_id.clone();
+            let position = next.position();
+            state.silence_channels = next.channels();
+            state.silence_sample_rate = next.sample_rate();
+            state.current = Some(next);
+            let _ = state
+                .event_tx
+                .send(PlaybackToLogicMessage::TrackStarted(TrackAndPosition {
+                    track_id,
+                    position,
+                }));
+            // Loop to pull a sample from the new current.
         }
     }
 }
