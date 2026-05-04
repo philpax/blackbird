@@ -13,6 +13,8 @@ use std::{
 mod render;
 pub use render::VisibleGroupSet;
 
+#[cfg(feature = "audio")]
+mod playback_source;
 mod playback_thread;
 use playback_thread::{LogicToPlaybackMessage, PlaybackThread, TrackLoadMode, TrackPlayback};
 pub use playback_thread::{PlaybackState, PlaybackToLogicMessage, PlaybackToLogicRx};
