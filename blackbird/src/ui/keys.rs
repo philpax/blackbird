@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use blackbird_client_shared::Direction;
 use blackbird_core as bc;
 use egui::Key;
 
@@ -64,8 +65,8 @@ pub enum Action {
     Previous,
     NextGroup,
     PreviousGroup,
-    CyclePlaybackMode,
-    ToggleSortOrder,
+    CyclePlaybackMode(Direction),
+    ToggleSortOrder(Direction),
     Star,
     SeekForward,
     SeekBackward,
@@ -89,8 +90,8 @@ impl Action {
             Action::Previous => KEY_PREVIOUS,
             Action::NextGroup => KEY_NEXT,
             Action::PreviousGroup => KEY_PREVIOUS,
-            Action::CyclePlaybackMode => KEY_CYCLE_MODE,
-            Action::ToggleSortOrder => KEY_TOGGLE_SORT,
+            Action::CyclePlaybackMode(_) => KEY_CYCLE_MODE,
+            Action::ToggleSortOrder(_) => KEY_TOGGLE_SORT,
             Action::Star => KEY_STAR,
             Action::SeekForward => KEY_SEEK_FWD,
             Action::SeekBackward => KEY_SEEK_BACK,
@@ -115,12 +116,28 @@ impl Action {
             return None;
         }
 
+        // Reverse cycle variants share their slot with the forward variant; the
+        // forward variant's label combines both keys (e.g. "m/M").
+        if matches!(
+            self,
+            Action::CyclePlaybackMode(Direction::Backward)
+                | Action::ToggleSortOrder(Direction::Backward)
+        ) {
+            return None;
+        }
+
         let key_label: Cow<'static, str> = match self {
             // Star is Shift+8, so we display '*' instead of '8'.
             Action::Star => "*".into(),
             // Shifted actions: display the key in uppercase.
             Action::NextGroup | Action::PreviousGroup => {
                 self.key().symbol_or_name().to_string().into()
+            }
+            // Cycle pairs combine forward (lowercase) and backward (uppercase).
+            Action::CyclePlaybackMode(Direction::Forward)
+            | Action::ToggleSortOrder(Direction::Forward) => {
+                let name = self.key().symbol_or_name();
+                format!("{}/{}", name.to_lowercase(), name).into()
             }
             _ => self.key().symbol_or_name().to_lowercase().into(),
         };
@@ -138,10 +155,12 @@ impl Action {
             Action::Previous => "prev".into(),
             Action::NextGroup => "next group".into(),
             Action::PreviousGroup => "prev group".into(),
-            Action::CyclePlaybackMode => {
+            Action::CyclePlaybackMode(Direction::Forward) => {
                 format!("mode ({})", logic.get_playback_mode().as_str()).into()
             }
-            Action::ToggleSortOrder => format!("sort ({})", logic.get_sort_order().as_str()).into(),
+            Action::ToggleSortOrder(Direction::Forward) => {
+                format!("sort ({})", logic.get_sort_order().as_str()).into()
+            }
             Action::Star => "star".into(),
             Action::SeekForward => "seek+".into(),
             Action::SeekBackward => "seek-".into(),
@@ -153,6 +172,9 @@ impl Action {
             Action::VolumeUp => "vol+".into(),
             Action::VolumeDown => "vol-".into(),
             Action::Settings => "settings".into(),
+            // Hidden via the early return above.
+            Action::CyclePlaybackMode(Direction::Backward)
+            | Action::ToggleSortOrder(Direction::Backward) => unreachable!(),
         };
 
         Some((key_label, description))
@@ -173,14 +195,19 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Lyrics),
     HelpEntry::Single(Action::Queue),
     HelpEntry::Pair(Action::VolumeUp, Action::VolumeDown, "vol+/-"),
-    HelpEntry::Single(Action::CyclePlaybackMode),
-    HelpEntry::Single(Action::ToggleSortOrder),
+    HelpEntry::Single(Action::CyclePlaybackMode(Direction::Forward)),
+    HelpEntry::Single(Action::ToggleSortOrder(Direction::Forward)),
     HelpEntry::Single(Action::Settings),
 ];
 
 /// Maps a key press to a library action.
 /// Returns None if the key is not a shortcut.
 pub fn library_action(key: Key, shift: bool) -> Option<Action> {
+    let direction = if shift {
+        Direction::Backward
+    } else {
+        Direction::Forward
+    };
     match key {
         KEY_PLAY_PAUSE => Some(Action::PlayPause),
         KEY_STOP => Some(Action::Stop),
@@ -188,8 +215,8 @@ pub fn library_action(key: Key, shift: bool) -> Option<Action> {
         KEY_NEXT => Some(Action::Next),
         KEY_PREVIOUS if shift => Some(Action::PreviousGroup),
         KEY_PREVIOUS => Some(Action::Previous),
-        KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
-        KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),
+        KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode(direction)),
+        KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder(direction)),
         KEY_SEEK_BACK => Some(Action::SeekBackward),
         KEY_SEEK_FWD => Some(Action::SeekForward),
         KEY_GOTO_PLAYING => Some(Action::GotoPlaying),

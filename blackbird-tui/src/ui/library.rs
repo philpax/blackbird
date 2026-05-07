@@ -1479,10 +1479,14 @@ pub fn handle_key(app: &mut App, action: Action) {
         Action::NextGroup => app.logic.next_group(),
         Action::PreviousGroup => app.logic.previous_group(),
         Action::Stop => app.logic.stop_current(),
-        Action::CyclePlaybackMode => app.cycle_playback_mode(),
-        Action::ToggleSortOrder => {
+        Action::CyclePlaybackMode(dir) => app.cycle_playback_mode(dir),
+        Action::ToggleSortOrder(dir) => {
             let scroll_target = app.library.selected_track_id().cloned();
-            let next = blackbird_client_shared::toggle_sort_order(app.logic.get_sort_order());
+            let next = blackbird_client_shared::cycle(
+                &bc::SortOrder::ALL,
+                app.logic.get_sort_order(),
+                dir,
+            );
             app.logic.set_sort_order(next);
             app.library.mark_dirty();
             app.library.scroll_to_track = scroll_target;

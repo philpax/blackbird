@@ -1,5 +1,3 @@
-use blackbird_core::{PlaybackMode, SortOrder};
-
 /// Volume adjustment step (5%).
 pub const VOLUME_STEP: f32 = 0.05;
 
@@ -22,27 +20,23 @@ pub mod controls;
 #[cfg(feature = "tray-icon")]
 pub mod tray;
 
-/// Returns the next playback mode in the cycle.
-pub fn next_playback_mode(current: PlaybackMode) -> PlaybackMode {
-    match current {
-        PlaybackMode::Sequential => PlaybackMode::RepeatOne,
-        PlaybackMode::RepeatOne => PlaybackMode::GroupRepeat,
-        PlaybackMode::GroupRepeat => PlaybackMode::Shuffle,
-        PlaybackMode::Shuffle => PlaybackMode::LikedShuffle,
-        PlaybackMode::LikedShuffle => PlaybackMode::GroupShuffle,
-        PlaybackMode::GroupShuffle => PlaybackMode::LikedGroupShuffle,
-        PlaybackMode::LikedGroupShuffle => PlaybackMode::Sequential,
-    }
+/// Direction of cycling through an ordered list of values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Forward,
+    Backward,
 }
 
-/// Cycles through sort orders.
-pub fn toggle_sort_order(current: SortOrder) -> SortOrder {
-    match current {
-        SortOrder::Alphabetical => SortOrder::NewestFirst,
-        SortOrder::NewestFirst => SortOrder::RecentlyAdded,
-        SortOrder::RecentlyAdded => SortOrder::MostPlayed,
-        SortOrder::MostPlayed => SortOrder::Alphabetical,
-    }
+/// Returns the value adjacent to `current` in `values`, wrapping around at
+/// either end. If `current` isn't in `values`, returns the first element.
+pub fn cycle<T: Copy + PartialEq>(values: &[T], current: T, direction: Direction) -> T {
+    let len = values.len();
+    let idx = values.iter().position(|v| *v == current).unwrap_or(0);
+    let next = match direction {
+        Direction::Forward => (idx + 1) % len,
+        Direction::Backward => (idx + len - 1) % len,
+    };
+    values[next]
 }
 
 /// Load the application icon as an RGBA image.

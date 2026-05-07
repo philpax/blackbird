@@ -293,8 +293,12 @@ impl App {
         }
     }
 
-    pub fn cycle_playback_mode(&mut self) {
-        let next = blackbird_client_shared::next_playback_mode(self.logic.get_playback_mode());
+    pub fn cycle_playback_mode(&mut self, direction: blackbird_client_shared::Direction) {
+        let next = blackbird_client_shared::cycle(
+            &bc::PlaybackMode::ALL,
+            self.logic.get_playback_mode(),
+            direction,
+        );
         self.logic.set_playback_mode(next);
     }
 

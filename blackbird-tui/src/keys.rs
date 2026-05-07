@@ -1,3 +1,4 @@
+use blackbird_client_shared::Direction;
 use blackbird_core as bc;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use smol_str::{SmolStr, ToSmolStr};
@@ -23,8 +24,8 @@ pub enum Action {
     Previous,
     NextGroup,
     PreviousGroup,
-    CyclePlaybackMode,
-    ToggleSortOrder,
+    CyclePlaybackMode(Direction),
+    ToggleSortOrder(Direction),
     Search,
     Lyrics,
     Logs,
@@ -63,8 +64,10 @@ pub const KEY_NEXT: KeyCode = KeyCode::Char('n');
 pub const KEY_PREVIOUS: KeyCode = KeyCode::Char('p');
 pub const KEY_NEXT_GROUP: KeyCode = KeyCode::Char('N');
 pub const KEY_PREVIOUS_GROUP: KeyCode = KeyCode::Char('P');
-pub const KEY_CYCLE_MODE: KeyCode = KeyCode::Char('m');
-pub const KEY_TOGGLE_SORT: KeyCode = KeyCode::Char('o');
+pub const KEY_CYCLE_MODE_FWD: KeyCode = KeyCode::Char('m');
+pub const KEY_CYCLE_MODE_BWD: KeyCode = KeyCode::Char('M');
+pub const KEY_TOGGLE_SORT_FWD: KeyCode = KeyCode::Char('o');
+pub const KEY_TOGGLE_SORT_BWD: KeyCode = KeyCode::Char('O');
 pub const KEY_SEARCH: KeyCode = KeyCode::Char('/');
 pub const KEY_LYRICS: KeyCode = KeyCode::Char('l');
 pub const KEY_LOGS: KeyCode = KeyCode::Char('L');
@@ -95,60 +98,73 @@ impl Action {
     /// Label shown in the help bar. Returns `None` for actions that
     /// shouldn't appear (navigation, text input, etc.).
     pub fn help_label(&self, logic: &bc::Logic) -> Option<(SmolStr, SmolStr)> {
-        let (key, desc): (KeyCode, SmolStr) = match self {
-            Action::Quit => (KEY_QUIT, "quit".into()),
+        let (key_str, desc): (SmolStr, SmolStr) = match self {
+            Action::Quit => (key_label(KEY_QUIT), "quit".into()),
             Action::PlayPause => {
                 let label = if logic.get_playback_state() == bc::PlaybackState::Playing {
                     "pause"
                 } else {
                     "play"
                 };
-                (KEY_PLAY_PAUSE, label.into())
+                (key_label(KEY_PLAY_PAUSE), label.into())
             }
-            Action::Stop => (KEY_STOP, "stop".into()),
-            Action::Next => (KEY_NEXT, "next".into()),
-            Action::Previous => (KEY_PREVIOUS, "prev".into()),
+            Action::Stop => (key_label(KEY_STOP), "stop".into()),
+            Action::Next => (key_label(KEY_NEXT), "next".into()),
+            Action::Previous => (key_label(KEY_PREVIOUS), "prev".into()),
             Action::NextGroup if logic.get_playback_mode().has_group_structure() => {
-                (KEY_NEXT_GROUP, "next group".into())
+                (key_label(KEY_NEXT_GROUP), "next group".into())
             }
             Action::PreviousGroup if logic.get_playback_mode().has_group_structure() => {
-                (KEY_PREVIOUS_GROUP, "prev group".into())
+                (key_label(KEY_PREVIOUS_GROUP), "prev group".into())
             }
-            Action::Search => (KEY_SEARCH, "search".into()),
-            Action::Lyrics => (KEY_LYRICS, "lyrics".into()),
-            Action::Logs => (KEY_LOGS, "logs".into()),
-            Action::Queue => (KEY_QUEUE, "queue".into()),
-            Action::VolumeMode => (KEY_VOLUME, "vol".into()),
-            Action::Star => (KEY_STAR, "star".into()),
-            Action::SeekForward => (KEY_SEEK_FWD, "seek+".into()),
-            Action::SeekBackward => (KEY_SEEK_BACK, "seek-".into()),
-            Action::GotoPlaying => (KEY_GOTO_PLAYING, "goto".into()),
-            Action::Select => (KEY_SELECT, "play".into()),
-            Action::Back => (KEY_BACK, "close".into()),
-            Action::CyclePlaybackMode => {
+            Action::Search => (key_label(KEY_SEARCH), "search".into()),
+            Action::Lyrics => (key_label(KEY_LYRICS), "lyrics".into()),
+            Action::Logs => (key_label(KEY_LOGS), "logs".into()),
+            Action::Queue => (key_label(KEY_QUEUE), "queue".into()),
+            Action::VolumeMode => (key_label(KEY_VOLUME), "vol".into()),
+            Action::Star => (key_label(KEY_STAR), "star".into()),
+            Action::SeekForward => (key_label(KEY_SEEK_FWD), "seek+".into()),
+            Action::SeekBackward => (key_label(KEY_SEEK_BACK), "seek-".into()),
+            Action::GotoPlaying => (key_label(KEY_GOTO_PLAYING), "goto".into()),
+            Action::Select => (key_label(KEY_SELECT), "play".into()),
+            Action::Back => (key_label(KEY_BACK), "close".into()),
+            Action::CyclePlaybackMode(Direction::Forward) => {
                 let mode = logic.get_playback_mode().as_str();
-                (KEY_CYCLE_MODE, format!("mode ({mode})").into())
+                (
+                    pair_label(KEY_CYCLE_MODE_FWD, KEY_CYCLE_MODE_BWD),
+                    format!("mode ({mode})").into(),
+                )
             }
-            Action::ToggleSortOrder => {
+            Action::ToggleSortOrder(Direction::Forward) => {
                 let order = logic.get_sort_order().as_str();
-                (KEY_TOGGLE_SORT, format!("sort ({order})").into())
+                (
+                    pair_label(KEY_TOGGLE_SORT_FWD, KEY_TOGGLE_SORT_BWD),
+                    format!("sort ({order})").into(),
+                )
             }
-            Action::Settings => (KEY_SETTINGS, "settings".into()),
-            Action::MoveLeft => (KEY_LEFT, "left".into()),
-            Action::MoveRight => (KEY_RIGHT, "right".into()),
-            Action::ResetField => (KeyCode::Char('d'), "reset field".into()),
-            Action::ResetSection => (KeyCode::Char('D'), "reset section".into()),
+            Action::Settings => (key_label(KEY_SETTINGS), "settings".into()),
+            Action::MoveLeft => (key_label(KEY_LEFT), "left".into()),
+            Action::MoveRight => (key_label(KEY_RIGHT), "right".into()),
+            Action::ResetField => (key_label(KeyCode::Char('d')), "reset field".into()),
+            Action::ResetSection => (key_label(KeyCode::Char('D')), "reset section".into()),
             _ => return None,
-        };
-        let key_str: SmolStr = match key {
-            // Printable non-whitespace characters are already in the correct case.
-            KeyCode::Char(c) if !c.is_whitespace() => SmolStr::new(c.to_string()),
-            // Everything else (Space, Enter, Esc, PageUp, etc.) uses title case
-            // in crossterm's Display impl; lowercase it for the help bar.
-            other => other.to_smolstr().to_lowercase().into(),
         };
         Some((key_str, desc))
     }
+}
+
+fn key_label(key: KeyCode) -> SmolStr {
+    match key {
+        // Printable non-whitespace characters are already in the correct case.
+        KeyCode::Char(c) if !c.is_whitespace() => SmolStr::new(c.to_string()),
+        // Everything else (Space, Enter, Esc, PageUp, etc.) uses title case
+        // in crossterm's Display impl; lowercase it for the help bar.
+        other => other.to_smolstr().to_lowercase().into(),
+    }
+}
+
+fn pair_label(forward: KeyCode, backward: KeyCode) -> SmolStr {
+    format!("{}/{}", key_label(forward), key_label(backward)).into()
 }
 
 /// Resolve a key event into an action in library context.
@@ -161,8 +177,10 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_NEXT_GROUP => Some(Action::NextGroup),
         KEY_PREVIOUS_GROUP => Some(Action::PreviousGroup),
         KEY_STOP => Some(Action::Stop),
-        KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
-        KEY_TOGGLE_SORT => Some(Action::ToggleSortOrder),
+        KEY_CYCLE_MODE_FWD => Some(Action::CyclePlaybackMode(Direction::Forward)),
+        KEY_CYCLE_MODE_BWD => Some(Action::CyclePlaybackMode(Direction::Backward)),
+        KEY_TOGGLE_SORT_FWD => Some(Action::ToggleSortOrder(Direction::Forward)),
+        KEY_TOGGLE_SORT_BWD => Some(Action::ToggleSortOrder(Direction::Backward)),
         KEY_SEARCH => Some(Action::Search),
         KEY_LYRICS => Some(Action::Lyrics),
         KEY_LOGS => Some(Action::Logs),
@@ -297,7 +315,8 @@ pub fn queue_action(key: &KeyEvent) -> Option<Action> {
         KEY_PREVIOUS => Some(Action::Previous),
         KEY_NEXT_GROUP => Some(Action::NextGroup),
         KEY_PREVIOUS_GROUP => Some(Action::PreviousGroup),
-        KEY_CYCLE_MODE => Some(Action::CyclePlaybackMode),
+        KEY_CYCLE_MODE_FWD => Some(Action::CyclePlaybackMode(Direction::Forward)),
+        KEY_CYCLE_MODE_BWD => Some(Action::CyclePlaybackMode(Direction::Backward)),
         _ => None,
     }
 }
@@ -331,8 +350,8 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Queue),
     HelpEntry::Single(Action::VolumeMode),
     HelpEntry::Single(Action::Select),
-    HelpEntry::Single(Action::CyclePlaybackMode),
-    HelpEntry::Single(Action::ToggleSortOrder),
+    HelpEntry::Single(Action::CyclePlaybackMode(Direction::Forward)),
+    HelpEntry::Single(Action::ToggleSortOrder(Direction::Forward)),
     HelpEntry::Single(Action::Settings),
 ];
 
@@ -372,7 +391,7 @@ pub const QUEUE_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::PlayPause),
     HelpEntry::Pair(Action::Next, Action::Previous, "next/prev"),
     HelpEntry::Pair(Action::NextGroup, Action::PreviousGroup, "next/prev group"),
-    HelpEntry::Single(Action::CyclePlaybackMode),
+    HelpEntry::Single(Action::CyclePlaybackMode(Direction::Forward)),
 ];
 
 /// Ordered list of entries to show in the logs help bar.

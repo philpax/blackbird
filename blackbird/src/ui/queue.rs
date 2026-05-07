@@ -1,6 +1,6 @@
 use egui::{Align2, Color32, Context, Label, RichText, ScrollArea, Sense, Vec2, Vec2b, Window};
 
-use blackbird_client_shared::next_playback_mode;
+use blackbird_client_shared::{Direction, cycle};
 
 use crate::{
     bc,
@@ -24,7 +24,12 @@ pub fn ui(logic: &mut bc::Logic, ctx: &Context, style: &style::Style, queue_open
                 && !modifiers.alt
                 && !modifiers.ctrl
             {
-                let next = next_playback_mode(logic.get_playback_mode());
+                let direction = if modifiers.shift {
+                    Direction::Backward
+                } else {
+                    Direction::Forward
+                };
+                let next = cycle(&bc::PlaybackMode::ALL, logic.get_playback_mode(), direction);
                 logic.set_playback_mode(next);
             }
         }

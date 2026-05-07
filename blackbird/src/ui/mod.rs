@@ -287,15 +287,20 @@ impl App {
                         keys::Action::Previous => logic.previous(),
                         keys::Action::NextGroup => logic.next_group(),
                         keys::Action::PreviousGroup => logic.previous_group(),
-                        keys::Action::CyclePlaybackMode => {
-                            let next = blackbird_client_shared::next_playback_mode(
+                        keys::Action::CyclePlaybackMode(dir) => {
+                            let next = blackbird_client_shared::cycle(
+                                &bc::PlaybackMode::ALL,
                                 logic.get_playback_mode(),
+                                dir,
                             );
                             logic.set_playback_mode(next);
                         }
-                        keys::Action::ToggleSortOrder => {
-                            let next =
-                                blackbird_client_shared::toggle_sort_order(logic.get_sort_order());
+                        keys::Action::ToggleSortOrder(dir) => {
+                            let next = blackbird_client_shared::cycle(
+                                &bc::SortOrder::ALL,
+                                logic.get_sort_order(),
+                                dir,
+                            );
                             logic.set_sort_order(next);
                             self.ui_state.library_view.invalidate_library_scroll();
                             self.ui_state

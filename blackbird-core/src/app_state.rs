@@ -20,6 +20,14 @@ pub enum SortOrder {
 }
 
 impl SortOrder {
+    /// All sort orders in cycle order.
+    pub const ALL: [SortOrder; 4] = [
+        SortOrder::Alphabetical,
+        SortOrder::NewestFirst,
+        SortOrder::RecentlyAdded,
+        SortOrder::MostPlayed,
+    ];
+
     /// Returns a short human-readable label for the sort order.
     pub fn as_str(&self) -> &'static str {
         match self {

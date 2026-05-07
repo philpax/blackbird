@@ -192,8 +192,12 @@ pub fn handle_key(
         Action::Previous => logic.previous(),
         Action::NextGroup => logic.next_group(),
         Action::PreviousGroup => logic.previous_group(),
-        Action::CyclePlaybackMode => {
-            let next = blackbird_client_shared::next_playback_mode(logic.get_playback_mode());
+        Action::CyclePlaybackMode(dir) => {
+            let next = blackbird_client_shared::cycle(
+                &bc::PlaybackMode::ALL,
+                logic.get_playback_mode(),
+                dir,
+            );
             logic.set_playback_mode(next);
         }
         _ => {}
