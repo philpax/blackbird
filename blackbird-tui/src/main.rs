@@ -202,6 +202,7 @@ fn run_app(
                 terminal.swap_buffers();
                 last_full_redraw = Instant::now();
             }
+            app.cover_art_cache.begin_frame();
             terminal.draw(|frame| ui::draw(frame, app))?;
             app.needs_redraw = false;
         }

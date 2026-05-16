@@ -401,6 +401,23 @@ impl<T: ClientData> CoverArtCache<T> {
         })
     }
 
+    /// Refresh `last_requested` for an entry and the best loaded slot up to
+    /// `resolution`, mirroring what `get()` does without triggering a network
+    /// request or changing priority. Used to keep visible art alive between
+    /// frames when the UI isn't redrawing.
+    pub fn touch_for_keepalive(&mut self, id: &CoverArtId, resolution: Resolution) {
+        let Some(entry) = self.cache.get_mut(id) else {
+            return;
+        };
+        let now = Instant::now();
+        entry.last_requested = now;
+        if let Some((_, res)) = entry.best_up_to(resolution)
+            && let Some(slot) = entry.slot_mut(res)
+        {
+            slot.last_requested = now;
+        }
+    }
+
     /// Read-only access to the client data at a specific resolution tier.
     /// No side effects — does not trigger loading or touch timestamps.
     pub fn get_resolution(&self, id: &CoverArtId, resolution: Resolution) -> Option<&T> {

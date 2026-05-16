@@ -131,6 +131,13 @@ pub struct CoverArtCache {
     /// they were computed from. Persisted across image-data transitions so
     /// the previous grid remains visible while a higher-res grid is computing.
     overlay_grids: HashMap<(CoverArtId, usize, usize), CachedGrid>,
+    /// `(CoverArtId, Resolution)` pairs requested with `Visible` priority
+    /// since the last `begin_frame()`. The TUI uses lazy redraw, so entries
+    /// in this set are touched every tick via `keep_visible_alive()` to keep
+    /// the cache from timing them out while no draws are happening (e.g.
+    /// while paused), which would otherwise cause a high-res → low-res →
+    /// high-res flicker on the next redraw.
+    visible_this_frame: HashSet<(CoverArtId, Resolution)>,
 }
 
 /// An overlay grid together with the resolution of the source image it
@@ -158,6 +165,24 @@ impl CoverArtCache {
             grid_rx,
             grid_computing: HashSet::new(),
             overlay_grids: HashMap::new(),
+            visible_this_frame: HashSet::new(),
+        }
+    }
+
+    /// Reset the per-frame visibility set. Call once at the start of each
+    /// draw; the `get*` methods then re-populate it as visible art is
+    /// requested.
+    pub fn begin_frame(&mut self) {
+        self.visible_this_frame.clear();
+    }
+
+    /// Refresh `last_requested` on every entry that was requested with
+    /// `Visible` priority during the most recent draw. The TUI only redraws
+    /// when something changes, so without this the cache would time out
+    /// visible art after `CACHE_ENTRY_TIMEOUT` whenever the UI is idle.
+    pub fn keep_visible_alive(&mut self) {
+        for (id, resolution) in &self.visible_this_frame {
+            self.inner.touch_for_keepalive(id, *resolution);
         }
     }
 
@@ -228,6 +253,10 @@ impl CoverArtCache {
     /// Get quadrant colors for a cover art entry at low resolution.
     /// Used for LeftOfAlbum thumbnail colors.
     pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
+        if let Some(id) = cover_art_id {
+            self.visible_this_frame
+                .insert((id.clone(), Resolution::Low));
+        }
         let Some(result) =
             self.inner
                 .get(logic, cover_art_id, Resolution::Low, CachePriority::Visible)
@@ -270,6 +299,9 @@ impl CoverArtCache {
         let Some(id) = cover_art_id else {
             return (ArtColorGrid::empty(cols, rows), false);
         };
+
+        self.visible_this_frame
+            .insert((id.clone(), Resolution::Library));
 
         // Request library-res data (triggers network fetch if needed).
         let _result = self
@@ -363,6 +395,9 @@ impl CoverArtCache {
         let Some(id) = cover_art_id else {
             return (ArtColorGrid::empty(cols, rows), false);
         };
+
+        self.visible_this_frame
+            .insert((id.clone(), Resolution::Full));
 
         // Request full-res data (triggers network fetch if needed).
         let _result = self
