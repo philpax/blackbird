@@ -1,12 +1,12 @@
 use std::{
-    collections::{HashMap, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
+    collections::HashMap,
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use blackbird_state::TrackId;
 use blackbird_subsonic::{ClientResult, ReplayGain};
+use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
 
 use crate::{
     AppState, Logic, PlaybackMode, TrackLoadMode,
@@ -120,6 +120,24 @@ impl QueueState {
             current_index: 0,
         }
     }
+
+    /// Rotates the seed used by `mode`'s shuffle axis, if any. Track-shuffle
+    /// modes bump `shuffle_seed`; group-shuffle modes bump `group_shuffle_seed`;
+    /// non-shuffle modes are left untouched. Returns `true` if a seed was
+    /// rotated, so callers can decide whether a queue recompute is warranted.
+    pub(crate) fn bump_shuffle_seed_for_mode(&mut self, mode: PlaybackMode) -> bool {
+        match mode {
+            PlaybackMode::Shuffle | PlaybackMode::LikedShuffle => {
+                self.shuffle_seed = next_seed(self.shuffle_seed);
+                true
+            }
+            PlaybackMode::GroupShuffle | PlaybackMode::LikedGroupShuffle => {
+                self.group_shuffle_seed = next_seed(self.group_shuffle_seed);
+                true
+            }
+            PlaybackMode::Sequential | PlaybackMode::RepeatOne | PlaybackMode::GroupRepeat => false,
+        }
+    }
 }
 
 impl Logic {
@@ -140,6 +158,25 @@ impl Logic {
     }
 
     pub(super) fn schedule_next_track(&self) {
+        // If advancing would wrap the queue back to the start, rotate the
+        // shuffle seed and recompute so the next pass plays a fresh order
+        // rather than replaying the previous permutation verbatim. The
+        // recompute anchors on the currently playing track, leaving the
+        // index pointing at it before we advance off of it below.
+        let (mode, will_wrap, current_tid) = {
+            let st = self.read_state();
+            let len = st.queue.ordered_tracks.len();
+            let will_wrap = len > 0 && st.queue.current_index + 1 >= len;
+            let cur = st.queue.ordered_tracks.get(st.queue.current_index).cloned();
+            (st.playback_mode, will_wrap, cur)
+        };
+        if will_wrap {
+            let bumped = self.write_state().queue.bump_shuffle_seed_for_mode(mode);
+            if bumped {
+                self.recompute_queue(current_tid.as_ref());
+            }
+        }
+
         if let Some(next) = self.compute_next_track_id() {
             tracing::debug!("Advancing to next track {}", next.0);
             // Advance the index before scheduling.
@@ -533,7 +570,7 @@ fn compute_full_ordering(
 
         PlaybackMode::Shuffle => {
             let mut tracks = library.track_ids.clone();
-            tracks.sort_by_key(|tid| shuffle_key(tid, queue.shuffle_seed));
+            shuffle_with_seed(&mut tracks, queue.shuffle_seed);
             tracks
         }
 
@@ -544,14 +581,14 @@ fn compute_full_ordering(
                 .filter(|tid| library.track_map.get(tid).is_some_and(|t| t.starred))
                 .cloned()
                 .collect();
-            tracks.sort_by_key(|tid| shuffle_key(tid, queue.shuffle_seed));
+            shuffle_with_seed(&mut tracks, queue.shuffle_seed);
             tracks
         }
 
         PlaybackMode::GroupShuffle => {
-            // Sort group indices by shuffle key, then flatten each group's tracks.
+            // Shuffle group indices, then flatten each group's tracks in their natural order.
             let mut group_indices: Vec<usize> = (0..library.groups.len()).collect();
-            group_indices.sort_by_key(|&idx| shuffle_key(idx, queue.group_shuffle_seed));
+            shuffle_with_seed(&mut group_indices, queue.group_shuffle_seed);
             group_indices
                 .into_iter()
                 .flat_map(|idx| library.groups[idx].tracks.iter().cloned())
@@ -567,7 +604,7 @@ fn compute_full_ordering(
                 .filter(|(_, g)| g.starred)
                 .map(|(idx, _)| idx)
                 .collect();
-            group_indices.sort_by_key(|&idx| shuffle_key(idx, queue.group_shuffle_seed));
+            shuffle_with_seed(&mut group_indices, queue.group_shuffle_seed);
             group_indices
                 .into_iter()
                 .flat_map(|idx| library.groups[idx].tracks.iter().cloned())
@@ -661,21 +698,13 @@ fn compute_window_from_queue(queue: &QueueState, radius: usize) -> Vec<TrackId> 
     out
 }
 
-// Deterministic shuffle key based on seed and id.
-fn shuffle_key(id: impl Hash, seed: u64) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    id.hash(&mut hasher);
-    let id_hash = hasher.finish();
-
-    // Use a strong mixing function (murmurhash3 finalizer).
-    // This provides excellent avalanche properties ensuring diverse shuffle orderings.
-    let mut x = id_hash ^ seed;
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xff51afd7ed558ccd);
-    x ^= x >> 33;
-    x = x.wrapping_mul(0xc4ceb9fe1a85ec53);
-    x ^= x >> 33;
-    x
+// Deterministic Fisher–Yates shuffle from a fixed seed. The same seed and
+// input always produce the same permutation, so recomputing the queue
+// against unchanged inputs is stable, while bumping the seed yields a fresh
+// uniform permutation.
+fn shuffle_with_seed<T>(slice: &mut [T], seed: u64) {
+    let mut rng = StdRng::seed_from_u64(seed);
+    slice.shuffle(&mut rng);
 }
 
 fn next_seed(seed: u64) -> u64 {
@@ -998,6 +1027,66 @@ mod tests {
         let queue = make_queue();
         let window = compute_window_from_queue(&queue, 2);
         assert!(window.is_empty());
+    }
+
+    #[test]
+    fn shuffle_changes_with_different_seed() {
+        let library = make_library(20, 3);
+        let mut queue = make_queue();
+        let ord1 = compute_full_ordering(&library, PlaybackMode::Shuffle, &queue, None);
+        queue.shuffle_seed = next_seed(queue.shuffle_seed);
+        let ord2 = compute_full_ordering(&library, PlaybackMode::Shuffle, &queue, None);
+        assert_ne!(ord1, ord2);
+    }
+
+    #[test]
+    fn group_shuffle_changes_with_different_seed() {
+        let library = make_library(20, 5);
+        let mut queue = make_queue();
+        let ord1 = compute_full_ordering(&library, PlaybackMode::GroupShuffle, &queue, None);
+        queue.group_shuffle_seed = next_seed(queue.group_shuffle_seed);
+        let ord2 = compute_full_ordering(&library, PlaybackMode::GroupShuffle, &queue, None);
+        assert_ne!(ord1, ord2);
+    }
+
+    #[test]
+    fn bump_shuffle_seed_for_mode_rotates_track_seed_for_track_shuffles() {
+        for mode in [PlaybackMode::Shuffle, PlaybackMode::LikedShuffle] {
+            let mut queue = make_queue();
+            let track_before = queue.shuffle_seed;
+            let group_before = queue.group_shuffle_seed;
+            assert!(queue.bump_shuffle_seed_for_mode(mode), "mode {mode:?}");
+            assert_ne!(queue.shuffle_seed, track_before, "mode {mode:?}");
+            assert_eq!(queue.group_shuffle_seed, group_before, "mode {mode:?}");
+        }
+    }
+
+    #[test]
+    fn bump_shuffle_seed_for_mode_rotates_group_seed_for_group_shuffles() {
+        for mode in [PlaybackMode::GroupShuffle, PlaybackMode::LikedGroupShuffle] {
+            let mut queue = make_queue();
+            let track_before = queue.shuffle_seed;
+            let group_before = queue.group_shuffle_seed;
+            assert!(queue.bump_shuffle_seed_for_mode(mode), "mode {mode:?}");
+            assert_eq!(queue.shuffle_seed, track_before, "mode {mode:?}");
+            assert_ne!(queue.group_shuffle_seed, group_before, "mode {mode:?}");
+        }
+    }
+
+    #[test]
+    fn bump_shuffle_seed_for_mode_is_noop_for_non_shuffle_modes() {
+        for mode in [
+            PlaybackMode::Sequential,
+            PlaybackMode::RepeatOne,
+            PlaybackMode::GroupRepeat,
+        ] {
+            let mut queue = make_queue();
+            let track_before = queue.shuffle_seed;
+            let group_before = queue.group_shuffle_seed;
+            assert!(!queue.bump_shuffle_seed_for_mode(mode), "mode {mode:?}");
+            assert_eq!(queue.shuffle_seed, track_before, "mode {mode:?}");
+            assert_eq!(queue.group_shuffle_seed, group_before, "mode {mode:?}");
+        }
     }
 
     fn approx_eq(a: f32, b: f32) -> bool {

@@ -749,10 +749,18 @@ impl Logic {
         tracing::debug!("Playback mode set to {mode:?}");
         let current_track_id = {
             let mut st = self.write_state();
+            let mode_changed = st.playback_mode != mode;
             st.playback_mode = mode;
 
             // Reset gapless playback state since the next track may be different in the new mode
             st.queue.next_track_appended = None;
+
+            // Entering a shuffle mode rotates the corresponding seed, so each
+            // shuffle session starts from a fresh permutation rather than the
+            // one left behind by the previous visit.
+            if mode_changed {
+                st.queue.bump_shuffle_seed_for_mode(mode);
+            }
 
             st.current_track_and_position
                 .as_ref()
@@ -884,6 +892,13 @@ impl Logic {
     pub fn request_play_track(&self, track_id: &TrackId) {
         // Public API used by UI: keep current playing until new track is ready.
         self.schedule_play_track(track_id);
+
+        // A purposeful pick from the UI rotates the shuffle seed for the
+        // current mode, so the rest of the queue around the new anchor is
+        // reshuffled rather than continuing the previous permutation.
+        let mode = self.read_state().playback_mode;
+        self.write_state().queue.bump_shuffle_seed_for_mode(mode);
+
         self.recompute_queue(Some(track_id));
     }
 
