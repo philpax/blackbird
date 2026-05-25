@@ -6,6 +6,7 @@ mod cover_art_cache;
 mod ui;
 
 use blackbird_core as bc;
+use blackbird_shared::config::ConfigFile as _;
 
 use config::Config;
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
@@ -18,7 +19,7 @@ fn main() {
 
     // Log to a file so that shutdown diagnostics are visible even when the
     // GUI window has closed.
-    let log_dir = blackbird_client_shared::paths::data_dir();
+    let log_dir = blackbird_shared::paths::data_dir();
     std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
     let file_layer = std::fs::File::create(log_dir.join("blackbird-gui.log"))
         .map(|f| {

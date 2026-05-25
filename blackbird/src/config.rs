@@ -17,22 +17,7 @@ pub struct Config {
     #[serde(flatten)]
     pub extra: toml::Table,
 }
-impl Config {
-    pub const FILENAME: &str = "config.toml";
-
-    pub fn load() -> Self {
-        blackbird_client_shared::config::load_config(Self::FILENAME)
-    }
-
-    pub fn save(&self) {
-        let path = blackbird_client_shared::config::config_path(Self::FILENAME);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&path, toml::to_string(self).unwrap()).unwrap();
-        tracing::info!("saved config to {}", path.display());
-    }
-}
+impl blackbird_shared::config::ConfigFile for Config {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

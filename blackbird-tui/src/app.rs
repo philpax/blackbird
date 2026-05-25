@@ -1,6 +1,7 @@
 use std::time::{Duration, Instant};
 
 use blackbird_core::{self as bc, PlaybackToLogicMessage};
+use blackbird_shared::config::ConfigFile as _;
 
 use crate::{
     config::Config,

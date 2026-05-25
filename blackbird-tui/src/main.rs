@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use app::{App, FocusedPanel};
 use blackbird_core as bc;
+use blackbird_shared::config::ConfigFile as _;
 use config::Config;
 use cover_art::CoverArtCache;
 use keys::Action;
@@ -31,7 +32,7 @@ fn main() -> anyhow::Result<()> {
     let log_buffer = LogBuffer::new();
 
     // Also log to a file for debugging (especially shutdown issues).
-    let log_dir = blackbird_client_shared::paths::data_dir();
+    let log_dir = blackbird_shared::paths::data_dir();
     std::fs::create_dir_all(&log_dir)?;
     let log_file = std::fs::File::create(log_dir.join("blackbird-tui.log"))?;
     let file_layer = tracing_subscriber::fmt::layer()

@@ -11,7 +11,6 @@ tray-icon = ["dep:tray-icon", "dep:gtk"]
 blackbird-core = { path = "../blackbird-core", default-features = false }
 blackbird-shared = { path = "../blackbird-shared" }
 
-etcetera = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }

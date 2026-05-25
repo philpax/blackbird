@@ -6,6 +6,7 @@ use blackbird_core::{
     blackbird_state::{CoverArtId, TrackId},
     util::seconds_to_hms_string,
 };
+use blackbird_shared::config::ConfigFile as _;
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -921,7 +922,7 @@ fn draw_connection_error(
     let dim = style.track_duration_color();
     let text_color = style.text_color();
 
-    let config_path = blackbird_client_shared::config::config_path(crate::config::Config::FILENAME);
+    let config_path = crate::config::Config::path();
     let config_path_str = config_path.display().to_string();
 
     let lines = vec![

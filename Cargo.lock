@@ -630,7 +630,6 @@ version = "0.1.0"
 dependencies = [
  "blackbird-core",
  "blackbird-shared",
- "etcetera",
  "gtk",
  "image",
  "serde",
@@ -693,7 +692,10 @@ dependencies = [
 name = "blackbird-shared"
 version = "0.1.0"
 dependencies = [
+ "etcetera",
  "serde",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

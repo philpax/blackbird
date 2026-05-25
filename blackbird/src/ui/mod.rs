@@ -15,6 +15,7 @@ mod util;
 pub use style::{Style, StyleExt};
 
 use blackbird_core::blackbird_state::CoverArtId;
+use blackbird_shared::config::ConfigFile as _;
 use egui::{
     CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, Rect,
     RichText, TextFormat, TopBottomPanel, Visuals, text::LayoutJob,
@@ -801,13 +802,7 @@ impl App {
 
                 if server_changed {
                     // Save immediately for server changes that trigger a reload.
-                    let path = blackbird_client_shared::config::config_path(
-                        crate::config::Config::FILENAME,
-                    );
-                    if let Some(parent) = path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::fs::write(&path, toml::to_string(&cfg).unwrap());
+                    cfg.save();
 
                     self.logic.reload_library(
                         cfg.shared.server.base_url,
@@ -821,13 +816,7 @@ impl App {
 
         // Save config to disk when the settings window closes.
         if settings_was_open && !self.ui_state.settings.open {
-            let cfg = self.config.read().unwrap();
-            let path =
-                blackbird_client_shared::config::config_path(crate::config::Config::FILENAME);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&path, toml::to_string(&*cfg).unwrap());
+            self.config.read().unwrap().save();
         }
     }
 }

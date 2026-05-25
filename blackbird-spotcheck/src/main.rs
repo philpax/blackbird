@@ -3,25 +3,31 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::Deserialize;
+use blackbird_shared::config::ConfigFile;
+use serde::{Deserialize, Serialize};
 
 use crate::common::{Albums, Ndjson as _, Tracks};
 
 mod common;
 mod spotify;
 
-#[derive(Deserialize)]
+/// Partial view of the shared blackbird config — only the fields this tool
+/// needs. Unknown sections written by the clients are ignored on load.
+#[derive(Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Config {
     server: blackbird_shared::config::Server,
 }
+
+impl ConfigFile for Config {}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let subscriber = tracing_subscriber::FmtSubscriber::new();
     tracing::subscriber::set_global_default(subscriber).unwrap();
 
-    tracing::info!("Loading configuration from config.toml...");
-    let config = toml::from_str::<Config>(&std::fs::read_to_string("config.toml")?)?;
+    tracing::info!("Loading configuration from {}...", Config::path().display());
+    let config = Config::load();
 
     let spotify_data_path = std::env::args().nth(1).map(PathBuf::from);
     let output_dir = Path::new("spotcheck-output");
