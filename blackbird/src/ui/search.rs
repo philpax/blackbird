@@ -25,6 +25,7 @@ pub fn ui(
     }
 
     let mut requested_track_id = None;
+    let mut goto_track_id = None;
     let mut clear = false;
 
     let viewport_builder =
@@ -39,11 +40,16 @@ pub fn ui(
             response.request_focus();
 
             let mut play_first_track = false;
+            let mut goto_first_track = false;
             if response.has_focus() {
                 if ui.input(|i| i.key_pressed(Key::Escape)) {
                     clear = true;
                 } else if ui.input(|i| i.key_pressed(Key::Enter)) {
-                    play_first_track = true;
+                    if ui.input(|i| i.modifiers.shift) {
+                        goto_first_track = true;
+                    } else {
+                        play_first_track = true;
+                    }
                 }
             }
 
@@ -70,6 +76,8 @@ pub fn ui(
                 // If Enter was pressed and we have results, select the first item
                 if play_first_track && !results.is_empty() {
                     requested_track_id = Some(results[0].clone());
+                } else if goto_first_track && !results.is_empty() {
+                    goto_track_id = Some(results[0].clone());
                 }
 
                 let response = egui::ScrollArea::new(Vec2b::TRUE)
@@ -95,6 +103,11 @@ pub fn ui(
 
             if let Some(track_id) = &requested_track_id {
                 logic.request_play_track(track_id);
+                clear = true;
+            } else if let Some(track_id) = goto_track_id.take() {
+                let state = logic.get_state();
+                let mut state = state.write().unwrap();
+                state.last_requested_track_for_ui_scroll = Some(track_id);
                 clear = true;
             }
 

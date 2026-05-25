@@ -356,6 +356,11 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
             {
                 match sa {
                     ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                    ui::search::SearchAction::GotoTrack(track_id) => {
+                        app.logic.set_scroll_target(&track_id);
+                        app.library.scroll_to_track = Some(track_id);
+                        app.toggle_search();
+                    }
                 }
             }
         }
@@ -532,6 +537,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                     ) {
                         match sa {
                             ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                            ui::search::SearchAction::GotoTrack(track_id) => {
+                                app.logic.set_scroll_target(&track_id);
+                                app.library.scroll_to_track = Some(track_id);
+                                app.toggle_search();
+                            }
                         }
                     }
                 } else if app.focused_panel == FocusedPanel::Lyrics {

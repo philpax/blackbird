@@ -44,6 +44,7 @@ pub enum Action {
     GotoTop,
     GotoBottom,
     Select,
+    GotoSelected,
     Back,
     ClearLine,
     Char(char),
@@ -127,6 +128,7 @@ impl Action {
             Action::SeekBackward => (key_label(KEY_SEEK_BACK), "seek-".into()),
             Action::GotoPlaying => (key_label(KEY_GOTO_PLAYING), "goto".into()),
             Action::Select => (key_label(KEY_SELECT), "play".into()),
+            Action::GotoSelected => ("shift+enter".into(), "goto".into()),
             Action::Back => (key_label(KEY_BACK), "close".into()),
             Action::CyclePlaybackMode(Direction::Forward) => {
                 let mode = logic.get_playback_mode().as_str();
@@ -228,17 +230,20 @@ pub fn settings_action(key: &KeyEvent, editing: bool) -> Option<Action> {
 pub fn search_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
         KEY_BACK => Some(Action::Back),
+        KEY_SELECT if key.modifiers.contains(KeyModifiers::SHIFT) => Some(Action::GotoSelected),
         KEY_SELECT => Some(Action::Select),
         KEY_UP => Some(Action::MoveUp),
         KEY_DOWN => Some(Action::MoveDown),
         KEY_DELETE_CHAR => Some(Action::DeleteChar),
-        KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'u' {
-                Some(Action::ClearLine)
-            } else {
-                Some(Action::Char(c))
-            }
-        }
+        KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => match c {
+            // Terminals that don't disambiguate shift+enter send a raw `\n`
+            // (0x0A), which crossterm parses as Ctrl+J in raw mode. Treat it
+            // as GotoSelected so shift+enter works there too.
+            'j' => Some(Action::GotoSelected),
+            'u' => Some(Action::ClearLine),
+            _ => Some(Action::Char(c)),
+        },
+        KeyCode::Char(c) => Some(Action::Char(c)),
         _ => None,
     }
 }
@@ -369,6 +374,7 @@ pub const SETTINGS_HELP: &[HelpEntry] = &[
 pub const SEARCH_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Back),
     HelpEntry::Single(Action::Select),
+    HelpEntry::Single(Action::GotoSelected),
     HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
 ];
 

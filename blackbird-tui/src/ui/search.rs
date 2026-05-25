@@ -16,6 +16,7 @@ use super::{StyleExt, string_to_color};
 
 pub enum SearchAction {
     ToggleSearch,
+    GotoTrack(TrackId),
 }
 
 pub struct SearchState {
@@ -198,6 +199,11 @@ pub fn handle_key(
             if let Some(track_id) = search.results.get(search.selected_index) {
                 logic.request_play_track(track_id);
                 return Some(SearchAction::ToggleSearch);
+            }
+        }
+        Action::GotoSelected => {
+            if let Some(track_id) = search.results.get(search.selected_index) {
+                return Some(SearchAction::GotoTrack(track_id.clone()));
             }
         }
         Action::MoveUp if search.selected_index > 0 => {
