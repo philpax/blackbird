@@ -557,20 +557,12 @@ pub struct LibraryState {
     pub needs_scroll_to_playing: bool,
     pub scroll_to_track: Option<TrackId>,
 
+    /// Shared scroll/drag/inertia mechanism.
+    pub viewport: super::scroll::Scroller,
+
     // Mouse interaction
     pub click_pending: Option<(u16, u16, usize)>,
-    pub dragging: bool,
-    pub drag_last_y: Option<u16>,
-    pub viewport_line: usize,
     pub drag_selected_index: Option<usize>,
-    pub last_visible_height: usize,
-    pub scrollbar_dragging: bool,
-
-    // Inertia scrolling (drag momentum).
-    /// Viewport velocity in lines per tick (positive = viewport moves down / content scrolls up).
-    pub inertia_velocity: f64,
-    /// Smoothed drag velocity in terminal rows per event, used to seed inertia on release.
-    pub drag_velocity: f64,
 
     // Private cache
     cached_flat_library: Vec<LibraryEntry>,
@@ -587,16 +579,10 @@ impl LibraryState {
             needs_scroll_to_playing: true,
             scroll_to_track: None,
 
-            click_pending: None,
-            dragging: false,
-            drag_last_y: None,
-            viewport_line: 0,
-            drag_selected_index: None,
-            last_visible_height: 0,
-            scrollbar_dragging: false,
+            viewport: super::scroll::Scroller::new(),
 
-            inertia_velocity: 0.0,
-            drag_velocity: 0.0,
+            click_pending: None,
+            drag_selected_index: None,
 
             cached_flat_library: Vec::new(),
             flat_library_dirty: true,
@@ -732,16 +718,16 @@ impl LibraryState {
         )
     }
 
-    /// Sets `viewport_line` to center `selected_index` in the visible area.
+    /// Sets `viewport.line` to center `selected_index` in the visible area.
     pub fn center_viewport_on_selection(&mut self) {
         let mut line_offset = 0usize;
         for entry in self.cached_flat_library.iter().take(self.selected_index) {
             line_offset += entry.height();
         }
-        let half_height = (self.last_visible_height / 2).saturating_sub(1);
+        let half_height = (self.viewport.visible_height / 2).saturating_sub(1);
         let total_lines = total_entry_lines(&self.cached_flat_library);
-        let max_viewport = total_lines.saturating_sub(self.last_visible_height);
-        self.viewport_line = line_offset.saturating_sub(half_height).min(max_viewport);
+        let max_viewport = self.viewport.max_line(total_lines);
+        self.viewport.line = line_offset.saturating_sub(half_height).min(max_viewport);
     }
 
     /// Centers the viewport on `selected_index` only if it is outside the
@@ -758,8 +744,8 @@ impl LibraryState {
             .map(LibraryEntry::height)
             .unwrap_or(1);
 
-        let above = line_offset < self.viewport_line;
-        let below = line_offset + entry_height > self.viewport_line + self.last_visible_height;
+        let above = line_offset < self.viewport.line;
+        let below = line_offset + entry_height > self.viewport.line + self.viewport.visible_height;
 
         // Only scroll if the selected entry is completely outside the viewport.
         if above || below {
@@ -779,15 +765,15 @@ impl LibraryState {
             .get(index)
             .map(LibraryEntry::height)
             .unwrap_or(0);
-        let viewport_end = self.viewport_line + self.last_visible_height;
-        line_offset + entry_height > self.viewport_line && line_offset < viewport_end
+        let viewport_end = self.viewport.line + self.viewport.visible_height;
+        line_offset + entry_height > self.viewport.line && line_offset < viewport_end
     }
 
     /// Sets `selected_index` to the nearest track at the viewport center.
     pub fn snap_cursor_to_viewport_center(&mut self) {
         let total_lines = total_entry_lines(&self.cached_flat_library);
-        let max_viewport = total_lines.saturating_sub(self.last_visible_height);
-        let center_line = self.viewport_line.min(max_viewport) + self.last_visible_height / 2;
+        let max_viewport = self.viewport.max_line(total_lines);
+        let center_line = self.viewport.line.min(max_viewport) + self.viewport.visible_height / 2;
         if let Some(idx) = entry_at_line(&self.cached_flat_library, center_line) {
             let target = match self.cached_flat_library.get(idx) {
                 Some(LibraryEntry::Track { .. }) => Some(idx),
@@ -838,45 +824,25 @@ impl LibraryState {
     /// stop threshold, at which point it snaps `selected_index` to the viewport
     /// center.
     pub fn tick_inertia(&mut self, logic: &bc::Logic) -> bool {
-        // Don't interfere while the user is actively dragging.
-        if self.dragging {
-            return false;
-        }
-
-        if self.inertia_velocity.abs() < super::layout::INERTIA_STOP_THRESHOLD {
-            if self.inertia_velocity != 0.0 {
-                // Inertia just finished — snap selection to viewport center.
-                self.snap_cursor_to_viewport_center();
-            }
-            self.inertia_velocity = 0.0;
-            return false;
-        }
-
         if self.flat_library_dirty {
             self.rebuild_flat_library(logic);
             self.flat_library_dirty = false;
         }
         let total_lines = total_entry_lines(&self.cached_flat_library);
-        let max_viewport = total_lines.saturating_sub(self.last_visible_height);
-
-        // Velocity is in lines/tick (positive = viewport moves down).
-        let old_viewport = self.viewport_line;
-        let new_viewport =
-            (old_viewport as f64 + self.inertia_velocity).clamp(0.0, max_viewport as f64);
-        let new_viewport_int = new_viewport.round() as usize;
-        let moved = new_viewport_int != old_viewport;
-        self.viewport_line = new_viewport_int;
-
-        self.inertia_velocity *= super::layout::INERTIA_FRICTION;
-
-        moved
+        match self.viewport.tick_inertia(total_lines) {
+            super::scroll::InertiaTick::Moved => true,
+            super::scroll::InertiaTick::Stopped => {
+                self.snap_cursor_to_viewport_center();
+                false
+            }
+            super::scroll::InertiaTick::Tickless | super::scroll::InertiaTick::Inactive => false,
+        }
     }
 
     /// Cancels any active inertia scrolling, snapping the selection to the
     /// current viewport center.
     pub fn cancel_inertia(&mut self, logic: &bc::Logic) {
-        if self.inertia_velocity != 0.0 {
-            self.inertia_velocity = 0.0;
+        if self.viewport.cancel_inertia() {
             if self.flat_library_dirty {
                 self.rebuild_flat_library(logic);
                 self.flat_library_dirty = false;
@@ -1022,17 +988,15 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     let sort_order = app.logic.get_sort_order();
     let indicator_width = scroll_indicator_width(sort_order);
     let visible_height = inner.height as usize;
-    app.library.last_visible_height = visible_height;
+    app.library.viewport.visible_height = visible_height;
 
     let geo = super::layout::library_geometry(inner, total_lines, indicator_width);
     let has_scrollbar = geo.has_scrollbar;
     let list_width = geo.list_width;
 
     // Always use the decoupled viewport position, clamped to valid range.
-    let centered_offset = app
-        .library
-        .viewport_line
-        .min(total_lines.saturating_sub(visible_height));
+    app.library.viewport.clamp(total_lines);
+    let centered_offset = app.library.viewport.line;
 
     // Convert line offset back to item offset for ListState.
     let item_offset = compute_item_offset(app.library.flat_library(), centered_offset);
@@ -1642,7 +1606,7 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
     // Click on scroll indicator area.
     if x >= scroll_area_start {
         scroll_to_y(app, total_lines, library_area, y);
-        app.library.scrollbar_dragging = true;
+        app.library.viewport.scrollbar_dragging = true;
         return;
     }
 
@@ -1709,8 +1673,8 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                 app.library.mark_dirty();
             } else {
                 app.library.click_pending = Some((x, y, index));
-                app.library.dragging = false;
-                app.library.drag_last_y = Some(y);
+                app.library.viewport.dragging = false;
+                app.library.viewport.drag_last_y = Some(y);
             }
         }
         LibraryEntry::GroupHeader {
@@ -1736,8 +1700,8 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
                 app.library.mark_dirty();
             } else {
                 app.library.click_pending = Some((x, y, index));
-                app.library.dragging = false;
-                app.library.drag_last_y = Some(y);
+                app.library.viewport.dragging = false;
+                app.library.viewport.drag_last_y = Some(y);
             }
         }
         LibraryEntry::GroupSpacer { .. } | LibraryEntry::AlbumGap => {
@@ -1745,8 +1709,8 @@ pub fn handle_mouse_click(app: &mut App, library_area: Rect, x: u16, y: u16) {
             // Setting click_pending with the index is safe because
             // handle_mouse_up only plays Track entries.
             app.library.click_pending = Some((x, y, index));
-            app.library.dragging = false;
-            app.library.drag_last_y = Some(y);
+            app.library.viewport.dragging = false;
+            app.library.viewport.drag_last_y = Some(y);
         }
     }
 }
@@ -1763,69 +1727,50 @@ fn find_group_title_for_entry(entries: &[LibraryEntry], index: usize) -> String 
 
 /// Handle mouse drag in the library area. Returns `true` if the drag was handled.
 pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> bool {
-    // Compute total lines once (avoids repeated cloning of entries).
     app.library.ensure_flat_library(&app.logic);
     let total_lines = total_entry_lines(app.library.flat_library());
 
-    // Scrollbar drag — once started, continues regardless of x position
-    if app.library.scrollbar_dragging
+    // Scrollbar drag — once started, continues regardless of x position.
+    if app.library.viewport.scrollbar_dragging
         && y >= library_area.y
         && y < library_area.y + library_area.height
     {
-        scroll_to_y(app, total_lines, library_area, y);
+        app.library.viewport.apply_scrollbar_drag(
+            y,
+            total_lines,
+            library_area.y,
+            library_area.height,
+        );
+        app.library.snap_cursor_to_viewport_center();
         app.library.click_pending = None;
-        app.library.dragging = true;
         return true;
     }
 
-    // Check if starting a drag in the scroll indicator area.
+    // Starting a drag in the scroll indicator column → scrollbar drag.
     let indicator_width = scroll_indicator_width(app.logic.get_sort_order()) as u16;
-    let scroll_area_start = library_area.x + library_area.width.saturating_sub(indicator_width);
-
-    if x >= scroll_area_start && y >= library_area.y && y < library_area.y + library_area.height {
-        scroll_to_y(app, total_lines, library_area, y);
+    if super::scroll::is_in_scrollbar_column(library_area, x, indicator_width)
+        && y >= library_area.y
+        && y < library_area.y + library_area.height
+    {
+        app.library.viewport.apply_scrollbar_drag(
+            y,
+            total_lines,
+            library_area.y,
+            library_area.height,
+        );
+        app.library.snap_cursor_to_viewport_center();
         app.library.click_pending = None;
-        app.library.dragging = true;
-        app.library.scrollbar_dragging = true;
         return true;
     }
 
     // Content drag → pan library by tracking viewport line offset.
-    if app.library.click_pending.is_some() || app.library.dragging {
-        app.library.inertia_velocity = 0.0;
-        let visible_height = library_area.height as usize;
-
-        // On first drag, reset drag velocity tracking.
-        if app.library.click_pending.is_some() {
-            app.library.drag_velocity = 0.0;
-        }
-
+    if app.library.click_pending.is_some() || app.library.viewport.dragging {
         app.library.click_pending = None;
-        app.library.dragging = true;
-
-        if let Some(last_y) = app.library.drag_last_y {
-            let delta = y as i32 - last_y as i32;
-            if delta != 0 {
-                // Drag down → content moves down → viewport line decreases.
-                let max_viewport = total_lines.saturating_sub(visible_height);
-                let new_viewport = (app.library.viewport_line as i32 - delta)
-                    .clamp(0, max_viewport as i32) as usize;
-                app.library.viewport_line = new_viewport;
-
-                // Track drag velocity with exponential smoothing. The delta is
-                // negated because dragging down moves the viewport up (content
-                // scrolls down → viewport line decreases), but our velocity
-                // convention is positive = viewport moves down.
-                let raw_velocity = -delta as f64;
-                app.library.drag_velocity = app.library.drag_velocity
-                    * super::layout::DRAG_VELOCITY_SMOOTHING
-                    + raw_velocity * (1.0 - super::layout::DRAG_VELOCITY_SMOOTHING);
-            }
-        }
+        app.library.viewport.apply_content_drag(y, total_lines);
 
         // Select the entry under the cursor.
         let cursor_content_line =
-            app.library.viewport_line + y.saturating_sub(library_area.y) as usize;
+            app.library.viewport.line + y.saturating_sub(library_area.y) as usize;
         let flat = app.library.flat_library();
         if let Some(entry_index) = entry_at_line(flat, cursor_content_line) {
             // Snap to the entry itself, or the nearest track if it's a header.
@@ -1848,8 +1793,6 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
                 app.library.drag_selected_index = Some(idx);
             }
         }
-
-        app.library.drag_last_y = Some(y);
         return true;
     }
 
@@ -1859,38 +1802,21 @@ pub fn handle_mouse_drag(app: &mut App, library_area: Rect, x: u16, y: u16) -> b
 /// Handle mouse button release in the library — confirm pending click or reset drag state.
 pub fn handle_mouse_up(app: &mut App) {
     if let Some((_cx, _cy, index)) = app.library.click_pending.take()
-        && !app.library.dragging
+        && !app.library.viewport.dragging
         && let Some(LibraryEntry::Track { id, .. }) =
             app.library.get_library_entry(&app.logic, index)
     {
         app.library.selected_index = index;
         app.logic.request_play_track(&id);
     }
-    if app.library.dragging && !app.library.scrollbar_dragging {
-        // Seed inertia from the accumulated drag velocity. If the velocity is
-        // above the stop threshold the tick loop will continue animating the
-        // viewport; otherwise we snap to center immediately.
-        let velocity = app.library.drag_velocity;
-        if velocity.abs() >= super::layout::INERTIA_STOP_THRESHOLD {
-            app.library.inertia_velocity = velocity * super::layout::INERTIA_INITIAL_BOOST;
-            // Clear the drag state so the UI doesn't show a drag cursor.
-            // tick_inertia will continue animating viewport_line.
-            app.library.dragging = false;
-            app.library.drag_last_y = None;
 
-            app.library.drag_velocity = 0.0;
-            app.library.drag_selected_index = None;
-            app.library.scrollbar_dragging = false;
-            return;
+    match app.library.viewport.end_drag() {
+        super::scroll::EndDragOutcome::Settled => {
+            app.library.snap_cursor_to_viewport_center();
         }
-        app.library.snap_cursor_to_viewport_center();
+        super::scroll::EndDragOutcome::InertiaStarted | super::scroll::EndDragOutcome::Idle => {}
     }
-
-    app.library.dragging = false;
-    app.library.drag_last_y = None;
     app.library.drag_selected_index = None;
-    app.library.drag_velocity = 0.0;
-    app.library.scrollbar_dragging = false;
 }
 
 /// Handle scroll wheel in the library. `direction` is -1 for up, 1 for down.
@@ -1898,22 +1824,16 @@ pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
     app.library.cancel_inertia(&app.logic);
     let entries = app.library.get_flat_library(&app.logic);
     let total_lines = total_entry_lines(entries);
-    let max_viewport = total_lines.saturating_sub(app.library.last_visible_height);
-    let delta = direction * steps as i32;
-    app.library.viewport_line =
-        (app.library.viewport_line as i32 + delta).clamp(0, max_viewport as i32) as usize;
+    app.library
+        .viewport
+        .apply_wheel(direction, steps, total_lines);
     app.library.snap_cursor_to_viewport_center();
 }
 
 /// Scroll library to a position based on Y coordinate (for scrollbar dragging).
 pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16) {
-    let visible_height = library_area.height as usize;
-    let inner_y = y.saturating_sub(library_area.y);
-    let ratio = inner_y as f32 / visible_height as f32;
-
-    let max_viewport = total_lines.saturating_sub(visible_height);
-
-    app.library.viewport_line = ((total_lines as f32) * ratio) as usize;
-    app.library.viewport_line = app.library.viewport_line.min(max_viewport);
+    app.library
+        .viewport
+        .apply_scrollbar_drag(y, total_lines, library_area.y, library_area.height);
     app.library.snap_cursor_to_viewport_center();
 }

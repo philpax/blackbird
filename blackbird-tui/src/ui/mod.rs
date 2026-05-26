@@ -6,6 +6,7 @@ pub(crate) mod logs;
 pub(crate) mod lyrics;
 pub(crate) mod now_playing;
 pub(crate) mod queue;
+pub(crate) mod scroll;
 pub(crate) mod search;
 pub(crate) mod settings;
 
@@ -196,7 +197,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         FocusedPanel::Library => library::draw(frame, app, main.content),
         FocusedPanel::Search => search::draw(
             frame,
-            &app.search,
+            &mut app.search,
             &app.config.style,
             &app.logic,
             main.content,

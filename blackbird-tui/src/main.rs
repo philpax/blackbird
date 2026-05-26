@@ -211,11 +211,12 @@ fn run_app(
         let size = Rect::new(0, 0, term_size.width, term_size.height);
 
         // Use a fast tick rate when inertia animation is active for smooth scrolling.
-        let tick_rate = if app.library.inertia_velocity != 0.0 && !app.library.dragging {
-            ANIMATION_TICK_RATE
-        } else {
-            Duration::from_millis(app.config.general.tick_rate_ms)
-        };
+        let tick_rate =
+            if app.library.viewport.inertia_active() || app.search.viewport.inertia_active() {
+                ANIMATION_TICK_RATE
+            } else {
+                Duration::from_millis(app.config.general.tick_rate_ms)
+            };
         let timeout = tick_rate.saturating_sub(last_tick.elapsed());
         if event::poll(timeout)? {
             let mut scroll_delta: i32 = 0;
@@ -353,7 +354,7 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
         }
         FocusedPanel::Search => {
             if let Some(action) = keys::search_action(key)
-                && let Some(sa) = ui::search::handle_key(&mut app.search, &app.logic, action)
+                && let Some(sa) = app.search.handle_key(&app.logic, action)
             {
                 match sa {
                     ui::search::SearchAction::ToggleSearch => app.toggle_search(),
@@ -529,22 +530,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 if app.focused_panel == FocusedPanel::Library {
                     ui::library::handle_mouse_click(app, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Search {
-                    if let Some(sa) = ui::search::handle_mouse_click(
-                        &mut app.search,
-                        &app.logic,
-                        library_area,
-                        x,
-                        y,
-                    ) {
-                        match sa {
-                            ui::search::SearchAction::ToggleSearch => app.toggle_search(),
-                            ui::search::SearchAction::GotoTrack(track_id) => {
-                                app.logic.set_scroll_target(&track_id);
-                                app.library.scroll_to_track = Some(track_id);
-                                app.toggle_search();
-                            }
-                        }
-                    }
+                    app.search.handle_mouse_click(library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Lyrics {
                     ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Queue {
@@ -590,6 +576,18 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             app.scrub_dragging = false;
             app.scrub_preview_ratio = None;
             ui::library::handle_mouse_up(app);
+            if app.focused_panel == FocusedPanel::Search
+                && let Some(sa) = app.search.handle_mouse_up(&app.logic)
+            {
+                match sa {
+                    ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                    ui::search::SearchAction::GotoTrack(track_id) => {
+                        app.logic.set_scroll_target(&track_id);
+                        app.library.scroll_to_track = Some(track_id);
+                        app.toggle_search();
+                    }
+                }
+            }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
@@ -603,6 +601,8 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
             if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_mouse_drag(app, library_area, x, y);
+            } else if app.focused_panel == FocusedPanel::Search {
+                app.search.handle_mouse_drag(library_area, x, y);
             }
         }
         MouseEventKind::ScrollUp => {
@@ -768,7 +768,9 @@ fn apply_scroll(app: &mut App, scroll_delta: i32) {
                 }
             }
         }
-        FocusedPanel::Search => {}
+        FocusedPanel::Search => {
+            app.search.handle_scroll(direction, steps);
+        }
         FocusedPanel::Settings => {
             ui::settings::scroll_selection(&mut app.settings, direction * steps as i32);
         }

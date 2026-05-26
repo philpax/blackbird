@@ -227,9 +227,12 @@ impl App {
             }
         }
 
-        // Apply inertia scrolling when the library panel is focused.
+        // Apply inertia scrolling when the focused panel has an active drag.
         if self.focused_panel == FocusedPanel::Library {
             changed |= self.library.tick_inertia(&self.logic);
+        }
+        if self.focused_panel == FocusedPanel::Search {
+            changed |= self.search.tick_inertia();
         }
 
         if self.logic.should_shutdown() {
