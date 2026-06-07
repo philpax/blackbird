@@ -67,6 +67,22 @@
             };
           };
 
+          # .cargo/config.toml pins clang + lld as the linker for fast local
+          # builds; neither is present in the build sandbox, so drop it and let
+          # cargo use the standard toolchain.
+          postPatch = ''
+            rm -f .cargo/config.toml
+          '';
+
+          # The workspace's default-members only includes the GUI client, so
+          # build the TUI explicitly as well.
+          cargoBuildFlags = [
+            "-p"
+            "blackbird"
+            "-p"
+            "blackbird-tui"
+          ];
+
           nativeBuildInputs = with pkgs; [
             pkg-config
             makeWrapper
@@ -77,14 +93,16 @@
           # in the build sandbox.
           doCheck = false;
 
-          # Expose the dlopen-ed libraries to the binary at runtime.
+          # Expose the dlopen-ed libraries to both binaries at runtime.
           postInstall = ''
-            wrapProgram $out/bin/blackbird \
-              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath deps}
+            for bin in blackbird blackbird-tui; do
+              wrapProgram $out/bin/$bin \
+                --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath deps}
+            done
           '';
 
           meta = {
-            description = "A subsonic music client";
+            description = "A subsonic music client (GUI and TUI)";
             homepage = "https://github.com/philpax/blackbird";
             mainProgram = "blackbird";
             platforms = supportedSystems;
