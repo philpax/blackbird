@@ -39,14 +39,16 @@
 
 ## Development environment
 
-A `shell.nix` is provided for Linux development. Use `nix-shell` to get a shell with all required system dependencies (ALSA, GTK, D-Bus, Wayland, etc.). The `--all-features` checks below require these dependencies, so run them inside `nix-shell`:
+A `flake.nix` is provided for Linux development. Use `nix develop` to get a shell with all required system dependencies (ALSA, GTK, D-Bus, Wayland, etc.). The shell intentionally does not build the binary, so bring your own Rust toolchain (e.g. via rustup). The `--all-features` checks below require these dependencies, so run them inside `nix develop`:
 
 ```sh
-nix-shell --run "cargo clippy --workspace --all-targets --all-features -- -D warnings"
-nix-shell --run "cargo test --workspace"
+nix develop --command cargo clippy --workspace --all-targets --all-features -- -D warnings
+nix develop --command cargo test --workspace
 ```
 
-The `--no-default-features` checks do not require system libraries and can be run outside of `nix-shell`.
+The `--no-default-features` checks do not require system libraries and can be run outside of `nix develop`.
+
+The flake also exposes the binary itself: `nix build .#blackbird` builds it, `nix run .` runs it, and `overlays.default` lets you include blackbird in a wider Nix configuration.
 
 ## Code style
 
@@ -55,9 +57,9 @@ The `--no-default-features` checks do not require system libraries and can be ru
 - Use Rust 2024 edition.
 - Ensure the following checks pass at the end of each complete task (you do not need to do this for intermediate steps):
   - `cargo fmt --all -- --check`
-  - `nix-shell --run "cargo clippy --workspace --all-targets --all-features -- -D warnings"`
+  - `nix develop --command cargo clippy --workspace --all-targets --all-features -- -D warnings`
   - `cargo clippy --workspace --all-targets --no-default-features -- -D warnings`
-  - `nix-shell --run "cargo test --workspace"`
+  - `nix develop --command cargo test --workspace`
   - `cargo test --workspace --no-default-features`
 
 ### Type system patterns
