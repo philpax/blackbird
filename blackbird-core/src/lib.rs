@@ -550,6 +550,7 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let track_id = track_id.clone();
+        let track_updated_tx = self.track_updated_tx.clone();
 
         self.tokio_thread.spawn(async move {
             // Immediately update the track in the UI to avoid latency, and assume
@@ -566,6 +567,13 @@ impl Logic {
                 }
                 old
             };
+
+            // Notify clients that the optimistic update landed. Without this, a
+            // render that ran between this spawn and the state write above
+            // rebuilt the library cache from stale data and marked it clean,
+            // leaving the heart stuck on the old value until an unrelated event
+            // dirtied it again.
+            let _ = track_updated_tx.send(());
 
             let operation = if starred {
                 client.star([track_id.0.clone()], [], []).await
@@ -593,6 +601,10 @@ impl Logic {
             } else {
                 AppStateError::UnstarTrackFailed { track_id, error }
             });
+
+            // The optimistic update was just rolled back; notify clients so they
+            // show the reverted state.
+            let _ = track_updated_tx.send(());
         });
     }
 
@@ -600,6 +612,7 @@ impl Logic {
         let client = self.client.clone();
         let state = self.state.clone();
         let album_id = album_id.clone();
+        let track_updated_tx = self.track_updated_tx.clone();
 
         self.tokio_thread.spawn(async move {
             // Immediately update the album in the UI to avoid latency, and assume
@@ -616,6 +629,11 @@ impl Logic {
                 }
                 old
             };
+
+            // Notify clients that the optimistic update landed; see
+            // `set_track_starred` for why this is necessary.
+            let _ = track_updated_tx.send(());
+
             let operation = if starred {
                 client.star([], [album_id.0.to_string()], []).await
             } else {
@@ -642,6 +660,10 @@ impl Logic {
             } else {
                 AppStateError::UnstarAlbumFailed { album_id, error }
             });
+
+            // The optimistic update was just rolled back; notify clients so they
+            // show the reverted state.
+            let _ = track_updated_tx.send(());
         });
     }
 
@@ -1185,6 +1207,12 @@ impl Logic {
                 state.write().unwrap().error = Some(AppStateError::InitialFetchFailed {
                     error: error.to_string(),
                 });
+                // Notify clients so they leave the loading state and render
+                // the connection error instead of staying on a frozen loading
+                // screen. Nothing else sets `changed` during loading (no
+                // playback, no library events), so without this signal the
+                // error wouldn't appear until the user interacted.
+                let _ = library_populated_tx.send(());
             }
         })
     }
