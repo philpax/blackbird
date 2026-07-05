@@ -12,6 +12,7 @@ pub mod cover_art_cache;
 pub mod library_scroll;
 pub mod lyrics;
 pub mod style;
+pub mod thread_pool;
 
 #[cfg(feature = "media-controls")]
 pub mod controls;

@@ -7,10 +7,10 @@
 //! protocols for terminals with a graphics protocol. Each artifact family
 //! lives in a [`derived_cache::DerivedCache`] keyed by cover art id and
 //! render size, which encodes the shared compute/upgrade/eviction
-//! lifecycle; background work runs on the [`pool`] worker threads.
+//! lifecycle; background work runs on a
+//! [`blackbird_client_shared::thread_pool::ThreadPool`].
 
 mod derived_cache;
-mod pool;
 mod quantize;
 
 pub use quantize::{
@@ -19,13 +19,15 @@ pub use quantize::{
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use blackbird_client_shared::cover_art_cache::{self, CachePriority, ClientData, Resolution};
+use blackbird_client_shared::{
+    cover_art_cache::{self, CachePriority, ClientData, Resolution},
+    thread_pool::ThreadPool,
+};
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 use ratatui::layout::Size;
 use ratatui_image::{Resize, picker::Picker, protocol::Protocol, sliced::SlicedProtocol};
 
 use derived_cache::DerivedCache;
-use pool::ThreadPool;
 use quantize::image_aspect_ratio;
 
 const POOL_SIZE: usize = 4;

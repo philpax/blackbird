@@ -10,9 +10,7 @@ use std::{
     },
 };
 
-use blackbird_client_shared::cover_art_cache::Resolution;
-
-use super::pool::ThreadPool;
+use blackbird_client_shared::{cover_art_cache::Resolution, thread_pool::ThreadPool};
 
 /// A cache of artifacts derived from encoded cover art bytes in background
 /// threads, keyed by `K`.

@@ -11,6 +11,8 @@ use std::{
 
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 
+use crate::thread_pool::ThreadPool;
+
 const TIME_BEFORE_LOAD_ATTEMPT: Duration = Duration::from_millis(100);
 const LOW_RES_CACHE_SIZE: u32 = 16;
 const CACHE_DIR_NAME: &str = "album-art-cache";
@@ -138,6 +140,9 @@ pub struct CoverArtCache<T: ClientData> {
     max_cache_size: usize,
     cache_entry_timeout: Duration,
     prefetcher: BackgroundPrefetcher,
+    /// A single worker for disk-cache writes, so bursts of incoming art
+    /// don't spawn a thread per write.
+    disk_write_pool: ThreadPool,
 }
 
 impl<T: ClientData> CoverArtCache<T> {
@@ -161,6 +166,7 @@ impl<T: ClientData> CoverArtCache<T> {
             max_cache_size,
             cache_entry_timeout,
             prefetcher: BackgroundPrefetcher::new(),
+            disk_write_pool: ThreadPool::new(1),
         }
     }
 
@@ -225,7 +231,7 @@ impl<T: ClientData> CoverArtCache<T> {
             if !cache_path.exists() {
                 let cover_art = incoming.cover_art.clone();
                 let cache_path = cache_path.clone();
-                std::thread::spawn(move || {
+                self.disk_write_pool.spawn(move || {
                     save_to_disk_cache(&cache_path, &cover_art);
                 });
             }

@@ -1,16 +1,17 @@
-//! A minimal fixed-size worker pool for background image decodes.
+//! A minimal fixed-size worker pool for background jobs (image decodes,
+//! disk-cache writes) that should not block the client's render loop.
 
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::{Arc, Mutex, mpsc::Sender},
 };
 
-pub(super) struct ThreadPool {
+pub struct ThreadPool {
     tx: Sender<Box<dyn FnOnce() + Send>>,
 }
 
 impl ThreadPool {
-    pub(super) fn new(num_threads: usize) -> Self {
+    pub fn new(num_threads: usize) -> Self {
         let (tx, rx) = std::sync::mpsc::channel::<Box<dyn FnOnce() + Send>>();
         let rx = Arc::new(Mutex::new(rx));
         for _ in 0..num_threads {
@@ -27,7 +28,7 @@ impl ThreadPool {
                     };
                     let Ok(job) = job else { break };
                     if catch_unwind(AssertUnwindSafe(job)).is_err() {
-                        tracing::error!("a cover art worker job panicked");
+                        tracing::error!("a thread pool job panicked");
                     }
                 }
             });
@@ -35,7 +36,7 @@ impl ThreadPool {
         Self { tx }
     }
 
-    pub(super) fn spawn(&self, f: impl FnOnce() + Send + 'static) {
+    pub fn spawn(&self, f: impl FnOnce() + Send + 'static) {
         let _ = self.tx.send(Box::new(f));
     }
 }
