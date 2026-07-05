@@ -25,6 +25,7 @@ use crossterm::{
 };
 use ratatui::layout::Rect;
 use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::{Capability, Picker, ProtocolType};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 fn main() -> anyhow::Result<()> {
@@ -124,6 +125,69 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Query the terminal for graphics protocol support (Kitty/iTerm2/Sixel).
+    // This must happen after entering the alternate screen but before reading
+    // terminal events. `from_query_stdio()` writes escape sequences to stdout
+    // and reads the terminal response from stdin with an internal timeout.
+    //
+    // When `AlbumArtProtocol::Halfblock` is configured, skip the query entirely
+    // and leave the picker unset — all three art sites use the existing
+    // hand-rolled half-block rendering.
+    let picker = match app.config.layout.album_art_protocol {
+        config::AlbumArtProtocol::Halfblock => {
+            tracing::info!("album_art_protocol = halfblock, skipping graphics protocol query");
+            None
+        }
+        config::AlbumArtProtocol::Auto => {
+            // Only enable protocol rendering when a real graphics protocol is
+            // detected. If detection falls back to halfblocks, leave the picker
+            // unset so callers use the existing hand-rolled half-block rendering.
+            match Picker::from_query_stdio() {
+                Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => {
+                    tracing::info!(
+                        "detected terminal graphics protocol: {:?}",
+                        p.protocol_type()
+                    );
+                    Some(p)
+                }
+                Ok(_) => {
+                    tracing::info!(
+                        "terminal supports only halfblocks, using existing half-block rendering"
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::info!(
+                        "no terminal graphics protocol detected ({e}), using half-blocks"
+                    );
+                    None
+                }
+            }
+        }
+        config::AlbumArtProtocol::Image => {
+            // Always use ratatui-image. If no real protocol is detected, fall
+            // back to the halfblocks backend (higher fidelity than the quantized
+            // 4×4 / 16-row grids).
+            match Picker::from_query_stdio() {
+                Ok(p) => {
+                    tracing::info!(
+                        "detected terminal graphics protocol: {:?}",
+                        p.protocol_type()
+                    );
+                    Some(p)
+                }
+                Err(e) => {
+                    tracing::info!(
+                        "no terminal graphics protocol detected ({e}), using halfblocks backend"
+                    );
+                    Some(Picker::halfblocks())
+                }
+            }
+        }
+    };
+    app.cover_art_cache
+        .set_picker(picker.map(correct_picker_font_size));
+
     let result = run_app(
         &mut terminal,
         &mut app,
@@ -164,6 +228,43 @@ fn main() -> anyhow::Result<()> {
     std::mem::forget(media_controls);
 
     result
+}
+
+/// Corrects the picker's font size using the terminal's reported window size
+/// when the capability query did not return a cell size.
+/// `Picker::from_query_stdio()` silently falls back to a guessed 10×20 font in
+/// that case; images are pre-resized to `cells × font size` pixels before
+/// transmission, so a wrong guess makes Kitty and iTerm2 render album art over
+/// the wrong number of cells (typically far too few on HiDPI displays).
+fn correct_picker_font_size(picker: Picker) -> Picker {
+    let cell_size_queried = picker
+        .capabilities()
+        .iter()
+        .any(|c| matches!(c, Capability::CellSize(Some(_))));
+    if cell_size_queried {
+        return picker;
+    }
+    let Some((cell_width, cell_height)) = ui::layout::cell_pixel_size() else {
+        tracing::warn!(
+            "the terminal did not report a cell size; album art may render at the wrong scale \
+             with the guessed font size {:?}",
+            picker.font_size()
+        );
+        return picker;
+    };
+    tracing::info!(
+        "the cell size query was not answered; correcting the picker font size from {:?} to \
+         {cell_width}×{cell_height} using the reported window size",
+        picker.font_size()
+    );
+    // `from_fontsize` is deprecated in favour of `from_query_stdio`, but the
+    // query is exactly what failed to produce a cell size here, and it is the
+    // only constructor that both accepts an explicit font size and performs
+    // tmux detection.
+    #[allow(deprecated)]
+    let mut corrected = Picker::from_fontsize((cell_width, cell_height).into());
+    corrected.set_protocol_type(picker.protocol_type());
+    corrected
 }
 
 /// Duration for high-frequency ticks during animations (inertia scrolling).

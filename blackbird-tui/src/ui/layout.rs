@@ -158,6 +158,22 @@ pub(crate) fn half_block_correction() -> f64 {
     2.0 * char_width / char_height
 }
 
+/// Returns the pixel dimensions of a single terminal cell, derived from the
+/// terminal's reported window size. Returns `None` when the terminal does not
+/// report pixel dimensions.
+pub(crate) fn cell_pixel_size() -> Option<(u16, u16)> {
+    let ws = crossterm::terminal::window_size().ok()?;
+    if ws.width == 0 || ws.height == 0 || ws.columns == 0 || ws.rows == 0 {
+        return None;
+    }
+    let cell_width = ws.width / ws.columns;
+    let cell_height = ws.height / ws.rows;
+    if cell_width == 0 || cell_height == 0 {
+        return None;
+    }
+    Some((cell_width, cell_height))
+}
+
 /// Computes the overlay rectangle, preserving the source image's aspect ratio
 /// and ensuring the overlay never covers the now-playing bar or scrub bar.
 ///

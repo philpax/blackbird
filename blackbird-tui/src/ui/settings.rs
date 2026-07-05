@@ -1292,6 +1292,7 @@ fn draw_library_preview(
         hovered_entry_index: None,
         art_colors: &art_colors,
         large_art_grids: &large_art_grids,
+        has_image_protocol: false,
     };
 
     let items: Vec<ListItem> = entries

@@ -1,3 +1,4 @@
+use blackbird_client_shared::cover_art_cache::Resolution;
 use blackbird_core::PlaybackMode;
 use ratatui::{
     Frame,
@@ -6,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Clear, Paragraph},
 };
+use ratatui_image::Image;
 
 use crate::{
     app::{App, FocusedPanel},
@@ -160,19 +162,37 @@ fn draw_album_art(
     area: Rect,
     cover_art_id: Option<&blackbird_core::blackbird_state::CoverArtId>,
 ) {
-    let art = app.cover_art_cache.get(&app.logic, cover_art_id);
+    let art_width = super::layout::art_cols();
+    let art_height = super::layout::ART_TERM_ROWS;
+    let left_x = area.x + super::layout::ART_LEFT_MARGIN;
+    // Center vertically.
+    let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
 
     if area.height < 1 || area.width < 6 {
         return;
     }
 
-    let art_width = super::layout::art_cols();
-    let art_height = super::layout::ART_TERM_ROWS;
-    let left_x = area.x + super::layout::ART_LEFT_MARGIN;
+    // Request a graphics-protocol image before calling `get()` (which takes
+    // `&mut self`), so we can use the result during rendering without a
+    // borrow conflict.
+    let protocol = app.cover_art_cache.get_protocol(
+        &app.logic,
+        cover_art_id,
+        Resolution::Library,
+        art_width,
+        art_height,
+    );
 
-    // Center vertically.
-    let top_y = area.y + (area.height.saturating_sub(art_height)) / 2;
+    if let Some(ref protocol) = protocol {
+        // Graphics protocol available — render the actual image.
+        let art_rect = Rect::new(left_x, top_y, art_width, art_height);
+        frame.render_widget(Clear, art_rect);
+        frame.render_widget(Image::new(protocol), art_rect);
+        return;
+    }
 
+    // Fall back to the existing 4×4 half-block rendering.
+    let art = app.cover_art_cache.get(&app.logic, cover_art_id);
     for term_row in 0..art_height.min(area.height) {
         let top = (term_row * 2) as usize;
         let spans = super::art_row_spans(&art, top, top + 1);

@@ -31,6 +31,22 @@ pub struct Config {
     pub extra: toml::Table,
 }
 
+/// Controls how album art is rendered in the TUI.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AlbumArtProtocol {
+    /// Use a graphics protocol (Kitty/iTerm2/Sixel) if detected, otherwise
+    /// fall back to the existing half-block rendering.
+    #[default]
+    Auto,
+    /// Always use ratatui-image, which uses a graphics protocol if detected
+    /// and otherwise renders full-resolution half-blocks (higher fidelity
+    /// than the existing quantized 4×4 / 16-row grids).
+    Image,
+    /// Always use the existing hand-rolled half-block rendering.
+    Halfblock,
+}
+
 /// TUI layout configuration, extending the shared [`blackbird_client_shared::config::Layout`]
 /// with TUI-specific fields. Unknown fields from other clients are preserved via the catch-all.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -39,6 +55,9 @@ pub struct Layout {
     /// Use the terminal's native background color instead of the configured one.
     #[serde(default)]
     pub use_terminal_background: bool,
+    /// Controls how album art is rendered (graphics protocol vs. half-blocks).
+    #[serde(default)]
+    pub album_art_protocol: AlbumArtProtocol,
     /// Shared layout settings.
     #[serde(flatten)]
     pub base: blackbird_client_shared::config::Layout,
@@ -50,6 +69,7 @@ impl Default for Layout {
     fn default() -> Self {
         Self {
             use_terminal_background: false,
+            album_art_protocol: AlbumArtProtocol::default(),
             base: blackbird_client_shared::config::Layout::default(),
             extra: toml::Table::new(),
         }
@@ -125,5 +145,30 @@ some_gui_only_field = 42
         // And it roundtrips.
         let re_serialized = toml::to_string(&config).unwrap();
         assert!(re_serialized.contains("some_gui_only_field = 42"));
+    }
+
+    #[test]
+    fn config_roundtrip_with_album_art_protocol() {
+        for protocol in [
+            AlbumArtProtocol::Auto,
+            AlbumArtProtocol::Image,
+            AlbumArtProtocol::Halfblock,
+        ] {
+            let mut config = Config::default();
+            config.layout.album_art_protocol = protocol;
+            let toml_str = toml::to_string(&config).unwrap();
+            let parsed: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config, parsed, "roundtrip failed for {protocol:?}");
+        }
+    }
+
+    #[test]
+    fn config_preserves_album_art_protocol() {
+        let toml_str = r#"
+[layout]
+album_art_protocol = "image"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.album_art_protocol, AlbumArtProtocol::Image);
     }
 }

@@ -1,3 +1,4 @@
+use blackbird_client_shared::cover_art_cache::Resolution;
 use blackbird_core::blackbird_state::CoverArtId;
 use ratatui::{
     Frame,
@@ -6,6 +7,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
+use ratatui_image::Image;
 
 use crate::app::App;
 
@@ -88,32 +90,52 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
         actual_art_pixel_rows,
     );
 
+    // Request a graphics-protocol image (Kitty/iTerm2/Sixel/halfblocks).
+    // Returns None while computing or when no picker is configured.
+    let protocol = app.cover_art_cache.get_protocol(
+        &app.logic,
+        Some(&cover_art_id),
+        Resolution::Full,
+        art_cols as u16,
+        actual_art_term_rows as u16,
+    );
+
     // Render art using half-block characters inside the border.
     let art_x = overlay_rect.x + 1; // inside left border
     let art_y = overlay_rect.y + 1; // below top border
 
-    for term_row in 0..actual_art_term_rows {
-        let color_row_top = term_row * 2;
-        let color_row_bot = color_row_top + 1;
+    let art_area = Rect::new(art_x, art_y, art_cols as u16, actual_art_term_rows as u16);
 
-        let mut spans = Vec::with_capacity(art_cols);
-        for col in 0..art_cols {
-            let fg = if color_row_top < grid.rows {
-                grid.colors[color_row_top][col]
-            } else {
-                background_color
-            };
-            let bg = if color_row_bot < grid.rows {
-                grid.colors[color_row_bot][col]
-            } else {
-                background_color
-            };
+    if let Some(ref protocol) = protocol {
+        // Graphics protocol available — render the actual image.
+        // Clear first to erase any previous half-block content.
+        frame.render_widget(Clear, art_area);
+        frame.render_widget(Image::new(protocol).allow_clipping(true), art_area);
+    } else {
+        // Fall back to half-block character rendering.
+        for term_row in 0..actual_art_term_rows {
+            let color_row_top = term_row * 2;
+            let color_row_bot = color_row_top + 1;
 
-            spans.push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
+            let mut spans = Vec::with_capacity(art_cols);
+            for col in 0..art_cols {
+                let fg = if color_row_top < grid.rows {
+                    grid.colors[color_row_top][col]
+                } else {
+                    background_color
+                };
+                let bg = if color_row_bot < grid.rows {
+                    grid.colors[color_row_bot][col]
+                } else {
+                    background_color
+                };
+
+                spans.push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
+            }
+
+            let row_rect = Rect::new(art_x, art_y + term_row as u16, art_cols as u16, 1);
+            frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
         }
-
-        let row_rect = Rect::new(art_x, art_y + term_row as u16, art_cols as u16, 1);
-        frame.render_widget(Paragraph::new(Line::from(spans)), row_rect);
     }
 
     // Show loading indicator centered over the art while high-res is computing.
