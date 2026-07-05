@@ -24,8 +24,12 @@ use blackbird_client_shared::{
     thread_pool::ThreadPool,
 };
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
+use image::{
+    DynamicImage, Rgba,
+    imageops::{self, FilterType},
+};
 use ratatui::layout::Size;
-use ratatui_image::{Resize, picker::Picker, protocol::Protocol, sliced::SlicedProtocol};
+use ratatui_image::{FontSize, Resize, picker::Picker, protocol::Protocol, sliced::SlicedProtocol};
 
 use derived_cache::DerivedCache;
 use quantize::image_aspect_ratio;
@@ -359,11 +363,9 @@ impl CoverArtCache {
 
         self.protocols
             .get_or_compute(&self.pool, &key, source, move |bytes| {
-                let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
-                // `Scale` (not `Fit`) so that sources smaller than the target
-                // area are upscaled to fill it.
+                let dyn_img = decode_centered(&bytes, picker.font_size(), size)?;
                 picker
-                    .new_protocol(dyn_img, size, Resize::Scale(None))
+                    .new_protocol(dyn_img, size, Resize::Fit(None))
                     .map_err(|e| e.to_string())
             })
             .value
@@ -401,15 +403,36 @@ impl CoverArtCache {
 
         self.sliced_protocols
             .get_or_compute(&self.pool, &key, source, move |bytes| {
-                let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
-                // `Scale` (not the `Fit` used by `SlicedProtocol::new`) so
-                // that sources smaller than the target area are upscaled to
-                // fill it.
-                SlicedProtocol::new_with_resize(&picker, dyn_img, size, Resize::Scale(None))
+                let dyn_img = decode_centered(&bytes, picker.font_size(), size)?;
+                SlicedProtocol::new_with_resize(&picker, dyn_img, size, Resize::Fit(None))
                     .map_err(|e| e.to_string())
             })
             .value
     }
+}
+
+/// Decodes encoded image bytes and letterboxes them into the exact pixel
+/// area of `size` character cells: scaled to fit (upscaling smaller
+/// sources), centered on both axes, and padded with transparency. The
+/// result matches the target area exactly, so the protocol performs no
+/// further resizing and non-square art renders centered within its slot
+/// rather than anchored to the top-left corner (which is where
+/// ratatui-image's own resizing pads to).
+fn decode_centered(bytes: &[u8], font_size: FontSize, size: Size) -> Result<DynamicImage, String> {
+    let target_width = u32::from(size.width) * u32::from(font_size.width);
+    let target_height = u32::from(size.height) * u32::from(font_size.height);
+    if target_width == 0 || target_height == 0 {
+        return Err("the target area is empty".to_string());
+    }
+
+    let image = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let scaled = image.resize(target_width, target_height, FilterType::Triangle);
+
+    let mut canvas = image::RgbaImage::from_pixel(target_width, target_height, Rgba([0, 0, 0, 0]));
+    let x = i64::from((target_width - scaled.width()) / 2);
+    let y = i64::from((target_height - scaled.height()) / 2);
+    imageops::overlay(&mut canvas, &scaled, x, y);
+    Ok(DynamicImage::ImageRgba8(canvas))
 }
 
 /// Returns the raw encoded bytes of the best cached image at or below
@@ -472,5 +495,59 @@ mod tests {
         // No picker set — has_picker() returns false, which is the guard
         // the protocol getters check first before touching Logic.
         assert!(!cache.has_picker());
+    }
+
+    /// Encodes a solid red PNG of the given dimensions.
+    fn red_png(width: u32, height: u32) -> Vec<u8> {
+        use image::{ImageBuffer, ImageEncoder, codecs::png::PngEncoder};
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(width, height, Rgba([255, 0, 0, 255]));
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    /// Verifies that non-square art is scaled to fit the slot and centered
+    /// on both axes, with transparent letterbox padding.
+    #[test]
+    fn test_decode_centered_letterboxes_non_square() {
+        // 4×2 cells at a 10×20 font is a 40×40 pixel target.
+        let font_size = FontSize::new(10, 20);
+        let size = Size::new(4, 2);
+
+        // A wide 100×50 image scales to 40×20 and centers vertically.
+        let wide = decode_centered(&red_png(100, 50), font_size, size).unwrap();
+        let wide = wide.to_rgba8();
+        assert_eq!((wide.width(), wide.height()), (40, 40));
+        assert_eq!(wide.get_pixel(20, 20)[3], 255, "center is opaque");
+        assert_eq!(wide.get_pixel(20, 20)[0], 255, "center is red");
+        assert_eq!(wide.get_pixel(0, 20)[3], 255, "fills the full width");
+        assert_eq!(wide.get_pixel(20, 4)[3], 0, "top letterbox is transparent");
+        assert_eq!(
+            wide.get_pixel(20, 36)[3],
+            0,
+            "bottom letterbox is transparent"
+        );
+
+        // A tall 50×100 image scales to 20×40 and centers horizontally.
+        let tall = decode_centered(&red_png(50, 100), font_size, size).unwrap();
+        let tall = tall.to_rgba8();
+        assert_eq!((tall.width(), tall.height()), (40, 40));
+        assert_eq!(tall.get_pixel(20, 20)[3], 255, "center is opaque");
+        assert_eq!(tall.get_pixel(20, 0)[3], 255, "fills the full height");
+        assert_eq!(tall.get_pixel(4, 20)[3], 0, "left letterbox is transparent");
+        assert_eq!(
+            tall.get_pixel(36, 20)[3],
+            0,
+            "right letterbox is transparent"
+        );
+
+        // A small square image is upscaled to fill the slot exactly.
+        let small = decode_centered(&red_png(16, 16), font_size, size).unwrap();
+        let small = small.to_rgba8();
+        assert_eq!((small.width(), small.height()), (40, 40));
+        assert_eq!(small.get_pixel(0, 0)[3], 255, "small sources are upscaled");
     }
 }
