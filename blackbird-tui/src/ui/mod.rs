@@ -606,7 +606,7 @@ mod render_tests {
         buf
     }
 
-    /// AC.6: Verifies that `Image` mode with a halfblocks picker renders
+    /// Verifies that `Image` mode with a halfblocks picker renders
     /// image content into the terminal buffer (colored cells), confirming
     /// that ratatui-image's halfblocks backend is functional.
     #[test]
@@ -650,9 +650,9 @@ mod render_tests {
         );
     }
 
-    /// AC.4 fallback: Verifies that when no protocol is available (None),
-    /// the `Arc<Protocol>` pattern correctly falls through to the fallback
-    /// path (no Image widget rendered, no image colors in buffer).
+    /// Verifies that when no protocol is available (None), rendering
+    /// correctly falls through to the fallback path (no Image widget
+    /// rendered, no image colors in the buffer).
     #[test]
     fn test_fallback_to_halfblocks_when_no_protocol() {
         let protocol: Option<Arc<Protocol>> = None;
@@ -685,7 +685,7 @@ mod render_tests {
         assert!(!has_color, "fallback path should not render image colors");
     }
 
-    /// AC.12: Verifies that `SlicedImage` with a scroll offset renders the
+    /// Verifies that `SlicedImage` with a scroll offset renders the
     /// correct portion of the image. Uses a vertical-gradient test image
     /// where each row has a distinct color, then scrolls 1 line into the art
     /// area and verifies the buffer is non-empty.
@@ -749,7 +749,7 @@ mod render_tests {
         );
     }
 
-    /// AC.5: Verifies that the `Halfblock` config variant is distinct from
+    /// Verifies that the `Halfblock` config variant is distinct from
     /// `Auto` and `Image`, confirming the config-level decision point that
     /// bypasses picker creation.
     #[test]
