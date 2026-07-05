@@ -138,13 +138,9 @@ pub struct CoverArtCache {
     color_rx: Receiver<(CoverArtId, Resolution, QuadrantColors)>,
     /// Tracks which (id, resolution) pairs are currently computing colors.
     computing: HashSet<(CoverArtId, Resolution)>,
-    grid_tx: Sender<(CoverArtId, Resolution, ArtColorGrid)>,
-    grid_rx: Receiver<(CoverArtId, Resolution, ArtColorGrid)>,
-    grid_computing: HashSet<CoverArtId>,
-    /// Cached grids keyed by `(CoverArtId, cols, rows)`, with the resolution
-    /// they were computed from. Persisted across image-data transitions so
-    /// the previous grid remains visible while a higher-res grid is computing.
-    overlay_grids: HashMap<(CoverArtId, usize, usize), CachedGrid>,
+    /// Color grids for the library BelowAlbum art and the overlay, keyed by
+    /// `(CoverArtId, cols, rows)`.
+    grids: DerivedCache<GridKey, ArtColorGrid>,
     /// `(CoverArtId, Resolution)` pairs requested with `Visible` priority
     /// since the last `begin_frame()`. The TUI uses lazy redraw, so entries
     /// in this set are touched every tick via `keep_visible_alive()` to keep
@@ -158,64 +154,199 @@ pub struct CoverArtCache {
     /// `None` when `AlbumArtProtocol::Halfblock` is configured, disabling
     /// all protocol-based rendering.
     protocol_picker: Option<Picker>,
-    /// Cached fixed-size protocols for the now-playing thumbnail and overlay.
-    /// Keyed by `(CoverArtId, width, height)` in character cells so that
-    /// different render sizes get distinct protocols. `Arc` allows cheap
-    /// cloning for rendering without copying encoded image data.
-    protocols: HashMap<ProtocolKey, CachedProtocol<Protocol>>,
-    /// Tracks in-flight fixed-size protocol decodes.
-    protocol_computing: HashSet<ProtocolKey>,
-    /// Channel for fixed-size protocol results from background threads.
-    protocol_tx: Sender<ProtocolResult<Protocol>>,
-    protocol_rx: Receiver<ProtocolResult<Protocol>>,
-    /// Fixed-size protocol decodes that failed, per source resolution, so
-    /// they are not retried every frame. Cleared on eviction so a later
-    /// re-fetch can retry.
-    protocol_failed: HashSet<(ProtocolKey, Resolution)>,
-    /// Cached sliced protocols for the library BelowAlbum art (scrollable).
-    /// Keyed by `(CoverArtId, width, height)` in character cells; the art
-    /// area dimensions derive from the terminal size (`large_art_cols()`),
-    /// so a resize produces new keys and recomputes the art.
-    sliced_protocols: HashMap<ProtocolKey, CachedProtocol<SlicedProtocol>>,
-    /// Tracks in-flight sliced protocol decodes.
-    sliced_protocol_computing: HashSet<ProtocolKey>,
-    /// Channel for sliced protocol results from background threads.
-    sliced_protocol_tx: Sender<ProtocolResult<SlicedProtocol>>,
-    sliced_protocol_rx: Receiver<ProtocolResult<SlicedProtocol>>,
-    /// Sliced protocol decodes that failed, per source resolution.
-    sliced_protocol_failed: HashSet<(ProtocolKey, Resolution)>,
+    /// Fixed-size protocols for the now-playing thumbnail, library
+    /// thumbnails, and the overlay, keyed by `(CoverArtId, width, height)`
+    /// in character cells so that different render sizes get distinct
+    /// protocols.
+    protocols: DerivedCache<ProtocolKey, Protocol>,
+    /// Sliced protocols for the library BelowAlbum art (scrollable). Keyed
+    /// like `protocols`; the art area dimensions derive from the terminal
+    /// size (`large_art_cols()`), so a resize produces new keys and
+    /// recomputes the art.
+    sliced_protocols: DerivedCache<ProtocolKey, SlicedProtocol>,
 }
 
-/// An overlay grid together with the resolution of the source image it
-/// was computed from, so we know when to trigger recomputation.
-struct CachedGrid {
-    grid: ArtColorGrid,
-    source_resolution: Resolution,
-}
+/// Cache key for color grids: the cover art id and the grid dimensions in
+/// half-block pixels.
+type GridKey = (CoverArtId, usize, usize);
 
 /// Cache key for image protocols: the cover art id and the target render
 /// size in character cells.
 type ProtocolKey = (CoverArtId, u16, u16);
 
-/// Result of a background protocol decode: the cache key, the source
-/// resolution the protocol was computed from, and the decode result.
-type ProtocolResult<P> = (ProtocolKey, Resolution, Result<P, String>);
+/// A cache of artifacts derived from encoded cover art bytes in background
+/// threads, keyed by `K`.
+///
+/// Encodes the lifecycle shared by every derived artifact (color grids and
+/// image protocols): compute once per key, serve the stale value while a
+/// higher-resolution recompute is in flight, never downgrade on late
+/// arrivals, remember failures per source resolution so they are not retried
+/// every frame, and drop results whose entry was evicted mid-flight.
+struct DerivedCache<K, V> {
+    entries: HashMap<K, DerivedEntry<V>>,
+    tx: Sender<(K, Resolution, Result<V, String>)>,
+    rx: Receiver<(K, Resolution, Result<V, String>)>,
+    /// Artifact name for log messages.
+    name: &'static str,
+}
 
-/// A cached image protocol together with the resolution of the source image
-/// it was computed from. The first decode often runs from the 16px disk-cache
-/// image before better data has loaded, so the source resolution is tracked
-/// to recompute the protocol when a higher resolution arrives.
-struct CachedProtocol<P> {
-    protocol: Arc<P>,
-    source_resolution: Resolution,
+/// The full lifecycle state of one derived artifact. The first compute often
+/// runs from the 16px disk-cache image before better data has loaded, so the
+/// source resolution is tracked to recompute when a higher one arrives.
+struct DerivedEntry<V> {
+    /// The best value computed so far, with the resolution of the source
+    /// image it was computed from. `Arc` allows cheap cloning for rendering
+    /// without copying the artifact.
+    value: Option<(Arc<V>, Resolution)>,
+    /// The source resolution of the in-flight compute, if any.
+    computing: Option<Resolution>,
+    /// The source resolution of the most recent failed compute. A compute
+    /// from this exact resolution is not retried; a different resolution
+    /// becoming the best available source clears the way for a retry.
+    failed: Option<Resolution>,
+}
+
+impl<V> Default for DerivedEntry<V> {
+    fn default() -> Self {
+        Self {
+            value: None,
+            computing: None,
+            failed: None,
+        }
+    }
+}
+
+/// The result of a [`DerivedCache`] lookup.
+struct Lookup<V> {
+    /// The best value computed so far, possibly from a lower resolution than
+    /// the best available source. `None` before the first compute completes.
+    value: Option<Arc<V>>,
+    /// `true` while a compute is in flight or a retryable better source is
+    /// available than the one the value was computed from.
+    stale: bool,
+}
+
+impl<K, V> DerivedCache<K, V>
+where
+    K: Clone + Eq + std::hash::Hash + std::fmt::Debug + Send + 'static,
+    V: Send + 'static,
+{
+    fn new(name: &'static str) -> Self {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Self {
+            entries: HashMap::new(),
+            tx,
+            rx,
+            name,
+        }
+    }
+
+    /// Looks up the artifact for `key`, spawning `compute` on `pool` when no
+    /// value has been computed yet or `source` is better than the one the
+    /// cached value was computed from. The stale value keeps being served
+    /// while the recompute runs, so the art doesn't flicker back to the
+    /// caller's fallback rendering.
+    fn get_or_compute(
+        &mut self,
+        pool: &ThreadPool,
+        key: &K,
+        source: Option<(Resolution, Arc<[u8]>)>,
+        compute: impl FnOnce(Arc<[u8]>) -> Result<V, String> + Send + 'static,
+    ) -> Lookup<V> {
+        let entry = self.entries.entry(key.clone()).or_default();
+
+        let cached_resolution = entry.value.as_ref().map(|(_, resolution)| *resolution);
+        let wants_compute = source.as_ref().is_some_and(|(source_resolution, _)| {
+            let better = cached_resolution.is_none_or(|cached| *source_resolution > cached);
+            better && entry.failed != Some(*source_resolution)
+        });
+
+        if wants_compute
+            && entry.computing.is_none()
+            && let Some((source_resolution, bytes)) = source
+        {
+            entry.computing = Some(source_resolution);
+            let key = key.clone();
+            let tx = self.tx.clone();
+            pool.spawn(move || {
+                let _ = tx.send((key, source_resolution, compute(bytes)));
+            });
+        }
+
+        Lookup {
+            value: entry.value.as_ref().map(|(value, _)| value.clone()),
+            stale: entry.computing.is_some() || wants_compute,
+        }
+    }
+
+    /// Returns `true` if a value has been computed for `key`.
+    fn has_value(&self, key: &K) -> bool {
+        self.entries
+            .get(key)
+            .is_some_and(|entry| entry.value.is_some())
+    }
+
+    /// Inserts an externally computed value, unless a value from a higher
+    /// source resolution is already cached. Used to seed the cache with a
+    /// synchronously computed low-resolution artifact.
+    fn insert(&mut self, key: K, source_resolution: Resolution, value: Arc<V>) {
+        let entry = self.entries.entry(key).or_default();
+        let dominated = entry
+            .value
+            .as_ref()
+            .is_some_and(|(_, cached)| *cached > source_resolution);
+        if !dominated {
+            entry.value = Some((value, source_resolution));
+        }
+    }
+
+    /// Drains completed computes. Returns `true` if any cached value
+    /// changed (failures don't change visual state, so they don't count).
+    fn drain(&mut self) -> bool {
+        let mut changed = false;
+        for (key, source_resolution, result) in self.rx.try_iter() {
+            // Drop results whose entry was evicted while the compute was in
+            // flight (or superseded after an evict-and-recreate); accepting
+            // them would resurrect a zombie entry.
+            let Some(entry) = self.entries.get_mut(&key) else {
+                continue;
+            };
+            if entry.computing != Some(source_resolution) {
+                continue;
+            }
+            entry.computing = None;
+            match result {
+                Ok(value) => {
+                    let dominated = entry
+                        .value
+                        .as_ref()
+                        .is_some_and(|(_, cached)| *cached > source_resolution);
+                    if !dominated {
+                        changed = true;
+                        entry.value = Some((Arc::new(value), source_resolution));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "{} compute failed for {key:?} from {source_resolution:?}: {e}",
+                        self.name
+                    );
+                    entry.failed = Some(source_resolution);
+                }
+            }
+        }
+        changed
+    }
+
+    /// Removes every entry whose key matches the predicate.
+    fn evict_matching(&mut self, matches: impl Fn(&K) -> bool) {
+        self.entries.retain(|key, _| !matches(key));
+    }
 }
 
 impl CoverArtCache {
     pub fn new(cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>) -> Self {
         let (color_tx, color_rx) = std::sync::mpsc::channel();
-        let (grid_tx, grid_rx) = std::sync::mpsc::channel();
-        let (protocol_tx, protocol_rx) = std::sync::mpsc::channel();
-        let (sliced_protocol_tx, sliced_protocol_rx) = std::sync::mpsc::channel();
         Self {
             inner: cover_art_cache::CoverArtCache::new(
                 cover_art_loaded_rx,
@@ -226,22 +357,11 @@ impl CoverArtCache {
             color_tx,
             color_rx,
             computing: HashSet::new(),
-            grid_tx,
-            grid_rx,
-            grid_computing: HashSet::new(),
-            overlay_grids: HashMap::new(),
+            grids: DerivedCache::new("color grid"),
             visible_this_frame: HashSet::new(),
             protocol_picker: None,
-            protocols: HashMap::new(),
-            protocol_computing: HashSet::new(),
-            protocol_tx,
-            protocol_rx,
-            protocol_failed: HashSet::new(),
-            sliced_protocols: HashMap::new(),
-            sliced_protocol_computing: HashSet::new(),
-            sliced_protocol_tx,
-            sliced_protocol_rx,
-            sliced_protocol_failed: HashSet::new(),
+            protocols: DerivedCache::new("image protocol"),
+            sliced_protocols: DerivedCache::new("sliced image protocol"),
         }
     }
 
@@ -288,37 +408,20 @@ impl CoverArtCache {
             self.computing.remove(&(id.clone(), Resolution::Low));
             self.computing.remove(&(id.clone(), Resolution::Library));
             self.computing.remove(&(id.clone(), Resolution::Full));
-            self.grid_computing.remove(id);
-            self.overlay_grids
-                .retain(|(grid_id, _, _), _| grid_id != id);
+            self.grids.evict_matching(|(grid_id, _, _)| grid_id == id);
             // Remove protocol caches for this id. Kitty virtual placements
             // are removed by the terminal itself once their unicode
             // placeholders stop being drawn; the transmitted image data
             // persists until the terminal evicts it from its own store.
-            self.protocols.retain(|(proto_id, _, _), _| proto_id != id);
-            self.protocol_computing
-                .retain(|(proto_id, _, _)| proto_id != id);
-            self.protocol_failed
-                .retain(|((failed_id, _, _), _)| failed_id != id);
+            self.protocols
+                .evict_matching(|(proto_id, _, _)| proto_id == id);
             self.sliced_protocols
-                .retain(|(sliced_id, _, _), _| sliced_id != id);
-            self.sliced_protocol_computing
-                .retain(|(sliced_id, _, _)| sliced_id != id);
-            self.sliced_protocol_failed
-                .retain(|((failed_id, _, _), _)| failed_id != id);
+                .evict_matching(|(sliced_id, _, _)| sliced_id == id);
         }
 
-        // On upgraded entries, allow recomputation from the better data if the
-        // cached grid was computed from a lower resolution. Don't remove the
-        // cached grid — it serves as a fallback while the new one computes.
-        for (id, resolution) in &result.upgraded {
-            let any_dominated = self.overlay_grids.iter().any(|((grid_id, _, _), cached)| {
-                grid_id == id && cached.source_resolution < *resolution
-            });
-            if any_dominated {
-                self.grid_computing.remove(id);
-            }
-        }
+        // Upgraded entries need no explicit invalidation: `changed` above
+        // forces a redraw, and the `get*` methods compare the cached source
+        // resolution against the best available bytes on every call.
 
         for (id, resolution, colors) in self.color_rx.try_iter() {
             changed = true;
@@ -329,93 +432,10 @@ impl CoverArtCache {
                 });
         }
 
-        for (id, source_resolution, grid) in self.grid_rx.try_iter() {
-            changed = true;
-            self.grid_computing.remove(&id);
-            let key = (id, grid.cols, grid.rows);
-            // Only replace the cached grid if this one is from an equal or
-            // higher resolution source (don't downgrade on late arrivals).
-            let dominated = self
-                .overlay_grids
-                .get(&key)
-                .is_some_and(|cached| cached.source_resolution > source_resolution);
-            if !dominated {
-                self.overlay_grids.insert(
-                    key,
-                    CachedGrid {
-                        grid,
-                        source_resolution,
-                    },
-                );
-            }
-        }
+        changed |= self.grids.drain();
+        changed |= self.protocols.drain();
 
-        // Drain fixed-size protocol results from background threads.
-        for (key, source_resolution, result) in self.protocol_rx.try_iter() {
-            // Ignore results whose request is no longer tracked (the entry
-            // was evicted while the decode was in flight); otherwise a
-            // zombie cache entry would linger until the id is evicted again.
-            if !self.protocol_computing.remove(&key) {
-                continue;
-            }
-            match result {
-                Ok(protocol) => {
-                    // Only replace the cached protocol if this one is from an
-                    // equal or higher resolution source (don't downgrade on
-                    // late arrivals).
-                    let dominated = self
-                        .protocols
-                        .get(&key)
-                        .is_some_and(|cached| cached.source_resolution > source_resolution);
-                    if !dominated {
-                        changed = true;
-                        self.protocols.insert(
-                            key,
-                            CachedProtocol {
-                                protocol: Arc::new(protocol),
-                                source_resolution,
-                            },
-                        );
-                    }
-                }
-                Err(e) => {
-                    // Record the failure so the same source is not retried
-                    // every frame; don't mark `changed`, which would force a
-                    // redraw and immediately respawn the failing decode.
-                    tracing::warn!("protocol decode failed for {key:?}: {e}");
-                    self.protocol_failed.insert((key, source_resolution));
-                }
-            }
-        }
-
-        // Drain sliced protocol results from background threads.
-        for (key, source_resolution, result) in self.sliced_protocol_rx.try_iter() {
-            if !self.sliced_protocol_computing.remove(&key) {
-                continue;
-            }
-            match result {
-                Ok(protocol) => {
-                    let dominated = self
-                        .sliced_protocols
-                        .get(&key)
-                        .is_some_and(|cached| cached.source_resolution > source_resolution);
-                    if !dominated {
-                        changed = true;
-                        self.sliced_protocols.insert(
-                            key,
-                            CachedProtocol {
-                                protocol: Arc::new(protocol),
-                                source_resolution,
-                            },
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("sliced protocol decode failed for {key:?}: {e}");
-                    self.sliced_protocol_failed.insert((key, source_resolution));
-                }
-            }
-        }
+        changed |= self.sliced_protocols.drain();
 
         changed
     }
@@ -465,92 +485,8 @@ impl CoverArtCache {
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
-    ) -> (ArtColorGrid, bool) {
-        let Some(id) = cover_art_id else {
-            return (ArtColorGrid::empty(cols, rows), false);
-        };
-
-        self.visible_this_frame
-            .insert((id.clone(), Resolution::Library));
-
-        // Request library-res data (triggers network fetch if needed).
-        let _result = self
-            .inner
-            .get(logic, Some(id), Resolution::Library, CachePriority::Visible);
-
-        let library_loaded = self.inner.is_resolution_loaded(id, Resolution::Library);
-        let grid_key = (id.clone(), cols, rows);
-
-        // Check if we have a cached grid.
-        if let Some(cached) = self.overlay_grids.get(&grid_key) {
-            // Kick off a recomputation from better data if needed.
-            let grid_needs_upgrade =
-                library_loaded && cached.source_resolution < Resolution::Library;
-            let computing = self.grid_computing.contains(id);
-
-            if grid_needs_upgrade && !computing {
-                let raw_bytes =
-                    self.inner
-                        .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
-                            data.raw_bytes.clone()
-                        });
-                if let Some(raw_bytes) = raw_bytes {
-                    self.grid_computing.insert(id.clone());
-                    let id_clone = id.clone();
-                    let tx = self.grid_tx.clone();
-                    self.pool.spawn(move || {
-                        let grid = compute_art_grid(&raw_bytes, cols, rows);
-                        let _ = tx.send((id_clone, Resolution::Library, grid));
-                    });
-                }
-            }
-
-            let loading = grid_needs_upgrade || computing;
-            return (cached.grid.clone(), loading);
-        }
-
-        // Need to compute — spawn background thread if not already running.
-        if !self.grid_computing.contains(id) {
-            // Prefer library-res bytes, fall back to low-res.
-            let source = self
-                .inner
-                .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
-                    (data.raw_bytes.clone(), Resolution::Library)
-                })
-                .or_else(|| {
-                    self.inner
-                        .with_client_data_mut_at(id, Resolution::Low, |data, _raw| {
-                            (data.raw_bytes.clone(), Resolution::Low)
-                        })
-                });
-            if let Some((raw_bytes, source_resolution)) = source {
-                self.grid_computing.insert(id.clone());
-                let id_clone = id.clone();
-                let tx = self.grid_tx.clone();
-                self.pool.spawn(move || {
-                    let grid = compute_art_grid(&raw_bytes, cols, rows);
-                    let _ = tx.send((id_clone, source_resolution, grid));
-                });
-            }
-        }
-
-        // No cached fallback — compute one from the low-res image synchronously
-        // (16×16 pixels, sub-millisecond).
-        let low_res = self
-            .inner
-            .get_resolution(id, Resolution::Low)
-            .map(|data| data.raw_bytes.clone());
-        if let Some(low_res) = low_res {
-            let grid = compute_art_grid(&low_res, cols, rows);
-            let cached = CachedGrid {
-                grid: grid.clone(),
-                source_resolution: Resolution::Low,
-            };
-            self.overlay_grids.insert(grid_key, cached);
-            return (grid, true);
-        }
-
-        (ArtColorGrid::empty(cols, rows), true)
+    ) -> (Arc<ArtColorGrid>, bool) {
+        self.art_grid_at(logic, cover_art_id, cols, rows, Resolution::Library)
     }
 
     /// Returns a variable-size color grid for the overlay using full-resolution
@@ -561,98 +497,63 @@ impl CoverArtCache {
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
-    ) -> (ArtColorGrid, bool) {
+    ) -> (Arc<ArtColorGrid>, bool) {
+        self.art_grid_at(logic, cover_art_id, cols, rows, Resolution::Full)
+    }
+
+    /// Returns a color grid computed from the best available data at or
+    /// below `resolution`, requesting that resolution from the server. The
+    /// boolean is `true` while better data is loading or a recompute is in
+    /// flight.
+    fn art_grid_at(
+        &mut self,
+        logic: &Logic,
+        cover_art_id: Option<&CoverArtId>,
+        cols: usize,
+        rows: usize,
+        resolution: Resolution,
+    ) -> (Arc<ArtColorGrid>, bool) {
         let Some(id) = cover_art_id else {
-            return (ArtColorGrid::empty(cols, rows), false);
+            return (Arc::new(ArtColorGrid::empty(cols, rows)), false);
         };
 
-        self.visible_this_frame
-            .insert((id.clone(), Resolution::Full));
+        self.visible_this_frame.insert((id.clone(), resolution));
 
-        // Request full-res data (triggers network fetch if needed).
-        let _result = self
+        // Request data at the target resolution (triggers a network fetch if
+        // needed).
+        let _ = self
             .inner
-            .get(logic, Some(id), Resolution::Full, CachePriority::Visible);
+            .get(logic, Some(id), resolution, CachePriority::Visible);
 
-        let full_loaded = self.inner.is_resolution_loaded(id, Resolution::Full);
-        let grid_key = (id.clone(), cols, rows);
+        let key = (id.clone(), cols, rows);
 
-        // Check if we have a cached grid.
-        if let Some(cached) = self.overlay_grids.get(&grid_key) {
-            // The grid is up-to-date if it was computed from full-res data
-            // (or there's no better data available yet).
-            let grid_needs_upgrade = full_loaded && cached.source_resolution < Resolution::Full;
-            let computing = self.grid_computing.contains(id);
-
-            // Kick off a recomputation from better data if needed.
-            if grid_needs_upgrade && !computing {
-                let raw_bytes =
-                    self.inner
-                        .with_client_data_mut_at(id, Resolution::Full, |data, _raw| {
-                            data.raw_bytes.clone()
-                        });
-                if let Some(raw_bytes) = raw_bytes {
-                    self.grid_computing.insert(id.clone());
-                    let id_clone = id.clone();
-                    let tx = self.grid_tx.clone();
-                    self.pool.spawn(move || {
-                        let grid = compute_art_grid(&raw_bytes, cols, rows);
-                        let _ = tx.send((id_clone, Resolution::Full, grid));
-                    });
-                }
-            }
-
-            let loading = !full_loaded || grid_needs_upgrade || computing;
-            return (cached.grid.clone(), loading);
-        }
-
-        // No cached grid — need to compute.
-        if !self.grid_computing.contains(id) {
-            // Prefer full-res bytes, then library, then low.
-            let source = self
+        // Seed the cache synchronously from the low-res image (16×16 pixels,
+        // sub-millisecond) so the first frame shows colors instead of gray.
+        if !self.grids.has_value(&key)
+            && let Some(low_res) = self
                 .inner
-                .with_client_data_mut_at(id, Resolution::Full, |data, _raw| {
-                    (data.raw_bytes.clone(), Resolution::Full)
-                })
-                .or_else(|| {
-                    self.inner
-                        .with_client_data_mut_at(id, Resolution::Library, |data, _raw| {
-                            (data.raw_bytes.clone(), Resolution::Library)
-                        })
-                })
-                .or_else(|| {
-                    self.inner
-                        .with_client_data_mut_at(id, Resolution::Low, |data, _raw| {
-                            (data.raw_bytes.clone(), Resolution::Low)
-                        })
-                });
-            if let Some((raw_bytes, source_resolution)) = source {
-                self.grid_computing.insert(id.clone());
-                let id_clone = id.clone();
-                let tx = self.grid_tx.clone();
-                self.pool.spawn(move || {
-                    let grid = compute_art_grid(&raw_bytes, cols, rows);
-                    let _ = tx.send((id_clone, source_resolution, grid));
-                });
-            }
+                .get_resolution(id, Resolution::Low)
+                .map(|data| data.raw_bytes.clone())
+        {
+            self.grids.insert(
+                key.clone(),
+                Resolution::Low,
+                Arc::new(compute_art_grid(&low_res, cols, rows)),
+            );
         }
 
-        // Return fallback from low-res if available.
-        let low_res = self
-            .inner
-            .get_resolution(id, Resolution::Low)
-            .map(|data| data.raw_bytes.clone());
-        if let Some(low_res) = low_res {
-            let grid = compute_art_grid(&low_res, cols, rows);
-            let cached = CachedGrid {
-                grid: grid.clone(),
-                source_resolution: Resolution::Low,
-            };
-            self.overlay_grids.insert(grid_key, cached);
-            return (grid, true);
-        }
+        let source = best_raw_bytes_up_to(&mut self.inner, id, resolution);
+        let lookup = self
+            .grids
+            .get_or_compute(&self.pool, &key, source, move |bytes| {
+                Ok(compute_art_grid(&bytes, cols, rows))
+            });
 
-        (ArtColorGrid::empty(cols, rows), true)
+        let loading = lookup.stale || !self.inner.is_resolution_loaded(id, resolution);
+        let grid = lookup
+            .value
+            .unwrap_or_else(|| Arc::new(ArtColorGrid::empty(cols, rows)));
+        (grid, loading)
     }
 
     /// Preload album art for albums surrounding the next track in the queue.
@@ -701,7 +602,7 @@ impl CoverArtCache {
         width: u16,
         height: u16,
     ) -> Option<Arc<Protocol>> {
-        let picker = self.protocol_picker.as_ref()?;
+        let picker = self.protocol_picker.clone()?;
         let id = cover_art_id?;
 
         // Trigger a fetch at the requested resolution.
@@ -712,47 +613,18 @@ impl CoverArtCache {
 
         let key = (id.clone(), width, height);
         let source = best_raw_bytes_up_to(&mut self.inner, id, resolution);
+        let size = Size { width, height };
 
-        let cached = self
-            .protocols
-            .get(&key)
-            .map(|c| (c.protocol.clone(), c.source_resolution));
-        if let Some((protocol, cached_resolution)) = &cached {
-            let upgrade_available = source
-                .as_ref()
-                .is_some_and(|(res, _)| res > cached_resolution);
-            if !upgrade_available {
-                return Some(protocol.clone());
-            }
-        }
-
-        if !self.protocol_computing.contains(&key)
-            && let Some((source_resolution, raw_bytes)) = source
-            && !self
-                .protocol_failed
-                .contains(&(key.clone(), source_resolution))
-        {
-            self.protocol_computing.insert(key.clone());
-            let picker = picker.clone();
-            let tx = self.protocol_tx.clone();
-            let key_clone = key.clone();
-            let size = Size { width, height };
-            self.pool.spawn(move || {
-                let result = (|| {
-                    let dyn_img = image::load_from_memory(&raw_bytes).map_err(|e| e.to_string())?;
-                    // `Scale` (not `Fit`) so that sources smaller than the
-                    // target area are upscaled to fill it.
-                    picker
-                        .new_protocol(dyn_img, size, Resize::Scale(None))
-                        .map_err(|e| e.to_string())
-                })();
-                let _ = tx.send((key_clone, source_resolution, result));
-            });
-        }
-
-        // Serve the stale (lower-resolution) protocol while the upgrade
-        // decodes, so the art doesn't flicker back to half-blocks.
-        cached.map(|(protocol, _)| protocol)
+        self.protocols
+            .get_or_compute(&self.pool, &key, source, move |bytes| {
+                let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+                // `Scale` (not `Fit`) so that sources smaller than the target
+                // area are upscaled to fill it.
+                picker
+                    .new_protocol(dyn_img, size, Resize::Scale(None))
+                    .map_err(|e| e.to_string())
+            })
+            .value
     }
 
     /// Returns a sliced image protocol for scrollable rendering via
@@ -771,7 +643,7 @@ impl CoverArtCache {
         logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
     ) -> Option<Arc<SlicedProtocol>> {
-        let picker = self.protocol_picker.as_ref()?;
+        let picker = self.protocol_picker.clone()?;
         let id = cover_art_id?;
 
         // Trigger a library-res fetch.
@@ -788,45 +660,16 @@ impl CoverArtCache {
         let key = (id.clone(), size.width, size.height);
         let source = best_raw_bytes_up_to(&mut self.inner, id, Resolution::Library);
 
-        let cached = self
-            .sliced_protocols
-            .get(&key)
-            .map(|c| (c.protocol.clone(), c.source_resolution));
-        if let Some((protocol, cached_resolution)) = &cached {
-            let upgrade_available = source
-                .as_ref()
-                .is_some_and(|(res, _)| res > cached_resolution);
-            if !upgrade_available {
-                return Some(protocol.clone());
-            }
-        }
-
-        if !self.sliced_protocol_computing.contains(&key)
-            && let Some((source_resolution, raw_bytes)) = source
-            && !self
-                .sliced_protocol_failed
-                .contains(&(key.clone(), source_resolution))
-        {
-            self.sliced_protocol_computing.insert(key.clone());
-            let picker = picker.clone();
-            let tx = self.sliced_protocol_tx.clone();
-            let key_clone = key.clone();
-            self.pool.spawn(move || {
-                let result = (|| {
-                    let dyn_img = image::load_from_memory(&raw_bytes).map_err(|e| e.to_string())?;
-                    // `Scale` (not the `Fit` used by `SlicedProtocol::new`) so
-                    // that sources smaller than the target area are upscaled
-                    // to fill it.
-                    SlicedProtocol::new_with_resize(&picker, dyn_img, size, Resize::Scale(None))
-                        .map_err(|e| e.to_string())
-                })();
-                let _ = tx.send((key_clone, source_resolution, result));
-            });
-        }
-
-        // Serve the stale (lower-resolution) protocol while the upgrade
-        // decodes, so the art doesn't flicker back to half-blocks.
-        cached.map(|(protocol, _)| protocol)
+        self.sliced_protocols
+            .get_or_compute(&self.pool, &key, source, move |bytes| {
+                let dyn_img = image::load_from_memory(&bytes).map_err(|e| e.to_string())?;
+                // `Scale` (not the `Fit` used by `SlicedProtocol::new`) so
+                // that sources smaller than the target area are upscaled to
+                // fill it.
+                SlicedProtocol::new_with_resize(&picker, dyn_img, size, Resize::Scale(None))
+                    .map_err(|e| e.to_string())
+            })
+            .value
     }
 }
 
@@ -1011,266 +854,223 @@ mod tests {
         let _ = protocol.size();
     }
 
-    /// Verifies that `get_protocol` returns `None` when no picker is configured
-    /// (Halfblock mode or before `set_picker` is called).
+    /// Verifies that protocol getters are disabled when no picker is
+    /// configured (Halfblock mode or before `set_picker` is called).
     #[test]
-    fn test_get_protocol_returns_none_without_picker() {
+    fn test_no_picker_disables_protocols() {
         let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
         let cache = CoverArtCache::new(rx);
         // No picker set — has_picker() returns false, which is the guard
-        // get_protocol checks first before touching Logic.
+        // the protocol getters check first before touching Logic.
         assert!(!cache.has_picker());
     }
 
-    /// Verifies that `get_sliced_protocol` returns `None` when no picker is configured.
-    #[test]
-    fn test_get_sliced_protocol_returns_none_without_picker() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let cache = CoverArtCache::new(rx);
-        assert!(!cache.has_picker());
+    // ── DerivedCache lifecycle ──────────────────────────────────────────────
+
+    type TestKey = (CoverArtId, u16, u16);
+
+    fn test_key(name: &str) -> TestKey {
+        (CoverArtId(name.into()), 10, 10)
     }
 
-    /// Verifies that cache eviction removes protocol entries.
-    #[test]
-    fn test_protocol_cache_eviction_on_evicted_id() {
-        let mut cache = CoverArtCache::new(std::sync::mpsc::channel::<CoverArt>().1);
-        let id = CoverArtId("evict-test".into());
-        let key = (id.clone(), 10u16, 10u16);
+    fn test_bytes() -> Arc<[u8]> {
+        Arc::from(&[0u8; 4][..])
+    }
 
-        // Manually insert a protocol into the cache.
-        let picker = Picker::halfblocks();
-        let png_bytes = test_png();
-        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
-        let protocol = picker
-            .new_protocol(dyn_img, Size::new(10, 10), Resize::Fit(None))
-            .unwrap();
-        cache.protocols.insert(
+    /// Polls `drain` until it reports a change or the timeout elapses.
+    /// Returns `true` if a change was observed.
+    fn drain_within(cache: &mut DerivedCache<TestKey, u32>, timeout: Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if cache.drain() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        false
+    }
+
+    /// A compute spawned through the pool completes, is cached, and is
+    /// served on subsequent lookups without recomputing.
+    #[test]
+    fn test_derived_cache_computes_and_caches() {
+        let pool = ThreadPool::new(1);
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("compute");
+
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Library, test_bytes())),
+            |_bytes| Ok(42),
+        );
+        assert!(lookup.value.is_none());
+        assert!(lookup.stale);
+
+        assert!(drain_within(&mut cache, Duration::from_secs(5)));
+
+        // The cached value is now served, and no further compute is wanted.
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Library, test_bytes())),
+            |_bytes| Ok(1),
+        );
+        assert_eq!(lookup.value.as_deref(), Some(&42));
+        assert!(!lookup.stale);
+    }
+
+    /// A cached lower-resolution value keeps being served while a
+    /// higher-resolution recompute runs, and is replaced when it lands.
+    #[test]
+    fn test_derived_cache_serves_stale_while_upgrading() {
+        let pool = ThreadPool::new(1);
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("upgrade");
+
+        cache.insert(key.clone(), Resolution::Low, Arc::new(1));
+
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Full, test_bytes())),
+            |_bytes| Ok(2),
+        );
+        // The stale low-res value is served while the upgrade decodes.
+        assert_eq!(lookup.value.as_deref(), Some(&1));
+        assert!(lookup.stale);
+
+        assert!(drain_within(&mut cache, Duration::from_secs(5)));
+
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Full, test_bytes())),
+            |_bytes| Ok(3),
+        );
+        assert_eq!(lookup.value.as_deref(), Some(&2));
+        assert!(!lookup.stale);
+    }
+
+    /// A late lower-resolution result must not replace a cached
+    /// higher-resolution value.
+    #[test]
+    fn test_derived_cache_no_downgrade() {
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("downgrade");
+
+        cache.entries.insert(
             key.clone(),
-            CachedProtocol {
-                protocol: Arc::new(protocol),
-                source_resolution: Resolution::Full,
+            DerivedEntry {
+                value: Some((Arc::new(5), Resolution::Full)),
+                computing: Some(Resolution::Library),
+                failed: None,
             },
         );
-        assert!(cache.protocols.contains_key(&key));
+        let _ = cache.tx.send((key.clone(), Resolution::Library, Ok(3)));
 
-        // Simulate eviction by calling update() which processes evicted entries.
-        // We can't easily trigger real eviction without a full inner cache,
-        // but we can verify the retain logic directly.
-        cache
-            .protocols
-            .retain(|(proto_id, _, _), _| proto_id != &id);
-        cache
-            .protocol_computing
-            .retain(|(proto_id, _, _)| proto_id != &id);
-        cache
-            .protocol_failed
-            .retain(|((failed_id, _, _), _)| failed_id != &id);
-        cache
-            .sliced_protocols
-            .retain(|(sliced_id, _, _), _| sliced_id != &id);
-        cache
-            .sliced_protocol_computing
-            .retain(|(sliced_id, _, _)| sliced_id != &id);
-        cache
-            .sliced_protocol_failed
-            .retain(|((failed_id, _, _), _)| failed_id != &id);
-
-        assert!(!cache.protocols.contains_key(&key));
+        assert!(!cache.drain());
+        let entry = cache.entries.get(&key).unwrap();
+        assert_eq!(
+            entry.value.as_ref().map(|(v, r)| (**v, *r)),
+            Some((5, Resolution::Full))
+        );
+        assert_eq!(entry.computing, None);
     }
 
-    /// Verifies that `new_protocol` errors clear the computing flag, insert
-    /// nothing into the cache, and record the failed source resolution so
-    /// the same decode is not respawned every frame.
+    /// A failed compute records the failed source resolution, does not
+    /// report a change (which would force a redraw and respawn the failing
+    /// compute in a loop), and is not retried from the same source.
     #[test]
-    fn test_protocol_error_handling() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("error-test".into());
-        let key = (id.clone(), 10u16, 10u16);
+    fn test_derived_cache_failure_not_retried() {
+        let pool = ThreadPool::new(1);
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("failure");
 
-        // Simulate an error result arriving through the channel.
-        cache.protocol_computing.insert(key.clone());
-        let _ = cache.protocol_tx.send((
+        cache.entries.insert(
+            key.clone(),
+            DerivedEntry {
+                value: None,
+                computing: Some(Resolution::Low),
+                failed: None,
+            },
+        );
+        let _ = cache.tx.send((
             key.clone(),
             Resolution::Low,
             Err("decode error".to_string()),
         ));
 
-        let changed = cache.update();
-
-        // The computing flag should be cleared.
-        assert!(!cache.protocol_computing.contains(&key));
-        // Nothing should be in the cache.
-        assert!(!cache.protocols.contains_key(&key));
-        // The failure should be recorded per source resolution.
-        assert!(
-            cache
-                .protocol_failed
-                .contains(&(key.clone(), Resolution::Low))
-        );
-        // A failed decode changes nothing visually, so it must not force a
-        // redraw (which would respawn the failing decode in a loop).
-        assert!(!changed);
-    }
-
-    /// Verifies that results whose computing flag was removed (eviction while
-    /// the decode was in flight) are dropped rather than resurrected.
-    #[test]
-    fn test_protocol_untracked_result_dropped() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("untracked-test".into());
-        let key = (id.clone(), 10u16, 10u16);
-
-        let picker = Picker::halfblocks();
-        let png_bytes = test_png();
-        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
-        let protocol = picker
-            .new_protocol(dyn_img, Size::new(10, 10), Resize::Fit(None))
-            .unwrap();
-
-        // No computing flag set — as if the entry was evicted mid-decode.
-        let _ = cache
-            .protocol_tx
-            .send((key.clone(), Resolution::Full, Ok(protocol)));
-
-        cache.update();
-
-        assert!(!cache.protocols.contains_key(&key));
-    }
-
-    /// Verifies that successful protocol results are cached as `Arc<Protocol>`.
-    #[test]
-    fn test_protocol_success_cached() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("success-test".into());
-        let key = (id.clone(), 10u16, 10u16);
-
-        let picker = Picker::halfblocks();
-        let png_bytes = test_png();
-        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
-        let protocol = picker
-            .new_protocol(dyn_img, Size::new(10, 10), Resize::Fit(None))
-            .unwrap();
-
-        cache.protocol_computing.insert(key.clone());
-        let _ = cache
-            .protocol_tx
-            .send((key.clone(), Resolution::Low, Ok(protocol)));
-
-        cache.update();
-
-        // The computing flag should be cleared.
-        assert!(!cache.protocol_computing.contains(&key));
-        // The protocol should be cached, with its source resolution recorded.
+        assert!(!cache.drain());
         assert_eq!(
-            cache.protocols.get(&key).map(|c| c.source_resolution),
-            Some(Resolution::Low)
-        );
-    }
-
-    /// Verifies that a higher-resolution result replaces a cached
-    /// lower-resolution protocol, and that a late lower-resolution result
-    /// does not replace a cached higher-resolution protocol.
-    #[test]
-    fn test_protocol_upgrade_and_no_downgrade() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("upgrade-test".into());
-        let key = (id.clone(), 10u16, 10u16);
-
-        let picker = Picker::halfblocks();
-        let png_bytes = test_png();
-        let make_protocol = || {
-            let dyn_img = image::load_from_memory(&png_bytes).unwrap();
-            picker
-                .new_protocol(dyn_img, Size::new(10, 10), Resize::Fit(None))
-                .unwrap()
-        };
-
-        // Low-res result arrives first.
-        cache.protocol_computing.insert(key.clone());
-        let _ = cache
-            .protocol_tx
-            .send((key.clone(), Resolution::Low, Ok(make_protocol())));
-        cache.update();
-        assert_eq!(
-            cache.protocols.get(&key).map(|c| c.source_resolution),
+            cache.entries.get(&key).unwrap().failed,
             Some(Resolution::Low)
         );
 
-        // Full-res result upgrades the cache entry.
-        cache.protocol_computing.insert(key.clone());
-        let _ = cache
-            .protocol_tx
-            .send((key.clone(), Resolution::Full, Ok(make_protocol())));
-        cache.update();
-        assert_eq!(
-            cache.protocols.get(&key).map(|c| c.source_resolution),
-            Some(Resolution::Full)
+        // The same source must not be retried…
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Low, test_bytes())),
+            |_bytes| Ok(1),
         );
+        assert!(!lookup.stale);
+        assert_eq!(cache.entries.get(&key).unwrap().computing, None);
 
-        // A late library-res result must not downgrade the cache entry.
-        cache.protocol_computing.insert(key.clone());
-        let _ = cache
-            .protocol_tx
-            .send((key.clone(), Resolution::Library, Ok(make_protocol())));
-        cache.update();
-        assert_eq!(
-            cache.protocols.get(&key).map(|c| c.source_resolution),
-            Some(Resolution::Full)
+        // …but a better source clears the way for a retry.
+        let lookup = cache.get_or_compute(
+            &pool,
+            &key,
+            Some((Resolution::Library, test_bytes())),
+            |_bytes| Ok(1),
         );
+        assert!(lookup.stale);
+        assert!(drain_within(&mut cache, Duration::from_secs(5)));
     }
 
-    /// Verifies that successful sliced protocol results are cached.
+    /// Results whose entry was evicted while the compute was in flight are
+    /// dropped rather than resurrected as zombie entries.
     #[test]
-    fn test_sliced_protocol_success_cached() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("sliced-success-test".into());
+    fn test_derived_cache_untracked_result_dropped() {
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("untracked");
 
-        let picker = Picker::halfblocks();
-        let png_bytes = test_png();
-        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
-        let sliced = SlicedProtocol::new(&picker, dyn_img, Some(Size::new(16, 8))).unwrap();
-        let key = (id.clone(), 16u16, 8u16);
+        // No entry exists — as if it was evicted mid-decode.
+        let _ = cache.tx.send((key.clone(), Resolution::Full, Ok(9)));
 
-        cache.sliced_protocol_computing.insert(key.clone());
-        let _ = cache
-            .sliced_protocol_tx
-            .send((key.clone(), Resolution::Library, Ok(sliced)));
-
-        cache.update();
-
-        assert!(!cache.sliced_protocol_computing.contains(&key));
-        assert!(cache.sliced_protocols.contains_key(&key));
+        assert!(!cache.drain());
+        assert!(!cache.entries.contains_key(&key));
     }
 
-    /// Verifies that sliced protocol errors clear the computing flag and
-    /// record the failed source resolution.
+    /// Eviction removes exactly the entries whose keys match.
     #[test]
-    fn test_sliced_protocol_error_handling() {
-        let (_tx, rx) = std::sync::mpsc::channel::<CoverArt>();
-        let mut cache = CoverArtCache::new(rx);
-        let id = CoverArtId("sliced-error-test".into());
-        let key = (id.clone(), 16u16, 8u16);
+    fn test_derived_cache_evict_matching() {
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let keep = test_key("keep");
+        let evict = test_key("evict");
+        cache.insert(keep.clone(), Resolution::Low, Arc::new(1));
+        cache.insert(evict.clone(), Resolution::Low, Arc::new(2));
 
-        cache.sliced_protocol_computing.insert(key.clone());
-        let _ = cache.sliced_protocol_tx.send((
-            key.clone(),
-            Resolution::Library,
-            Err("decode error".to_string()),
-        ));
+        let (evict_id, _, _) = evict.clone();
+        cache.evict_matching(|(id, _, _)| *id == evict_id);
 
-        cache.update();
+        assert!(cache.has_value(&keep));
+        assert!(!cache.entries.contains_key(&evict));
+    }
 
-        assert!(!cache.sliced_protocol_computing.contains(&key));
-        assert!(!cache.sliced_protocols.contains_key(&key));
-        assert!(
-            cache
-                .sliced_protocol_failed
-                .contains(&(key.clone(), Resolution::Library))
+    /// `insert` seeds a value but never overwrites a higher-resolution one.
+    #[test]
+    fn test_derived_cache_insert_respects_dominance() {
+        let mut cache: DerivedCache<TestKey, u32> = DerivedCache::new("test");
+        let key = test_key("insert");
+
+        cache.insert(key.clone(), Resolution::Library, Arc::new(1));
+        cache.insert(key.clone(), Resolution::Low, Arc::new(2));
+
+        let entry = cache.entries.get(&key).unwrap();
+        assert_eq!(
+            entry.value.as_ref().map(|(v, r)| (**v, *r)),
+            Some((1, Resolution::Library))
         );
     }
 }

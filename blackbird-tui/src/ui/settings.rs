@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use blackbird_client_shared::{
     config::{AlbumArtStyle, Layout, Playback},
@@ -1242,12 +1245,16 @@ fn draw_library_preview(
     let large_art_cols = super::layout::large_art_cols() as usize;
     let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
 
-    let large_art_grids: HashMap<CoverArtId, ArtColorGrid> = {
+    let large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = {
         let mut m = HashMap::new();
         if album_art_style == AlbumArtStyle::BelowAlbum {
             m.insert(
                 art_id,
-                compute_art_grid(PLACEHOLDER_IMAGE, large_art_cols, large_art_pixel_rows),
+                Arc::new(compute_art_grid(
+                    PLACEHOLDER_IMAGE,
+                    large_art_cols,
+                    large_art_pixel_rows,
+                )),
             );
         }
         m

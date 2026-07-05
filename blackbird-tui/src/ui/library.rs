@@ -54,7 +54,7 @@ pub(crate) struct EntryRenderContext<'a> {
     pub hovered_heart_index: Option<usize>,
     pub hovered_entry_index: Option<usize>,
     pub art_colors: &'a HashMap<CoverArtId, QuadrantColors>,
-    pub large_art_grids: &'a HashMap<CoverArtId, ArtColorGrid>,
+    pub large_art_grids: &'a HashMap<CoverArtId, Arc<ArtColorGrid>>,
     /// When `true`, image protocols are available for visible groups —
     /// `render_library_entry` renders blank spaces in the art columns
     /// instead of half-block art, reserving space for `SlicedImage`
@@ -1089,7 +1089,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Pre-compute large art grids for visible tracks and spacers (used in BelowAlbum mode).
     let large_art_cols = super::layout::large_art_cols() as usize;
     let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
-    let mut large_art_grids: HashMap<CoverArtId, ArtColorGrid> = HashMap::new();
+    let mut large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = HashMap::new();
     // Pre-fetch sliced protocols for visible groups (used in BelowAlbum mode).
     let mut sliced_protocols: HashMap<CoverArtId, Option<Arc<SlicedProtocol>>> = HashMap::new();
     // Pre-fetch fixed-size protocols for visible group headers (used in LeftOfAlbum mode).
