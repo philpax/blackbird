@@ -64,12 +64,14 @@ pub(crate) struct EntryRenderContext<'a> {
     pub has_image_protocol: bool,
 }
 
-/// Renders a single `LibraryEntry` at the given absolute index into a `ListItem`.
+/// Renders a single `LibraryEntry` at the given absolute index into its
+/// styled lines. Callers wrap the result in a `ListItem`; the library view
+/// may first clip lines that are scrolled above the viewport.
 pub(crate) fn render_library_entry<'a>(
     entry: &'a LibraryEntry,
     i: usize,
     ctx: &EntryRenderContext<'a>,
-) -> ListItem<'a> {
+) -> Text<'a> {
     let is_selected = i == ctx.selected_index;
     match entry {
         LibraryEntry::GroupHeader {
@@ -167,7 +169,7 @@ pub(crate) fn render_library_entry<'a>(
                         }
                     }
 
-                    ListItem::new(vec![line1, Line::from(line2_spans)])
+                    Text::from(vec![line1, Line::from(line2_spans)])
                 }
                 AlbumArtStyle::BelowAlbum => {
                     let line1 = Line::from(vec![
@@ -208,7 +210,7 @@ pub(crate) fn render_library_entry<'a>(
                         }
                     }
 
-                    ListItem::new(vec![line1, Line::from(line2_spans)])
+                    Text::from(vec![line1, Line::from(line2_spans)])
                 }
             }
         }
@@ -350,7 +352,7 @@ pub(crate) fn render_library_entry<'a>(
                 }
             }
 
-            ListItem::new(Line::from(spans))
+            Text::from(Line::from(spans))
         }
         LibraryEntry::GroupSpacer {
             cover_art_id,
@@ -365,9 +367,9 @@ pub(crate) fn render_library_entry<'a>(
                 spans.push(Span::raw(" ".repeat(ctx.large_art.total_width() as usize)));
             }
 
-            ListItem::new(Line::from(spans))
+            Text::from(Line::from(spans))
         }
-        LibraryEntry::AlbumGap => ListItem::new(Line::from("")),
+        LibraryEntry::AlbumGap => Text::from(Line::from("")),
     }
 }
 
@@ -379,25 +381,12 @@ struct OverlayWindow<'a> {
     item_offset: usize,
     /// One past the index of the last visible entry.
     item_end: usize,
+    /// The absolute line offset rendered at the top row of `inner`. The
+    /// list clips the first item's lines above the scroll offset, so this
+    /// is the scroll offset itself.
+    origin: i32,
     /// The list area the overlays are clipped to.
     inner: Rect,
-}
-
-impl OverlayWindow<'_> {
-    /// The absolute line offset rendered at the top row of `inner`.
-    ///
-    /// This is the line offset of the entry at `item_offset` — not the
-    /// requested scroll offset, which may point one line into a partially
-    /// visible 2-line group header. `compute_item_offset` includes such a
-    /// header in the visible range and the `List` renders it in full, so
-    /// overlays positioned from the scroll offset would land one row above
-    /// the text they must line up with.
-    fn display_origin(&self) -> i32 {
-        self.entries[..self.item_offset]
-            .iter()
-            .map(|entry| entry.height() as i32)
-            .sum()
-    }
 }
 
 /// Pushes one terminal row of the large BelowAlbum art column (margins
@@ -1182,12 +1171,27 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         has_image_protocol,
     };
 
+    // The scroll offset may point into the middle of the first item (a
+    // 2-line group header). The List can only render whole items, so clip
+    // the lines above the viewport from the first item's text; scrolling
+    // then moves with line precision instead of snapping per item, and
+    // absolute-line positioning (image overlays, mouse mapping) lines up
+    // with the rendered text.
+    let display_origin: usize = entries[..item_offset]
+        .iter()
+        .map(LibraryEntry::height)
+        .sum();
+    let partial_lines = centered_offset.saturating_sub(display_origin);
     let items: Vec<ListItem> = entries[item_offset..visible_item_end]
         .iter()
         .enumerate()
         .map(|(vi, entry)| {
             let i = item_offset + vi;
-            render_library_entry(entry, i, &render_ctx)
+            let mut text = render_library_entry(entry, i, &render_ctx);
+            if vi == 0 && partial_lines > 0 {
+                text.lines.drain(..partial_lines.min(text.lines.len()));
+            }
+            ListItem::new(text)
         })
         .collect();
 
@@ -1211,6 +1215,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             entries,
             item_offset,
             item_end: visible_item_end,
+            origin: centered_offset as i32,
             inner,
         };
         if album_art_style == AlbumArtStyle::BelowAlbum {
@@ -1253,7 +1258,6 @@ fn render_below_album_images(
     sliced_protocols: &HashMap<CoverArtId, Option<Arc<SlicedProtocol>>>,
 ) {
     let inner = window.inner;
-    let display_origin = window.display_origin();
 
     // Walk entries, tracking the absolute line offset of each group header.
     let mut current_line = 0i32;
@@ -1269,7 +1273,7 @@ fn render_below_album_images(
 
             // Screen row of the art's top relative to `inner`; negative when
             // the group is partially scrolled above the viewport.
-            let screen_offset = art_start_line - display_origin;
+            let screen_offset = art_start_line - window.origin;
 
             // Rows of the art hidden above the viewport.
             let skip_rows = (-screen_offset).max(0);
@@ -1301,7 +1305,6 @@ fn render_left_of_album_thumbnails(
     thumbnail_protocols: &HashMap<CoverArtId, Option<Arc<Protocol>>>,
 ) {
     let inner = window.inner;
-    let display_origin = window.display_origin();
     let thumbnail = super::layout::ArtColumn::thumbnail();
 
     let mut current_line = 0i32;
@@ -1325,7 +1328,15 @@ fn render_left_of_album_thumbnails(
             };
 
             // The thumbnail sits on the first row of the 2-line header.
-            let header_y = inner.y + (current_line - display_origin).max(0) as u16;
+            // A header whose first line is clipped above the viewport is
+            // skipped: unlike `SlicedImage`, a plain `Image` cannot skip
+            // rows, and drawing it lower would cover the following entry.
+            let screen_offset = current_line - window.origin;
+            if screen_offset < 0 {
+                current_line += entry.height() as i32;
+                continue;
+            }
+            let header_y = inner.y + screen_offset as u16;
             let art_rect = thumbnail.rect(inner, header_y);
 
             if art_rect.height == 0 || art_rect.width == 0 {
@@ -2115,7 +2126,11 @@ mod tests {
 
     /// Returns which rows of the terminal have art (colored cells) in the
     /// art columns after rendering the below-album overlay.
-    fn art_rows_after_render(entries: &[LibraryEntry], item_offset: usize) -> Vec<u16> {
+    fn art_rows_after_render(
+        entries: &[LibraryEntry],
+        item_offset: usize,
+        origin: i32,
+    ) -> Vec<u16> {
         let protocols = test_sliced_protocols("a");
         let backend = TestBackend::new(20, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -2125,6 +2140,7 @@ mod tests {
                     entries,
                     item_offset,
                     item_end: entries.len(),
+                    origin,
                     inner: Rect::new(0, 0, 20, 10),
                 };
                 render_below_album_images(frame, &window, test_art_column(), &protocols);
@@ -2143,23 +2159,22 @@ mod tests {
             .collect()
     }
 
-    /// The scroll offset points one line into the 2-line header, which
-    /// `compute_item_offset` still includes and the List renders in full —
-    /// so the art must render below both header lines, not one row higher
-    /// (where it would cover the album line).
+    /// The scroll offset points one line into the 2-line header: the list
+    /// clips the header's first line, so its album line renders at row 0
+    /// and the art must start at row 1 — aligned with the tracks, without
+    /// covering the album line.
     #[test]
     fn test_below_album_art_aligns_with_partially_scrolled_header() {
         let entries = test_entries("a");
 
         // Scroll offset 1 is inside the header; the header item is still
-        // the first rendered item.
+        // the first rendered item (its first line clipped).
         let item_offset = compute_item_offset(&entries, 1);
         assert_eq!(item_offset, 0);
 
-        // The header occupies screen rows 0-1, so art starts at row 2.
         assert_eq!(
-            art_rows_after_render(&entries, item_offset),
-            vec![2, 3, 4, 5]
+            art_rows_after_render(&entries, item_offset, 1),
+            vec![1, 2, 3, 4]
         );
     }
 
@@ -2174,6 +2189,6 @@ mod tests {
         let item_offset = compute_item_offset(&entries, 4);
         assert_eq!(item_offset, 3);
 
-        assert_eq!(art_rows_after_render(&entries, item_offset), vec![0, 1]);
+        assert_eq!(art_rows_after_render(&entries, item_offset, 4), vec![0, 1]);
     }
 }

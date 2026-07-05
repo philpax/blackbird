@@ -1305,7 +1305,7 @@ fn draw_library_preview(
     let items: Vec<ListItem> = entries
         .iter()
         .enumerate()
-        .map(|(i, entry)| render_library_entry(entry, i, &render_ctx))
+        .map(|(i, entry)| ListItem::new(render_library_entry(entry, i, &render_ctx)))
         .collect();
 
     let list = List::new(items).style(Style::default().bg(super::effective_bg(config)));
