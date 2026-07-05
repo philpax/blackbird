@@ -17,14 +17,7 @@ pub use quantize::{
     ArtColorGrid, ArtColors, QuadrantColors, compute_art_grid, compute_quadrant_colors,
 };
 
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc,
-        mpsc::{Receiver, Sender},
-    },
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use blackbird_client_shared::cover_art_cache::{self, CachePriority, ClientData, Resolution};
 use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
@@ -42,34 +35,20 @@ const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Clone)]
 pub struct TuiCoverArt {
     raw_bytes: Arc<[u8]>,
-    /// 4x4 color grid for library thumbnails (computed in background).
-    pub colors: Option<QuadrantColors>,
     /// Aspect ratio (height / width) of the source image. Computed from the
     /// image header so it is available without a full decode.
     aspect_ratio: Option<f64>,
 }
 
 impl ClientData for TuiCoverArt {
-    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, resolution: Resolution) -> Self {
-        // Low-res images (16×16 disk cache) are trivially cheap to process —
-        // compute colors synchronously to avoid a frame of gray.
-        let colors = if resolution == Resolution::Low {
-            Some(compute_quadrant_colors(data))
-        } else {
-            None
-        };
-        let aspect_ratio = image_aspect_ratio(data);
+    fn from_image_data(data: &Arc<[u8]>, _id: &CoverArtId, _resolution: Resolution) -> Self {
         TuiCoverArt {
             raw_bytes: data.clone(),
-            colors,
-            aspect_ratio,
+            aspect_ratio: image_aspect_ratio(data),
         }
     }
 
     fn carry_over(&mut self, previous: &Self) {
-        if self.colors.is_none() {
-            self.colors = previous.colors;
-        }
         if self.aspect_ratio.is_none() {
             self.aspect_ratio = previous.aspect_ratio;
         }
@@ -87,10 +66,10 @@ type ProtocolKey = (CoverArtId, u16, u16);
 pub struct CoverArtCache {
     inner: cover_art_cache::CoverArtCache<TuiCoverArt>,
     pool: ThreadPool,
-    color_tx: Sender<(CoverArtId, Resolution, QuadrantColors)>,
-    color_rx: Receiver<(CoverArtId, Resolution, QuadrantColors)>,
-    /// Tracks which (id, resolution) pairs are currently computing colors.
-    computing: HashSet<(CoverArtId, Resolution)>,
+    /// 4×4 thumbnail colors for `LeftOfAlbum` mode. Always computed
+    /// synchronously from the 16px low-res image, so this cache is only ever
+    /// seeded, never spawns background computes.
+    colors: DerivedCache<CoverArtId, QuadrantColors>,
     /// Color grids for the library BelowAlbum art and the overlay, keyed by
     /// `(CoverArtId, cols, rows)`.
     grids: DerivedCache<GridKey, ArtColorGrid>,
@@ -123,7 +102,6 @@ pub struct CoverArtCache {
 
 impl CoverArtCache {
     pub fn new(cover_art_loaded_rx: std::sync::mpsc::Receiver<CoverArt>) -> Self {
-        let (color_tx, color_rx) = std::sync::mpsc::channel();
         Self {
             inner: cover_art_cache::CoverArtCache::new(
                 cover_art_loaded_rx,
@@ -131,9 +109,7 @@ impl CoverArtCache {
                 CACHE_ENTRY_TIMEOUT,
             ),
             pool: ThreadPool::new(POOL_SIZE),
-            color_tx,
-            color_rx,
-            computing: HashSet::new(),
+            colors: DerivedCache::new("thumbnail colors"),
             grids: DerivedCache::new("color grid"),
             visible_this_frame: HashSet::new(),
             protocol_picker: None,
@@ -181,10 +157,7 @@ impl CoverArtCache {
             changed = true;
         }
         for id in &result.evicted {
-            // Remove all resolution-keyed entries for this id.
-            self.computing.remove(&(id.clone(), Resolution::Low));
-            self.computing.remove(&(id.clone(), Resolution::Library));
-            self.computing.remove(&(id.clone(), Resolution::Full));
+            self.colors.evict_matching(|color_id| color_id == id);
             self.grids.evict_matching(|(grid_id, _, _)| grid_id == id);
             // Remove protocol caches for this id. Kitty virtual placements
             // are removed by the terminal itself once their unicode
@@ -200,15 +173,7 @@ impl CoverArtCache {
         // forces a redraw, and the `get*` methods compare the cached source
         // resolution against the best available bytes on every call.
 
-        for (id, resolution, colors) in self.color_rx.try_iter() {
-            changed = true;
-            self.computing.remove(&(id.clone(), resolution));
-            self.inner
-                .with_client_data_mut_at(&id, resolution, |data, _raw| {
-                    data.colors = Some(colors);
-                });
-        }
-
+        changed |= self.colors.drain();
         changed |= self.grids.drain();
         changed |= self.protocols.drain();
         changed |= self.sliced_protocols.drain();
@@ -219,37 +184,36 @@ impl CoverArtCache {
     /// Get quadrant colors for a cover art entry at low resolution.
     /// Used for LeftOfAlbum thumbnail colors.
     pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
-        if let Some(id) = cover_art_id {
-            self.visible_this_frame
-                .insert((id.clone(), Resolution::Low));
-        }
-        let Some(result) =
-            self.inner
-                .get(logic, cover_art_id, Resolution::Low, CachePriority::Visible)
-        else {
+        let Some(id) = cover_art_id else {
             return QuadrantColors::default();
         };
 
-        if let Some(colors) = result.data.colors {
-            return colors;
+        self.visible_this_frame
+            .insert((id.clone(), Resolution::Low));
+        let _ = self
+            .inner
+            .get(logic, Some(id), Resolution::Low, CachePriority::Visible);
+
+        // The colors always come from the 16px low-res image, which is
+        // trivially cheap to process — compute synchronously so the first
+        // frame shows colors instead of gray.
+        if !self.colors.has_value(id)
+            && let Some(low_res) = self
+                .inner
+                .get_resolution(id, Resolution::Low)
+                .map(|data| data.raw_bytes.clone())
+        {
+            self.colors.insert(
+                id.clone(),
+                Resolution::Low,
+                Arc::new(compute_quadrant_colors(&low_res)),
+            );
         }
 
-        // Colors not computed yet — spawn background thread if not already running.
-        let id = cover_art_id.unwrap(); // Safe: inner.get returned Some.
-        let key = (id.clone(), result.resolution);
-        if !self.computing.contains(&key) {
-            self.computing.insert(key);
-            let raw = result.data.raw_bytes.clone();
-            let id_clone = id.clone();
-            let resolution = result.resolution;
-            let tx = self.color_tx.clone();
-            self.pool.spawn(move || {
-                let colors = compute_quadrant_colors(&raw);
-                let _ = tx.send((id_clone, resolution, colors));
-            });
-        }
-
-        QuadrantColors::default()
+        self.colors
+            .get(id)
+            .map(|colors| *colors)
+            .unwrap_or_default()
     }
 
     /// Returns a variable-size color grid for library BelowAlbum display.

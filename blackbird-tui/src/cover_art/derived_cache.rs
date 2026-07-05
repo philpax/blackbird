@@ -126,6 +126,15 @@ where
             .is_some_and(|entry| entry.value.is_some())
     }
 
+    /// Returns the cached value for `key`, if one has been computed, without
+    /// considering upgrades or spawning computes.
+    pub(super) fn get(&self, key: &K) -> Option<Arc<V>> {
+        self.entries
+            .get(key)
+            .and_then(|entry| entry.value.as_ref())
+            .map(|(value, _)| value.clone())
+    }
+
     /// Inserts an externally computed value, unless a value from a higher
     /// source resolution is already cached. Used to seed the cache with a
     /// synchronously computed low-resolution artifact.
