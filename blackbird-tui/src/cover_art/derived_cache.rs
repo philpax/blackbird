@@ -24,10 +24,19 @@ use super::pool::ThreadPool;
 /// every frame, and drop results whose entry was evicted mid-flight.
 pub(super) struct DerivedCache<K, V> {
     entries: HashMap<K, DerivedEntry<V>>,
-    tx: Sender<(K, Resolution, Result<V, String>)>,
-    rx: Receiver<(K, Resolution, Result<V, String>)>,
+    tx: Sender<ComputeResult<K, V>>,
+    rx: Receiver<ComputeResult<K, V>>,
     /// Artifact name for log messages.
     name: &'static str,
+}
+
+/// A completed background compute, sent from a worker thread back to the
+/// cache to be applied during [`DerivedCache::drain`].
+struct ComputeResult<K, V> {
+    key: K,
+    /// The resolution of the source image the compute ran on.
+    source_resolution: Resolution,
+    result: Result<V, String>,
 }
 
 /// The full lifecycle state of one derived artifact. The first compute often
@@ -109,7 +118,11 @@ where
             let key = key.clone();
             let tx = self.tx.clone();
             pool.spawn(move || {
-                let _ = tx.send((key, source_resolution, compute(bytes)));
+                let _ = tx.send(ComputeResult {
+                    key,
+                    source_resolution,
+                    result: compute(bytes),
+                });
             });
         }
 
@@ -153,7 +166,12 @@ where
     /// changed (failures don't change visual state, so they don't count).
     pub(super) fn drain(&mut self) -> bool {
         let mut changed = false;
-        for (key, source_resolution, result) in self.rx.try_iter() {
+        for ComputeResult {
+            key,
+            source_resolution,
+            result,
+        } in self.rx.try_iter()
+        {
             // Drop results whose entry was evicted while the compute was in
             // flight (or superseded after an evict-and-recreate); accepting
             // them would resurrect a zombie entry.
@@ -301,7 +319,11 @@ mod tests {
                 failed: None,
             },
         );
-        let _ = cache.tx.send((key.clone(), Resolution::Library, Ok(3)));
+        let _ = cache.tx.send(ComputeResult {
+            key: key.clone(),
+            source_resolution: Resolution::Library,
+            result: Ok(3),
+        });
 
         assert!(!cache.drain());
         let entry = cache.entries.get(&key).unwrap();
@@ -329,11 +351,11 @@ mod tests {
                 failed: None,
             },
         );
-        let _ = cache.tx.send((
-            key.clone(),
-            Resolution::Low,
-            Err("decode error".to_string()),
-        ));
+        let _ = cache.tx.send(ComputeResult {
+            key: key.clone(),
+            source_resolution: Resolution::Low,
+            result: Err("decode error".to_string()),
+        });
 
         assert!(!cache.drain());
         assert_eq!(
@@ -370,7 +392,11 @@ mod tests {
         let key = test_key("untracked");
 
         // No entry exists — as if it was evicted mid-decode.
-        let _ = cache.tx.send((key.clone(), Resolution::Full, Ok(9)));
+        let _ = cache.tx.send(ComputeResult {
+            key: key.clone(),
+            source_resolution: Resolution::Full,
+            result: Ok(9),
+        });
 
         assert!(!cache.drain());
         assert!(!cache.entries.contains_key(&key));
