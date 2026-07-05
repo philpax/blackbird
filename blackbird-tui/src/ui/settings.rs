@@ -1242,8 +1242,8 @@ fn draw_library_preview(
         m
     };
 
-    let large_art_cols = super::layout::large_art_cols() as usize;
-    let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
+    let large_art = super::layout::ArtColumn::large();
+    let large_art_pixel_rows = large_art.rows as usize * 2;
 
     let large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = {
         let mut m = HashMap::new();
@@ -1252,7 +1252,7 @@ fn draw_library_preview(
                 art_id,
                 Arc::new(compute_art_grid(
                     PLACEHOLDER_IMAGE,
-                    large_art_cols,
+                    large_art.cols as usize,
                     large_art_pixel_rows,
                 )),
             );
@@ -1281,7 +1281,7 @@ fn draw_library_preview(
     let render_ctx = EntryRenderContext {
         album_art_style,
         list_width: inner.width as usize,
-        large_art_cols,
+        large_art,
         background_color: super::effective_bg(config),
         album_color: style.album_color(),
         album_year_color: style.album_year_color(),

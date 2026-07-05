@@ -406,18 +406,19 @@ impl CoverArtCache {
     /// Returns a sliced image protocol for scrollable rendering via
     /// `ratatui_image::sliced::SlicedImage`.
     ///
-    /// Used by the library BelowAlbum art. The protocol is decoded in a
-    /// background thread and cached by `(CoverArtId, width, height)`, where
-    /// the dimensions are the current `large_art_cols() ×
-    /// LARGE_ART_TERM_ROWS` art area (a terminal resize changes the key and
-    /// recomputes the art). While better source data is loading, a protocol
-    /// from the best currently-available resolution is served and replaced
-    /// once the better decode completes. Returns `None` before the first
-    /// decode completes or when no picker is configured.
+    /// Used by the library BelowAlbum art. `size` is the art area in
+    /// character cells; the protocol is decoded in a background thread and
+    /// cached by `(CoverArtId, width, height)`, so a terminal resize (which
+    /// changes the art area) produces a new key and recomputes the art.
+    /// While better source data is loading, a protocol from the best
+    /// currently-available resolution is served and replaced once the better
+    /// decode completes. Returns `None` before the first decode completes or
+    /// when no picker is configured.
     pub fn get_sliced_protocol(
         &mut self,
         logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
+        size: Size,
     ) -> Option<Arc<SlicedProtocol>> {
         let picker = self.protocol_picker.clone()?;
         let id = cover_art_id?;
@@ -429,10 +430,6 @@ impl CoverArtCache {
         self.visible_this_frame
             .insert((id.clone(), Resolution::Library));
 
-        let size = Size {
-            width: crate::ui::layout::large_art_cols(),
-            height: crate::ui::layout::LARGE_ART_TERM_ROWS as u16,
-        };
         let key = (id.clone(), size.width, size.height);
         let source = best_raw_bytes_up_to(&mut self.inner, id, Resolution::Library);
 

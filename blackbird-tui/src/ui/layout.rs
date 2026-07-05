@@ -1,4 +1,4 @@
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
 
 // ── Main vertical layout ────────────────────────────────────────────────────
 
@@ -236,6 +236,66 @@ pub const LARGE_ART_LEFT_MARGIN: usize = 1;
 
 /// Gap between the large art and the track text.
 pub const LARGE_ART_RIGHT_MARGIN: usize = 1;
+
+// ── Art column geometry ─────────────────────────────────────────────────────
+
+/// Horizontal and vertical geometry of an art column: a left margin, the art
+/// cells themselves, a right margin, and the art height in terminal rows.
+///
+/// Construct one per draw and use it for every cell the art touches — the
+/// blank reservation spans inside list rows, the `Rect` an image widget is
+/// placed over, and mouse hit-testing — so those call sites can never
+/// disagree about where the art is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ArtColumn {
+    /// Columns of padding before the art.
+    pub left_margin: u16,
+    /// Columns the art itself occupies.
+    pub cols: u16,
+    /// Columns of padding between the art and the following text.
+    pub right_margin: u16,
+    /// Terminal rows the art occupies.
+    pub rows: u16,
+}
+
+impl ArtColumn {
+    /// The thumbnail art column, used by the now-playing bar and
+    /// `LeftOfAlbum` group headers.
+    pub fn thumbnail() -> Self {
+        Self {
+            left_margin: ART_LEFT_MARGIN,
+            cols: art_cols(),
+            right_margin: 1,
+            rows: ART_TERM_ROWS,
+        }
+    }
+
+    /// The large art column beside tracks in `BelowAlbum` mode.
+    pub fn large() -> Self {
+        Self {
+            left_margin: LARGE_ART_LEFT_MARGIN as u16,
+            cols: large_art_cols(),
+            right_margin: LARGE_ART_RIGHT_MARGIN as u16,
+            rows: LARGE_ART_TERM_ROWS as u16,
+        }
+    }
+
+    /// The total width of the column, margins included.
+    pub fn total_width(&self) -> u16 {
+        self.left_margin + self.cols + self.right_margin
+    }
+
+    /// The art dimensions in character cells, for sizing image protocols.
+    pub fn size(&self) -> Size {
+        Size::new(self.cols, self.rows)
+    }
+
+    /// The `Rect` the art cells occupy when the art's top row is at `y`
+    /// inside `area`, clipped to `area`.
+    pub fn rect(&self, area: Rect, y: u16) -> Rect {
+        Rect::new(area.x + self.left_margin, y, self.cols, self.rows).intersection(area)
+    }
+}
 
 // ── Library geometry ────────────────────────────────────────────────────────
 
