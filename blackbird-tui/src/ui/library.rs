@@ -379,10 +379,25 @@ struct OverlayWindow<'a> {
     item_offset: usize,
     /// One past the index of the last visible entry.
     item_end: usize,
-    /// The absolute line offset of the top of the viewport.
-    centered_offset: usize,
     /// The list area the overlays are clipped to.
     inner: Rect,
+}
+
+impl OverlayWindow<'_> {
+    /// The absolute line offset rendered at the top row of `inner`.
+    ///
+    /// This is the line offset of the entry at `item_offset` — not the
+    /// requested scroll offset, which may point one line into a partially
+    /// visible 2-line group header. `compute_item_offset` includes such a
+    /// header in the visible range and the `List` renders it in full, so
+    /// overlays positioned from the scroll offset would land one row above
+    /// the text they must line up with.
+    fn display_origin(&self) -> i32 {
+        self.entries[..self.item_offset]
+            .iter()
+            .map(|entry| entry.height() as i32)
+            .sum()
+    }
 }
 
 /// Pushes one terminal row of the large BelowAlbum art column (margins
@@ -1196,7 +1211,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             entries,
             item_offset,
             item_end: visible_item_end,
-            centered_offset,
             inner,
         };
         if album_art_style == AlbumArtStyle::BelowAlbum {
@@ -1225,9 +1239,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 /// `BelowAlbum` mode.
 ///
 /// Walks the flat library entries to find `GroupHeader` positions, computes
-/// the art Rect (accounting for scroll offset), and renders a `SlicedImage`
-/// with a `SignedPosition` that offsets the image start relative to the
-/// render area when a group is partially scrolled above the viewport.
+/// the art Rect, and renders a `SlicedImage` with a `SignedPosition` that
+/// offsets the image start relative to the render area when a group is
+/// partially scrolled above the viewport.
+///
+/// Headers *before* `item_offset` are considered too: a group whose header
+/// has scrolled above the viewport can still have visible art rows beside
+/// its visible tracks.
 fn render_below_album_images(
     frame: &mut Frame,
     window: &OverlayWindow<'_>,
@@ -1235,60 +1253,43 @@ fn render_below_album_images(
     sliced_protocols: &HashMap<CoverArtId, Option<Arc<SlicedProtocol>>>,
 ) {
     let inner = window.inner;
-    let centered_offset = window.centered_offset;
+    let display_origin = window.display_origin();
 
     // Walk entries, tracking the absolute line offset of each group header.
-    let mut current_line = 0usize;
-    for (i, entry) in window.entries.iter().enumerate() {
-        if i < window.item_offset {
-            current_line += entry.height();
-            continue;
-        }
-        if i >= window.item_end {
-            break;
-        }
-
+    let mut current_line = 0i32;
+    for entry in &window.entries[..window.item_end] {
         if let LibraryEntry::GroupHeader {
             cover_art_id: Some(id),
             ..
         } = entry
+            && let Some(Some(protocol)) = sliced_protocols.get(id)
         {
-            let Some(Some(protocol)) = sliced_protocols.get(id) else {
-                current_line += entry.height();
-                continue;
-            };
-
             // The art area starts below the 2-line GroupHeader.
             let art_start_line = current_line + 2;
 
-            // Compute the y position of the art area relative to `inner`.
-            // If the group's first track is above the viewport, `art_start_line`
-            // may be less than `centered_offset`, resulting in a negative offset.
-            let scroll_offset = centered_offset as i32 - art_start_line as i32;
+            // Screen row of the art's top relative to `inner`; negative when
+            // the group is partially scrolled above the viewport.
+            let screen_offset = art_start_line - display_origin;
 
-            // The art Rect is the full art area, clamped to `inner`.
-            let art_y = inner.y + art_start_line.saturating_sub(centered_offset) as u16;
-            let art_rect = large_art.rect(inner, art_y);
-
-            if art_rect.height == 0 || art_rect.width == 0 {
-                current_line += entry.height();
-                continue;
+            // Rows of the art hidden above the viewport.
+            let skip_rows = (-screen_offset).max(0);
+            if skip_rows < i32::from(large_art.rows) {
+                let art_y = inner.y + screen_offset.max(0) as u16;
+                let art_rect = large_art.rect(inner, art_y);
+                if art_rect.height > 0 && art_rect.width > 0 {
+                    // `SignedPosition.y` tells `SlicedImage` how many image
+                    // rows to skip from the top, showing only the lower
+                    // portion of a partially scrolled group's art.
+                    let position = SignedPosition {
+                        x: 0,
+                        y: -(skip_rows as i16),
+                    };
+                    frame.render_widget(SlicedImage::new(protocol, position), art_rect);
+                }
             }
-
-            // `SignedPosition.y` tells `SlicedImage` how many image rows to
-            // skip from the top. When the group is fully visible, this is 0.
-            // When partially scrolled above the viewport, the image starts
-            // `scroll_offset` rows above the render area, showing only the
-            // lower portion.
-            let position = SignedPosition {
-                x: 0,
-                y: -(scroll_offset.max(0) as i16),
-            };
-
-            frame.render_widget(SlicedImage::new(protocol, position), art_rect);
         }
 
-        current_line += entry.height();
+        current_line += entry.height() as i32;
     }
 }
 
@@ -1300,13 +1301,13 @@ fn render_left_of_album_thumbnails(
     thumbnail_protocols: &HashMap<CoverArtId, Option<Arc<Protocol>>>,
 ) {
     let inner = window.inner;
-    let centered_offset = window.centered_offset;
+    let display_origin = window.display_origin();
     let thumbnail = super::layout::ArtColumn::thumbnail();
 
-    let mut current_line = 0usize;
+    let mut current_line = 0i32;
     for (i, entry) in window.entries.iter().enumerate() {
         if i < window.item_offset {
-            current_line += entry.height();
+            current_line += entry.height() as i32;
             continue;
         }
         if i >= window.item_end {
@@ -1319,16 +1320,16 @@ fn render_left_of_album_thumbnails(
         } = entry
         {
             let Some(Some(protocol)) = thumbnail_protocols.get(id) else {
-                current_line += entry.height();
+                current_line += entry.height() as i32;
                 continue;
             };
 
-            // The thumbnail is vertically centered within the 2-line header.
-            let header_y = inner.y + current_line.saturating_sub(centered_offset) as u16;
+            // The thumbnail sits on the first row of the 2-line header.
+            let header_y = inner.y + (current_line - display_origin).max(0) as u16;
             let art_rect = thumbnail.rect(inner, header_y);
 
             if art_rect.height == 0 || art_rect.width == 0 {
-                current_line += entry.height();
+                current_line += entry.height() as i32;
                 continue;
             }
 
@@ -1336,7 +1337,7 @@ fn render_left_of_album_thumbnails(
             frame.render_widget(ratatui_image::Image::new(protocol), art_rect);
         }
 
-        current_line += entry.height();
+        current_line += entry.height() as i32;
     }
 }
 
@@ -2035,4 +2036,144 @@ pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16
         .viewport
         .apply_scrollbar_drag(y, total_lines, library_area.y, library_area.height);
     app.library.snap_cursor_to_viewport_center();
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
+    use ratatui_image::picker::Picker;
+
+    use super::*;
+
+    fn test_header(id: &str) -> LibraryEntry {
+        LibraryEntry::GroupHeader {
+            artist: "artist".to_string(),
+            album: "album".to_string(),
+            year: None,
+            created: None,
+            duration: 0,
+            starred: false,
+            album_id: blackbird_core::blackbird_state::AlbumId(id.into()),
+            cover_art_id: Some(CoverArtId(id.into())),
+        }
+    }
+
+    fn test_track(id: &str, index: usize) -> LibraryEntry {
+        LibraryEntry::Track {
+            id: TrackId(format!("{id}-{index}")),
+            title: "track".to_string(),
+            artist: None,
+            album_artist: "artist".to_string(),
+            track_number: Some(index as u32 + 1),
+            disc_number: None,
+            duration: None,
+            starred: false,
+            play_count: None,
+            cover_art_id: Some(CoverArtId(id.into())),
+            track_index_in_group: index,
+        }
+    }
+
+    /// A header followed by enough tracks to hold a 4-row art area.
+    fn test_entries(id: &str) -> Vec<LibraryEntry> {
+        let mut entries = vec![test_header(id)];
+        entries.extend((0..6).map(|i| test_track(id, i)));
+        entries
+    }
+
+    /// A red 80×80 sliced protocol filling the test art column exactly (8×4
+    /// cells at the halfblocks picker's 10×20 font).
+    fn test_sliced_protocols(id: &str) -> HashMap<CoverArtId, Option<Arc<SlicedProtocol>>> {
+        use image::{ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(80, 80, Rgba([255, 0, 0, 255]));
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png)
+            .write_image(img.as_raw(), 80, 80, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let dyn_img = image::load_from_memory(&png).unwrap();
+        let sliced = SlicedProtocol::new(
+            &Picker::halfblocks(),
+            dyn_img,
+            Some(ratatui::layout::Size::new(8, 4)),
+        )
+        .unwrap();
+
+        let mut map = HashMap::new();
+        map.insert(CoverArtId(id.into()), Some(Arc::new(sliced)));
+        map
+    }
+
+    fn test_art_column() -> super::super::layout::ArtColumn {
+        super::super::layout::ArtColumn {
+            left_margin: 1,
+            cols: 8,
+            right_margin: 1,
+            rows: 4,
+        }
+    }
+
+    /// Returns which rows of the terminal have art (colored cells) in the
+    /// art columns after rendering the below-album overlay.
+    fn art_rows_after_render(entries: &[LibraryEntry], item_offset: usize) -> Vec<u16> {
+        let protocols = test_sliced_protocols("a");
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let window = OverlayWindow {
+                    entries,
+                    item_offset,
+                    item_end: entries.len(),
+                    inner: Rect::new(0, 0, 20, 10),
+                };
+                render_below_album_images(frame, &window, test_art_column(), &protocols);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        (0..10u16)
+            .filter(|y| {
+                (1..9u16).any(|x| {
+                    let cell = buffer.cell(Position { x, y: *y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                })
+            })
+            .collect()
+    }
+
+    /// The scroll offset points one line into the 2-line header, which
+    /// `compute_item_offset` still includes and the List renders in full —
+    /// so the art must render below both header lines, not one row higher
+    /// (where it would cover the album line).
+    #[test]
+    fn test_below_album_art_aligns_with_partially_scrolled_header() {
+        let entries = test_entries("a");
+
+        // Scroll offset 1 is inside the header; the header item is still
+        // the first rendered item.
+        let item_offset = compute_item_offset(&entries, 1);
+        assert_eq!(item_offset, 0);
+
+        // The header occupies screen rows 0-1, so art starts at row 2.
+        assert_eq!(
+            art_rows_after_render(&entries, item_offset),
+            vec![2, 3, 4, 5]
+        );
+    }
+
+    /// A group whose header has scrolled above the viewport still renders
+    /// the visible lower portion of its art beside its visible tracks.
+    #[test]
+    fn test_below_album_art_renders_for_scrolled_off_header() {
+        let entries = test_entries("a");
+
+        // Scroll two art rows past the header: the first rendered item is
+        // the third track, and the last two art rows are still visible.
+        let item_offset = compute_item_offset(&entries, 4);
+        assert_eq!(item_offset, 3);
+
+        assert_eq!(art_rows_after_render(&entries, item_offset), vec![0, 1]);
+    }
 }
