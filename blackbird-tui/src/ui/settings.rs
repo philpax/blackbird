@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use blackbird_client_shared::{
     config::{AlbumArtStyle, Layout, Playback},
@@ -1239,15 +1242,19 @@ fn draw_library_preview(
         m
     };
 
-    let large_art_cols = super::layout::large_art_cols() as usize;
-    let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
+    let large_art = super::layout::ArtColumn::large();
+    let large_art_pixel_rows = large_art.rows as usize * 2;
 
-    let large_art_grids: HashMap<CoverArtId, ArtColorGrid> = {
+    let large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = {
         let mut m = HashMap::new();
         if album_art_style == AlbumArtStyle::BelowAlbum {
             m.insert(
                 art_id,
-                compute_art_grid(PLACEHOLDER_IMAGE, large_art_cols, large_art_pixel_rows),
+                Arc::new(compute_art_grid(
+                    PLACEHOLDER_IMAGE,
+                    large_art.cols as usize,
+                    large_art_pixel_rows,
+                )),
             );
         }
         m
@@ -1274,7 +1281,7 @@ fn draw_library_preview(
     let render_ctx = EntryRenderContext {
         album_art_style,
         list_width: inner.width as usize,
-        large_art_cols,
+        large_art,
         background_color: super::effective_bg(config),
         album_color: style.album_color(),
         album_year_color: style.album_year_color(),
@@ -1292,12 +1299,13 @@ fn draw_library_preview(
         hovered_entry_index: None,
         art_colors: &art_colors,
         large_art_grids: &large_art_grids,
+        has_image_protocol: false,
     };
 
     let items: Vec<ListItem> = entries
         .iter()
         .enumerate()
-        .map(|(i, entry)| render_library_entry(entry, i, &render_ctx))
+        .map(|(i, entry)| ListItem::new(render_library_entry(entry, i, &render_ctx)))
         .collect();
 
     let list = List::new(items).style(Style::default().bg(super::effective_bg(config)));

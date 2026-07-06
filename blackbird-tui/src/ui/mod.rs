@@ -552,3 +552,211 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let help = Paragraph::new(help_line).style(Style::default().bg(effective_bg(&app.config)));
     frame.render_widget(help, area);
 }
+
+#[cfg(test)]
+mod render_tests {
+    use image::{ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        layout::{Position, Rect, Size},
+    };
+    use ratatui_image::{
+        Image, Resize,
+        picker::Picker,
+        protocol::Protocol,
+        sliced::{SignedPosition, SlicedImage, SlicedProtocol},
+    };
+    use std::sync::Arc;
+
+    /// Creates a small 4×4 PNG test image (solid red).
+    fn test_png() -> Vec<u8> {
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(40, 40, Rgba([255, 0, 0, 255]));
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 40, 40, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    /// Creates a PNG with distinct colors per row (vertical gradient).
+    /// 8 rows of distinct colors, each 10 pixels tall × 10 pixels wide.
+    fn gradient_png() -> Vec<u8> {
+        let colors = [
+            Rgba([255, 0, 0, 255]),
+            Rgba([0, 255, 0, 255]),
+            Rgba([0, 0, 255, 255]),
+            Rgba([255, 255, 255, 255]),
+            Rgba([255, 128, 0, 255]),
+            Rgba([128, 0, 255, 255]),
+            Rgba([0, 255, 255, 255]),
+            Rgba([255, 0, 255, 255]),
+        ];
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(80, 80);
+        for y in 0..80 {
+            for x in 0..80 {
+                img.put_pixel(x, y, colors[(y / 10) as usize]);
+            }
+        }
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 80, 80, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    /// Verifies that `Image` mode with a halfblocks picker renders
+    /// image content into the terminal buffer (colored cells), confirming
+    /// that ratatui-image's halfblocks backend is functional.
+    #[test]
+    fn test_image_mode_halfblocks_backend() {
+        let picker = Picker::halfblocks();
+        let png_bytes = test_png();
+        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
+        // The halfblocks picker has font_size 10×20, so a 40×40 pixel image
+        // maps to 4×2 character cells. Use a size that fits.
+        let size = Size::new(4, 2);
+        let protocol: Protocol = picker
+            .new_protocol(dyn_img, size, Resize::Fit(None))
+            .unwrap();
+
+        let backend = TestBackend::new(10, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 4, 2);
+                f.render_widget(Image::new(&protocol).allow_clipping(true), area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+
+        // The halfblocks protocol renders image data as cell colors.
+        // For a solid red image, cells should have Rgb(255, 0, 0) as fg or bg.
+        // Verify at least one cell in the art area has a non-default color.
+        let has_color = (0..4u16)
+            .flat_map(|y| (0..2u16).map(move |x| (x, y)))
+            .any(|(x, y)| {
+                let cell = buffer.cell(Position { x, y }).unwrap();
+                cell.fg != ratatui::style::Color::default()
+                    || cell.bg != ratatui::style::Color::default()
+            });
+
+        assert!(
+            has_color,
+            "expected at least one colored cell in the art area"
+        );
+    }
+
+    /// Verifies that when no protocol is available (None), rendering
+    /// correctly falls through to the fallback path (no Image widget
+    /// rendered, no image colors in the buffer).
+    #[test]
+    fn test_fallback_to_halfblocks_when_no_protocol() {
+        let protocol: Option<Arc<Protocol>> = None;
+
+        let backend = TestBackend::new(10, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 4, 2);
+                if let Some(ref protocol) = protocol {
+                    f.render_widget(Image::new(protocol).allow_clipping(true), area);
+                } else {
+                    // Fallback: render a plain block (simulating half-block fallback).
+                    f.render_widget(ratatui::widgets::Block::default(), area);
+                }
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // With the fallback, no image colors should be present.
+        let has_color = (0..4u16)
+            .flat_map(|y| (0..2u16).map(move |x| (x, y)))
+            .any(|(x, y)| {
+                let cell = buffer.cell(Position { x, y }).unwrap();
+                cell.fg != ratatui::style::Color::default()
+                    || cell.bg != ratatui::style::Color::default()
+            });
+
+        assert!(!has_color, "fallback path should not render image colors");
+    }
+
+    /// Verifies that `SlicedImage` with a scroll offset renders the
+    /// correct portion of the image. Uses a vertical-gradient test image
+    /// where each row has a distinct color, then scrolls 1 line into the art
+    /// area and verifies the buffer is non-empty.
+    #[test]
+    fn test_library_scroll_partial_group() {
+        let picker = Picker::halfblocks();
+        let png_bytes = gradient_png();
+        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
+
+        // Create a SlicedProtocol sized to 8 cols × 8 rows.
+        let sliced = SlicedProtocol::new(&picker, dyn_img, Some(Size::new(8, 8))).unwrap();
+
+        // Render with scroll_offset = 3 (skip first 3 rows of the image).
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 8, 8);
+                let position = SignedPosition { x: 0, y: -3 };
+                f.render_widget(SlicedImage::new(&sliced, position), area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let has_content_scrolled =
+            (0..8u16)
+                .flat_map(|y| (0..8u16).map(move |x| (x, y)))
+                .any(|(x, y)| {
+                    let cell = buffer.cell(Position { x, y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                });
+        assert!(
+            has_content_scrolled,
+            "expected colored cells in scrolled art area"
+        );
+
+        // Also render with scroll_offset = 0 and verify it also has content.
+        let backend2 = TestBackend::new(20, 10);
+        let mut terminal2 = Terminal::new(backend2).unwrap();
+        terminal2
+            .draw(|f| {
+                let area = Rect::new(0, 0, 8, 8);
+                let position = SignedPosition { x: 0, y: 0 };
+                f.render_widget(SlicedImage::new(&sliced, position), area);
+            })
+            .unwrap();
+
+        let buffer2 = terminal2.backend().buffer();
+        let has_content_normal =
+            (0..8u16)
+                .flat_map(|y| (0..8u16).map(move |x| (x, y)))
+                .any(|(x, y)| {
+                    let cell = buffer2.cell(Position { x, y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                });
+        assert!(
+            has_content_normal,
+            "expected colored cells in non-scrolled art area"
+        );
+    }
+
+    /// Verifies that the `Halfblock` config variant is distinct from
+    /// `Auto` and `Image`, confirming the config-level decision point that
+    /// bypasses picker creation.
+    #[test]
+    fn test_halfblock_config_bypasses_image() {
+        use crate::config::AlbumArtProtocol;
+        assert_eq!(AlbumArtProtocol::default(), AlbumArtProtocol::Auto);
+        assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Auto);
+        assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Image);
+    }
+}

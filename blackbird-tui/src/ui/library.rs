@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use blackbird_client_shared::{config::AlbumArtStyle, library_scroll};
+use blackbird_client_shared::{config::AlbumArtStyle, cover_art_cache::Resolution, library_scroll};
 use blackbird_core::{
     self as bc, SortOrder,
     blackbird_state::{CoverArtId, TrackId},
@@ -14,6 +14,11 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{List, ListItem, ListState, Paragraph},
 };
+use ratatui_image::{
+    protocol::Protocol,
+    sliced::{SignedPosition, SlicedImage, SlicedProtocol},
+};
+use std::sync::Arc;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
@@ -32,7 +37,9 @@ use super::{StyleExt, string_to_color};
 pub(crate) struct EntryRenderContext<'a> {
     pub album_art_style: AlbumArtStyle,
     pub list_width: usize,
-    pub large_art_cols: usize,
+    /// Geometry of the large BelowAlbum art column, shared by the blank
+    /// reservation spans, the half-block rendering, and the image overlay.
+    pub large_art: super::layout::ArtColumn,
     pub background_color: Color,
     pub album_color: Color,
     pub album_year_color: Color,
@@ -49,15 +56,22 @@ pub(crate) struct EntryRenderContext<'a> {
     pub hovered_heart_index: Option<usize>,
     pub hovered_entry_index: Option<usize>,
     pub art_colors: &'a HashMap<CoverArtId, QuadrantColors>,
-    pub large_art_grids: &'a HashMap<CoverArtId, ArtColorGrid>,
+    pub large_art_grids: &'a HashMap<CoverArtId, Arc<ArtColorGrid>>,
+    /// When `true`, image protocols are available for visible groups —
+    /// `render_library_entry` renders blank spaces in the art columns
+    /// instead of half-block art, reserving space for `SlicedImage`
+    /// widgets rendered on top afterward.
+    pub has_image_protocol: bool,
 }
 
-/// Renders a single `LibraryEntry` at the given absolute index into a `ListItem`.
+/// Renders a single `LibraryEntry` at the given absolute index into its
+/// styled lines. Callers wrap the result in a `ListItem`; the library view
+/// may first clip lines that are scrolled above the viewport.
 pub(crate) fn render_library_entry<'a>(
     entry: &'a LibraryEntry,
     i: usize,
     ctx: &EntryRenderContext<'a>,
-) -> ListItem<'a> {
+) -> Text<'a> {
     let is_selected = i == ctx.selected_index;
     match entry {
         LibraryEntry::GroupHeader {
@@ -97,19 +111,23 @@ pub(crate) fn render_library_entry<'a>(
                         .copied()
                         .unwrap_or_default();
 
-                    let art_cols = super::layout::art_cols();
-                    let mut line1_spans = vec![Span::raw(" ")];
-                    line1_spans.extend(super::art_row_spans(&colors, 0, 1));
-                    line1_spans.push(Span::raw(" "));
+                    let thumbnail = super::layout::ArtColumn::thumbnail();
+                    let mut line1_spans =
+                        vec![Span::raw(" ".repeat(thumbnail.left_margin as usize))];
+                    if ctx.has_image_protocol {
+                        // Reserve space for the Image widget overlay.
+                        line1_spans.push(Span::raw(" ".repeat(thumbnail.cols as usize)));
+                    } else {
+                        line1_spans.extend(super::art_row_spans(&colors, 0, 1));
+                    }
+                    line1_spans.push(Span::raw(" ".repeat(thumbnail.right_margin as usize)));
                     line1_spans.push(Span::styled(
                         artist,
                         Style::default().fg(string_to_color(artist)),
                     ));
                     let line1 = Line::from(line1_spans);
 
-                    let left_content_width = super::layout::ART_LEFT_MARGIN as usize
-                        + art_cols as usize
-                        + 1
+                    let left_content_width = thumbnail.total_width() as usize
                         + album.width()
                         + year_str.width()
                         + added_str.width();
@@ -120,9 +138,14 @@ pub(crate) fn render_library_entry<'a>(
                         .saturating_sub(left_content_width + right_width)
                         .saturating_sub(1);
 
-                    let mut line2_spans = vec![Span::raw(" ")];
-                    line2_spans.extend(super::art_row_spans(&colors, 2, 3));
-                    line2_spans.push(Span::raw(" "));
+                    let mut line2_spans =
+                        vec![Span::raw(" ".repeat(thumbnail.left_margin as usize))];
+                    if ctx.has_image_protocol {
+                        line2_spans.push(Span::raw(" ".repeat(thumbnail.cols as usize)));
+                    } else {
+                        line2_spans.extend(super::art_row_spans(&colors, 2, 3));
+                    }
+                    line2_spans.push(Span::raw(" ".repeat(thumbnail.right_margin as usize)));
                     let content_start = line2_spans.len();
                     line2_spans.push(Span::styled(album, Style::default().fg(ctx.album_color)));
                     line2_spans.push(Span::styled(
@@ -146,7 +169,7 @@ pub(crate) fn render_library_entry<'a>(
                         }
                     }
 
-                    ListItem::new(vec![line1, Line::from(line2_spans)])
+                    Text::from(vec![line1, Line::from(line2_spans)])
                 }
                 AlbumArtStyle::BelowAlbum => {
                     let line1 = Line::from(vec![
@@ -187,7 +210,7 @@ pub(crate) fn render_library_entry<'a>(
                         }
                     }
 
-                    ListItem::new(vec![line1, Line::from(line2_spans)])
+                    Text::from(vec![line1, Line::from(line2_spans)])
                 }
             }
         }
@@ -246,41 +269,15 @@ pub(crate) fn render_library_entry<'a>(
                     underline_start = 1;
                 }
                 AlbumArtStyle::BelowAlbum => {
-                    let art_display_cols = ctx.large_art_cols;
-                    let indent_width = super::layout::LARGE_ART_LEFT_MARGIN
-                        + art_display_cols
-                        + super::layout::LARGE_ART_RIGHT_MARGIN;
+                    let indent_width = ctx.large_art.total_width() as usize;
 
-                    if *track_index_in_group < super::layout::LARGE_ART_TERM_ROWS {
-                        let grid = cover_art_id
-                            .as_ref()
-                            .and_then(|id| ctx.large_art_grids.get(id));
-                        let term_row = *track_index_in_group;
-                        let color_row_top = term_row * 2;
-                        let color_row_bot = color_row_top + 1;
-
-                        left_spans
-                            .push(Span::raw(" ".repeat(super::layout::LARGE_ART_LEFT_MARGIN)));
-                        if let Some(grid) = grid {
-                            for col in 0..art_display_cols {
-                                let fg = if color_row_top < grid.rows {
-                                    grid.colors[color_row_top][col]
-                                } else {
-                                    ctx.background_color
-                                };
-                                let bg = if color_row_bot < grid.rows {
-                                    grid.colors[color_row_bot][col]
-                                } else {
-                                    ctx.background_color
-                                };
-                                left_spans
-                                    .push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
-                            }
-                        } else {
-                            left_spans.push(Span::raw(" ".repeat(art_display_cols)));
-                        }
-                        left_spans
-                            .push(Span::raw(" ".repeat(super::layout::LARGE_ART_RIGHT_MARGIN)));
+                    if *track_index_in_group < ctx.large_art.rows as usize {
+                        large_art_row_spans(
+                            &mut left_spans,
+                            ctx,
+                            cover_art_id.as_ref(),
+                            *track_index_in_group,
+                        );
                     } else {
                         left_spans.push(Span::raw(" ".repeat(indent_width)));
                     }
@@ -355,55 +352,86 @@ pub(crate) fn render_library_entry<'a>(
                 }
             }
 
-            ListItem::new(Line::from(spans))
+            Text::from(Line::from(spans))
         }
         LibraryEntry::GroupSpacer {
             cover_art_id,
             art_row_index,
             ..
         } => {
-            let art_display_cols = ctx.large_art_cols;
-            let indent_width = super::layout::LARGE_ART_LEFT_MARGIN
-                + art_display_cols
-                + super::layout::LARGE_ART_RIGHT_MARGIN;
-
             let mut spans: Vec<Span<'_>> = Vec::new();
 
-            if *art_row_index < super::layout::LARGE_ART_TERM_ROWS {
-                let grid = cover_art_id
-                    .as_ref()
-                    .and_then(|id| ctx.large_art_grids.get(id));
-                let term_row = *art_row_index;
-                let color_row_top = term_row * 2;
-                let color_row_bot = color_row_top + 1;
-
-                spans.push(Span::raw(" ".repeat(super::layout::LARGE_ART_LEFT_MARGIN)));
-                if let Some(grid) = grid {
-                    for col in 0..art_display_cols {
-                        let fg = if color_row_top < grid.rows {
-                            grid.colors[color_row_top][col]
-                        } else {
-                            ctx.background_color
-                        };
-                        let bg = if color_row_bot < grid.rows {
-                            grid.colors[color_row_bot][col]
-                        } else {
-                            ctx.background_color
-                        };
-                        spans.push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
-                    }
-                } else {
-                    spans.push(Span::raw(" ".repeat(art_display_cols)));
-                }
-                spans.push(Span::raw(" ".repeat(super::layout::LARGE_ART_RIGHT_MARGIN)));
+            if *art_row_index < ctx.large_art.rows as usize {
+                large_art_row_spans(&mut spans, ctx, cover_art_id.as_ref(), *art_row_index);
             } else {
-                spans.push(Span::raw(" ".repeat(indent_width)));
+                spans.push(Span::raw(" ".repeat(ctx.large_art.total_width() as usize)));
             }
 
-            ListItem::new(Line::from(spans))
+            Text::from(Line::from(spans))
         }
-        LibraryEntry::AlbumGap => ListItem::new(Line::from("")),
+        LibraryEntry::AlbumGap => Text::from(Line::from("")),
     }
+}
+
+/// The visible-entry window and target area shared by the image overlay
+/// render passes drawn on top of the library `List`.
+struct OverlayWindow<'a> {
+    entries: &'a [LibraryEntry],
+    /// Index of the first visible entry.
+    item_offset: usize,
+    /// One past the index of the last visible entry.
+    item_end: usize,
+    /// The absolute line offset rendered at the top row of `inner`. The
+    /// list clips the first item's lines above the scroll offset, so this
+    /// is the scroll offset itself.
+    origin: i32,
+    /// The list area the overlays are clipped to.
+    inner: Rect,
+}
+
+/// Pushes one terminal row of the large BelowAlbum art column (margins
+/// included) onto `spans`.
+///
+/// When an image protocol is available, the art cells are blank — reserving
+/// the exact cells the `SlicedImage` widget is drawn over afterwards (both
+/// derive their geometry from [`EntryRenderContext::large_art`]). Otherwise
+/// the row is rendered as half-block characters from the color grid.
+fn large_art_row_spans<'a>(
+    spans: &mut Vec<Span<'a>>,
+    ctx: &EntryRenderContext<'a>,
+    cover_art_id: Option<&CoverArtId>,
+    term_row: usize,
+) {
+    let art = &ctx.large_art;
+    spans.push(Span::raw(" ".repeat(art.left_margin as usize)));
+
+    if ctx.has_image_protocol {
+        // Reserve blank cells for the SlicedImage overlay.
+        spans.push(Span::raw(" ".repeat(art.cols as usize)));
+    } else {
+        let grid = cover_art_id.and_then(|id| ctx.large_art_grids.get(id));
+        if let Some(grid) = grid {
+            let color_row_top = term_row * 2;
+            let color_row_bot = color_row_top + 1;
+            for col in 0..art.cols as usize {
+                let fg = if color_row_top < grid.rows {
+                    grid.colors[color_row_top][col]
+                } else {
+                    ctx.background_color
+                };
+                let bg = if color_row_bot < grid.rows {
+                    grid.colors[color_row_bot][col]
+                } else {
+                    ctx.background_color
+                };
+                spans.push(Span::styled("\u{2580}", Style::default().fg(fg).bg(bg)));
+            }
+        } else {
+            spans.push(Span::raw(" ".repeat(art.cols as usize)));
+        }
+    }
+
+    spans.push(Span::raw(" ".repeat(art.right_margin as usize)));
 }
 
 /// Converts a line offset to an item offset. Uses `>` so that an item whose
@@ -1048,9 +1076,14 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     // Pre-compute large art grids for visible tracks and spacers (used in BelowAlbum mode).
-    let large_art_cols = super::layout::large_art_cols() as usize;
-    let large_art_pixel_rows = super::layout::LARGE_ART_TERM_ROWS * 2;
-    let mut large_art_grids: HashMap<CoverArtId, ArtColorGrid> = HashMap::new();
+    let large_art = super::layout::ArtColumn::large();
+    let large_art_pixel_rows = large_art.rows as usize * 2;
+    let mut large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = HashMap::new();
+    // Pre-fetch sliced protocols for visible groups (used in BelowAlbum mode).
+    let mut sliced_protocols: HashMap<CoverArtId, Option<Arc<SlicedProtocol>>> = HashMap::new();
+    // Pre-fetch fixed-size protocols for visible group headers (used in LeftOfAlbum mode).
+    let mut thumbnail_protocols: HashMap<CoverArtId, Option<Arc<Protocol>>> = HashMap::new();
+    let has_picker = app.cover_art_cache.has_picker();
     if album_art_style == AlbumArtStyle::BelowAlbum {
         for entry in &entries[item_offset..visible_item_end] {
             let id = match entry {
@@ -1058,32 +1091,66 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     cover_art_id: Some(id),
                     track_index_in_group,
                     ..
-                } if *track_index_in_group < super::layout::LARGE_ART_TERM_ROWS => Some(id),
+                } if *track_index_in_group < large_art.rows as usize => Some(id),
                 LibraryEntry::GroupSpacer {
                     cover_art_id: Some(id),
                     ..
                 } => Some(id),
                 _ => None,
             };
-            if let Some(id) = id
-                && !large_art_grids.contains_key(id)
+            if let Some(id) = id {
+                if !large_art_grids.contains_key(id) {
+                    let (grid, _loading) = app.cover_art_cache.get_art_grid(
+                        &app.logic,
+                        Some(id),
+                        large_art.cols as usize,
+                        large_art_pixel_rows,
+                    );
+                    large_art_grids.insert(id.clone(), grid);
+                }
+                if has_picker && !sliced_protocols.contains_key(id) {
+                    let proto = app.cover_art_cache.get_sliced_protocol(
+                        &app.logic,
+                        Some(id),
+                        large_art.size(),
+                    );
+                    sliced_protocols.insert(id.clone(), proto);
+                }
+            }
+        }
+    } else if album_art_style == AlbumArtStyle::LeftOfAlbum && has_picker {
+        // Pre-fetch thumbnail-sized protocols for visible group headers.
+        let thumbnail = super::layout::ArtColumn::thumbnail();
+        for entry in &entries[item_offset..visible_item_end] {
+            if let LibraryEntry::GroupHeader {
+                cover_art_id: Some(id),
+                ..
+            } = entry
+                && !thumbnail_protocols.contains_key(id)
             {
-                let (grid, _loading) = app.cover_art_cache.get_art_grid(
+                let proto = app.cover_art_cache.get_protocol(
                     &app.logic,
                     Some(id),
-                    large_art_cols,
-                    large_art_pixel_rows,
+                    Resolution::Library,
+                    thumbnail.cols,
+                    thumbnail.rows,
                 );
-                large_art_grids.insert(id.clone(), grid);
+                thumbnail_protocols.insert(id.clone(), proto);
             }
         }
     }
+    // Determine whether image protocols are available for the art columns.
+    // When true, ListItems render blank spaces instead of half-block art,
+    // reserving space for Image/SlicedImage widgets rendered on top afterward.
+    let has_image_protocol = has_picker
+        && ((album_art_style == AlbumArtStyle::BelowAlbum && !sliced_protocols.is_empty())
+            || (album_art_style == AlbumArtStyle::LeftOfAlbum && !thumbnail_protocols.is_empty()));
 
     // Build ListItems only for the visible range.
     let render_ctx = EntryRenderContext {
         album_art_style,
         list_width,
-        large_art_cols,
+        large_art,
         background_color,
         album_color,
         album_year_color,
@@ -1101,14 +1168,30 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         hovered_entry_index,
         art_colors: &art_colors,
         large_art_grids: &large_art_grids,
+        has_image_protocol,
     };
 
+    // The scroll offset may point into the middle of the first item (a
+    // 2-line group header). The List can only render whole items, so clip
+    // the lines above the viewport from the first item's text; scrolling
+    // then moves with line precision instead of snapping per item, and
+    // absolute-line positioning (image overlays, mouse mapping) lines up
+    // with the rendered text.
+    let display_origin: usize = entries[..item_offset]
+        .iter()
+        .map(LibraryEntry::height)
+        .sum();
+    let partial_lines = centered_offset.saturating_sub(display_origin);
     let items: Vec<ListItem> = entries[item_offset..visible_item_end]
         .iter()
         .enumerate()
         .map(|(vi, entry)| {
             let i = item_offset + vi;
-            render_library_entry(entry, i, &render_ctx)
+            let mut text = render_library_entry(entry, i, &render_ctx);
+            if vi == 0 && partial_lines > 0 {
+                text.lines.drain(..partial_lines.min(text.lines.len()));
+            }
+            ListItem::new(text)
         })
         .collect();
 
@@ -1124,6 +1207,24 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
 
     frame.render_stateful_widget(list, inner, &mut state);
 
+    // Render image-protocol widgets on top of the List for art that has
+    // a graphics protocol available. This overlays the blank space reserved
+    // during List rendering.
+    if has_image_protocol {
+        let window = OverlayWindow {
+            entries,
+            item_offset,
+            item_end: visible_item_end,
+            origin: centered_offset as i32,
+            inner,
+        };
+        if album_art_style == AlbumArtStyle::BelowAlbum {
+            render_below_album_images(frame, &window, large_art, &sliced_protocols);
+        } else if album_art_style == AlbumArtStyle::LeftOfAlbum {
+            render_left_of_album_thumbnails(frame, &window, &thumbnail_protocols);
+        }
+    }
+
     // Render combined scrollbar + library indicator on the right column.
     render_scrollbar_with_library_indicator(
         frame,
@@ -1137,6 +1238,118 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
         text_color,
         background_color,
     );
+}
+
+/// Renders `SlicedImage` widgets on top of the List for visible groups in
+/// `BelowAlbum` mode.
+///
+/// Walks the flat library entries to find `GroupHeader` positions, computes
+/// the art Rect, and renders a `SlicedImage` with a `SignedPosition` that
+/// offsets the image start relative to the render area when a group is
+/// partially scrolled above the viewport.
+///
+/// Headers *before* `item_offset` are considered too: a group whose header
+/// has scrolled above the viewport can still have visible art rows beside
+/// its visible tracks.
+fn render_below_album_images(
+    frame: &mut Frame,
+    window: &OverlayWindow<'_>,
+    large_art: super::layout::ArtColumn,
+    sliced_protocols: &HashMap<CoverArtId, Option<Arc<SlicedProtocol>>>,
+) {
+    let inner = window.inner;
+
+    // Walk entries, tracking the absolute line offset of each group header.
+    let mut current_line = 0i32;
+    for entry in &window.entries[..window.item_end] {
+        if let LibraryEntry::GroupHeader {
+            cover_art_id: Some(id),
+            ..
+        } = entry
+            && let Some(Some(protocol)) = sliced_protocols.get(id)
+        {
+            // The art area starts below the 2-line GroupHeader.
+            let art_start_line = current_line + 2;
+
+            // Screen row of the art's top relative to `inner`; negative when
+            // the group is partially scrolled above the viewport.
+            let screen_offset = art_start_line - window.origin;
+
+            // Rows of the art hidden above the viewport.
+            let skip_rows = (-screen_offset).max(0);
+            if skip_rows < i32::from(large_art.rows) {
+                let art_y = inner.y + screen_offset.max(0) as u16;
+                let art_rect = large_art.rect(inner, art_y);
+                if art_rect.height > 0 && art_rect.width > 0 {
+                    // `SignedPosition.y` tells `SlicedImage` how many image
+                    // rows to skip from the top, showing only the lower
+                    // portion of a partially scrolled group's art.
+                    let position = SignedPosition {
+                        x: 0,
+                        y: -(skip_rows as i16),
+                    };
+                    frame.render_widget(SlicedImage::new(protocol, position), art_rect);
+                }
+            }
+        }
+
+        current_line += entry.height() as i32;
+    }
+}
+
+/// Renders `Image` widgets on top of the List for visible group headers in
+/// `LeftOfAlbum` mode (thumbnail-sized art).
+fn render_left_of_album_thumbnails(
+    frame: &mut Frame,
+    window: &OverlayWindow<'_>,
+    thumbnail_protocols: &HashMap<CoverArtId, Option<Arc<Protocol>>>,
+) {
+    let inner = window.inner;
+    let thumbnail = super::layout::ArtColumn::thumbnail();
+
+    let mut current_line = 0i32;
+    for (i, entry) in window.entries.iter().enumerate() {
+        if i < window.item_offset {
+            current_line += entry.height() as i32;
+            continue;
+        }
+        if i >= window.item_end {
+            break;
+        }
+
+        if let LibraryEntry::GroupHeader {
+            cover_art_id: Some(id),
+            ..
+        } = entry
+        {
+            let Some(Some(protocol)) = thumbnail_protocols.get(id) else {
+                current_line += entry.height() as i32;
+                continue;
+            };
+
+            // The thumbnail sits on the first row of the 2-line header.
+            // A header whose first line is clipped above the viewport is
+            // skipped: unlike `SlicedImage`, a plain `Image` cannot skip
+            // rows, and drawing it lower would cover the following entry.
+            let screen_offset = current_line - window.origin;
+            if screen_offset < 0 {
+                current_line += entry.height() as i32;
+                continue;
+            }
+            let header_y = inner.y + screen_offset as u16;
+            let art_rect = thumbnail.rect(inner, header_y);
+
+            if art_rect.height == 0 || art_rect.width == 0 {
+                current_line += entry.height() as i32;
+                continue;
+            }
+
+            frame.render_widget(ratatui::widgets::Clear, art_rect);
+            frame.render_widget(ratatui_image::Image::new(protocol), art_rect);
+        }
+
+        current_line += entry.height() as i32;
+    }
 }
 
 /// Map a [`HeartState`] to a TUI string and style.
@@ -1174,13 +1387,11 @@ fn is_over_below_album_art(
         LibraryEntry::GroupSpacer { art_row_index, .. } => *art_row_index,
         _ => return false,
     };
-    if track_index >= super::layout::LARGE_ART_TERM_ROWS {
+    let large_art = super::layout::ArtColumn::large();
+    if track_index >= large_art.rows as usize {
         return false;
     }
-    let art_end_col = area.x as usize
-        + super::layout::LARGE_ART_LEFT_MARGIN
-        + super::layout::large_art_cols() as usize
-        + super::layout::LARGE_ART_RIGHT_MARGIN;
+    let art_end_col = area.x as usize + large_art.total_width() as usize;
     (mx as usize) < art_end_col
 }
 
@@ -1836,4 +2047,148 @@ pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16
         .viewport
         .apply_scrollbar_drag(y, total_lines, library_area.y, library_area.height);
     app.library.snap_cursor_to_viewport_center();
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend, layout::Position};
+    use ratatui_image::picker::Picker;
+
+    use super::*;
+
+    fn test_header(id: &str) -> LibraryEntry {
+        LibraryEntry::GroupHeader {
+            artist: "artist".to_string(),
+            album: "album".to_string(),
+            year: None,
+            created: None,
+            duration: 0,
+            starred: false,
+            album_id: blackbird_core::blackbird_state::AlbumId(id.into()),
+            cover_art_id: Some(CoverArtId(id.into())),
+        }
+    }
+
+    fn test_track(id: &str, index: usize) -> LibraryEntry {
+        LibraryEntry::Track {
+            id: TrackId(format!("{id}-{index}")),
+            title: "track".to_string(),
+            artist: None,
+            album_artist: "artist".to_string(),
+            track_number: Some(index as u32 + 1),
+            disc_number: None,
+            duration: None,
+            starred: false,
+            play_count: None,
+            cover_art_id: Some(CoverArtId(id.into())),
+            track_index_in_group: index,
+        }
+    }
+
+    /// A header followed by enough tracks to hold a 4-row art area.
+    fn test_entries(id: &str) -> Vec<LibraryEntry> {
+        let mut entries = vec![test_header(id)];
+        entries.extend((0..6).map(|i| test_track(id, i)));
+        entries
+    }
+
+    /// A red 80×80 sliced protocol filling the test art column exactly (8×4
+    /// cells at the halfblocks picker's 10×20 font).
+    fn test_sliced_protocols(id: &str) -> HashMap<CoverArtId, Option<Arc<SlicedProtocol>>> {
+        use image::{ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(80, 80, Rgba([255, 0, 0, 255]));
+        let mut png = Vec::new();
+        PngEncoder::new(&mut png)
+            .write_image(img.as_raw(), 80, 80, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        let dyn_img = image::load_from_memory(&png).unwrap();
+        let sliced = SlicedProtocol::new(
+            &Picker::halfblocks(),
+            dyn_img,
+            Some(ratatui::layout::Size::new(8, 4)),
+        )
+        .unwrap();
+
+        let mut map = HashMap::new();
+        map.insert(CoverArtId(id.into()), Some(Arc::new(sliced)));
+        map
+    }
+
+    fn test_art_column() -> super::super::layout::ArtColumn {
+        super::super::layout::ArtColumn {
+            left_margin: 1,
+            cols: 8,
+            right_margin: 1,
+            rows: 4,
+        }
+    }
+
+    /// Returns which rows of the terminal have art (colored cells) in the
+    /// art columns after rendering the below-album overlay.
+    fn art_rows_after_render(
+        entries: &[LibraryEntry],
+        item_offset: usize,
+        origin: i32,
+    ) -> Vec<u16> {
+        let protocols = test_sliced_protocols("a");
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| {
+                let window = OverlayWindow {
+                    entries,
+                    item_offset,
+                    item_end: entries.len(),
+                    origin,
+                    inner: Rect::new(0, 0, 20, 10),
+                };
+                render_below_album_images(frame, &window, test_art_column(), &protocols);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        (0..10u16)
+            .filter(|y| {
+                (1..9u16).any(|x| {
+                    let cell = buffer.cell(Position { x, y: *y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                })
+            })
+            .collect()
+    }
+
+    /// The scroll offset points one line into the 2-line header: the list
+    /// clips the header's first line, so its album line renders at row 0
+    /// and the art must start at row 1 — aligned with the tracks, without
+    /// covering the album line.
+    #[test]
+    fn test_below_album_art_aligns_with_partially_scrolled_header() {
+        let entries = test_entries("a");
+
+        // Scroll offset 1 is inside the header; the header item is still
+        // the first rendered item (its first line clipped).
+        let item_offset = compute_item_offset(&entries, 1);
+        assert_eq!(item_offset, 0);
+
+        assert_eq!(
+            art_rows_after_render(&entries, item_offset, 1),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    /// A group whose header has scrolled above the viewport still renders
+    /// the visible lower portion of its art beside its visible tracks.
+    #[test]
+    fn test_below_album_art_renders_for_scrolled_off_header() {
+        let entries = test_entries("a");
+
+        // Scroll two art rows past the header: the first rendered item is
+        // the third track, and the last two art rows are still visible.
+        let item_offset = compute_item_offset(&entries, 4);
+        assert_eq!(item_offset, 3);
+
+        assert_eq!(art_rows_after_render(&entries, item_offset, 4), vec![0, 1]);
+    }
 }
