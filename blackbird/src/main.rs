@@ -333,11 +333,10 @@ impl eframe::App for App {
                 .set_replaygain_preamp_db(cfg.shared.playback.replaygain_preamp_db);
         }
         self.logic.update();
-        self.cover_art_cache.update(ctx);
-        // Preload album art for tracks surrounding the next track in queue
-        self.cover_art_cache
-            .preload_next_track_surrounding_art(&self.logic);
-        self.cover_art_cache.tick_prefetch(&self.logic);
+        // Reconcile against the previous frame's demand, then start a new
+        // demand frame for this frame's draw.
+        self.cover_art_cache.update(ctx, &self.logic);
+        self.cover_art_cache.begin_frame();
 
         // Update tray menu
         #[cfg(feature = "tray-icon")]

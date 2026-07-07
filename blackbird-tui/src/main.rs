@@ -5,6 +5,7 @@ mod keys;
 mod log_buffer;
 mod ui;
 
+use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use app::{App, FocusedPanel};
@@ -361,6 +362,16 @@ fn run_app(
 
         if last_tick.elapsed() >= tick_rate {
             app.tick();
+            // Delete the terminal images for cover art evicted during the
+            // tick, so a graphics-protocol terminal's image store stays
+            // bounded to what is on screen. Written after the tick (and thus
+            // after the most recent draw stopped placing that art), and
+            // harmless if the terminal already dropped the image.
+            if let Some(deletes) = app.cover_art_cache.take_pending_deletes() {
+                let backend = terminal.backend_mut();
+                let _ = backend.write_all(deletes.as_bytes());
+                let _ = backend.flush();
+            }
             #[cfg(feature = "media-controls")]
             if let Some(mc) = media_controls.as_mut() {
                 mc.update();

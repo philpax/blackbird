@@ -513,6 +513,16 @@ impl LibraryEntry {
             | LibraryEntry::AlbumGap => 1,
         }
     }
+
+    /// The cover art id of the group this entry belongs to, if any.
+    pub fn cover_art_id(&self) -> Option<&CoverArtId> {
+        match self {
+            LibraryEntry::GroupHeader { cover_art_id, .. }
+            | LibraryEntry::Track { cover_art_id, .. }
+            | LibraryEntry::GroupSpacer { cover_art_id, .. } => cover_art_id.as_ref(),
+            LibraryEntry::AlbumGap => None,
+        }
+    }
 }
 
 /// Assembles a flat list of library entries from `(header, tracks)` group pairs,
@@ -1059,6 +1069,28 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     }
     visible_item_end = visible_item_end.min(entries.len());
 
+    // Demand art for one page of entries above and below the viewport at
+    // `Nearby` priority, so scrolling doesn't flash placeholder art. The
+    // margins are walked by entry height to cover a full page of lines each.
+    let mut nearby_start = item_offset;
+    let mut margin_lines = 0usize;
+    while nearby_start > 0 && margin_lines < visible_height {
+        nearby_start -= 1;
+        margin_lines += entries[nearby_start].height();
+    }
+    let mut nearby_end = visible_item_end;
+    let mut margin_lines = 0usize;
+    while nearby_end < entries.len() && margin_lines < visible_height {
+        margin_lines += entries[nearby_end].height();
+        nearby_end += 1;
+    }
+    for entry in entries[nearby_start..item_offset]
+        .iter()
+        .chain(&entries[visible_item_end..nearby_end])
+    {
+        app.cover_art_cache.demand_nearby(entry.cover_art_id());
+    }
+
     // Pre-compute quadrant colors only for visible group headers (used in LeftOfAlbum mode).
     let mut art_colors: HashMap<CoverArtId, QuadrantColors> = HashMap::new();
     if album_art_style == AlbumArtStyle::LeftOfAlbum {
@@ -1069,7 +1101,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             } = entry
                 && !art_colors.contains_key(id)
             {
-                let colors = app.cover_art_cache.get(&app.logic, Some(id));
+                let colors = app.cover_art_cache.get(Some(id));
                 art_colors.insert(id.clone(), colors);
             }
         }
@@ -1101,7 +1133,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             if let Some(id) = id {
                 if !large_art_grids.contains_key(id) {
                     let (grid, _loading) = app.cover_art_cache.get_art_grid(
-                        &app.logic,
                         Some(id),
                         large_art.cols as usize,
                         large_art_pixel_rows,
@@ -1109,11 +1140,9 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                     large_art_grids.insert(id.clone(), grid);
                 }
                 if has_picker && !sliced_protocols.contains_key(id) {
-                    let proto = app.cover_art_cache.get_sliced_protocol(
-                        &app.logic,
-                        Some(id),
-                        large_art.size(),
-                    );
+                    let proto = app
+                        .cover_art_cache
+                        .get_sliced_protocol(Some(id), large_art.size());
                     sliced_protocols.insert(id.clone(), proto);
                 }
             }
@@ -1129,7 +1158,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
                 && !thumbnail_protocols.contains_key(id)
             {
                 let proto = app.cover_art_cache.get_protocol(
-                    &app.logic,
                     Some(id),
                     Resolution::Library,
                     thumbnail.cols,

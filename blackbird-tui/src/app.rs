@@ -124,14 +124,7 @@ impl App {
         let mut changed = false;
 
         changed |= self.logic.update();
-        // Refresh visible-art timestamps before `update()` checks for stale
-        // entries, so cover art shown in the most recent draw stays alive
-        // even when the UI isn't redrawing (e.g. while paused).
-        self.cover_art_cache.keep_visible_alive();
-        changed |= self.cover_art_cache.update();
-        self.cover_art_cache
-            .preload_next_track_surrounding_art(&self.logic);
-        self.cover_art_cache.tick_prefetch(&self.logic);
+        changed |= self.cover_art_cache.update(&self.logic);
 
         // Process playback events.
         while let Ok(event) = self.playback_to_logic_rx.try_recv() {

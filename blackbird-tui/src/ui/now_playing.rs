@@ -174,7 +174,6 @@ fn draw_album_art(
     // `&mut self`), so we can use the result during rendering without a
     // borrow conflict.
     let protocol = app.cover_art_cache.get_protocol(
-        &app.logic,
         cover_art_id,
         Resolution::Library,
         thumbnail.cols,
@@ -191,7 +190,7 @@ fn draw_album_art(
 
     // Fall back to the existing 4×4 half-block rendering.
     let left_x = area.x + thumbnail.left_margin;
-    let art = app.cover_art_cache.get(&app.logic, cover_art_id);
+    let art = app.cover_art_cache.get(cover_art_id);
     for term_row in 0..thumbnail.rows.min(area.height) {
         let top = (term_row * 2) as usize;
         let spans = super::art_row_spans(&art, top, top + 1);

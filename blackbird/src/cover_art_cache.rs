@@ -5,7 +5,10 @@ use blackbird_core::{CoverArt, Logic, blackbird_state::CoverArtId};
 
 pub use cover_art_cache::CachePriority;
 
-const MAX_CACHE_SIZE: usize = 100;
+/// Sized for the demand set: up to three pages of albums (the viewport plus
+/// a `Nearby` page either side) and the next-track neighbourhood, with
+/// headroom for recently offscreen art.
+const MAX_CACHE_SIZE: usize = 150;
 const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone)]
@@ -44,8 +47,18 @@ impl CoverArtCache {
         }
     }
 
-    pub fn update(&mut self, ctx: &egui::Context) {
-        let result = self.inner.update();
+    /// Start a new demand frame. Call at the start of each egui frame,
+    /// before any drawing; the draw's `get` calls then rebuild the demand
+    /// set from what is actually displayed.
+    pub fn begin_frame(&mut self) {
+        self.inner.begin_frame();
+    }
+
+    /// Reconcile the cache against the demand accumulated by the previous
+    /// frame's draw: fetch missing art, evict undemanded art, and advance
+    /// the background prefetcher.
+    pub fn update(&mut self, ctx: &egui::Context, logic: &Logic) {
+        let result = self.inner.update(logic);
         for cover_art_id in result.evicted {
             // Forget all three URI variants.
             ctx.forget_image(&format!("bytes://low-res/{}", cover_art_id.0));
@@ -54,16 +67,22 @@ impl CoverArtCache {
         }
     }
 
+    /// Record a `Nearby` demand for library-resolution art: albums just
+    /// outside the viewport, kept warm so scrolling doesn't flash
+    /// placeholder art.
+    pub fn demand_nearby(&mut self, cover_art_id: Option<&CoverArtId>) {
+        self.inner
+            .demand(cover_art_id, Resolution::Library, CachePriority::Nearby);
+    }
+
+    /// Record demand for library-resolution art and return the best
+    /// already-loaded image source. Fetching happens in [`update`](Self::update).
     pub fn get(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         priority: CachePriority,
     ) -> egui::ImageSource<'static> {
-        match self
-            .inner
-            .get(logic, cover_art_id, Resolution::Library, priority)
-        {
+        match self.inner.get(cover_art_id, Resolution::Library, priority) {
             Some(result) => result.data.image_source.clone(),
             None => egui::include_image!("../assets/no-album-art.png"),
         }
@@ -73,29 +92,18 @@ impl CoverArtCache {
     /// Falls back to lower resolutions while full-res is loading.
     pub fn get_full_res(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
     ) -> egui::ImageSource<'static> {
-        match self.inner.get(
-            logic,
-            cover_art_id,
-            Resolution::Full,
-            CachePriority::Visible,
-        ) {
+        match self
+            .inner
+            .get(cover_art_id, Resolution::Full, CachePriority::Visible)
+        {
             Some(result) => result.data.image_source.clone(),
             None => egui::include_image!("../assets/no-album-art.png"),
         }
     }
 
-    pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
-        self.inner.preload_next_track_surrounding_art(logic);
-    }
-
     pub fn populate_prefetch_queue(&mut self, cover_art_ids: Vec<CoverArtId>) {
         self.inner.populate_prefetch_queue(cover_art_ids);
-    }
-
-    pub fn tick_prefetch(&mut self, logic: &Logic) {
-        self.inner.tick_prefetch(logic);
     }
 }

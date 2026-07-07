@@ -96,6 +96,10 @@ pub struct CoverArt {
     pub requested_size: Option<usize>,
 }
 
+/// How many albums either side of the next track's album have their cover
+/// art kept warm, approximating a page of albums in either client.
+pub const NEXT_TRACK_SURROUNDING_GROUPS: usize = 3;
+
 #[derive(Debug, Clone)]
 pub struct LyricsData {
     pub track_id: TrackId,
@@ -873,33 +877,41 @@ impl Logic {
         }
     }
 
-    /// Get cover art IDs for albums surrounding (and including) the next track in the queue.
-    /// Returns an empty vector if there is no next track or if the library is not populated.
+    /// The cover art ID for the album containing the next track in the
+    /// queue. Returns `None` if there is no next track or if the library is
+    /// not populated.
+    ///
+    /// See also [`get_next_track_surrounding_cover_art_ids`](Self::get_next_track_surrounding_cover_art_ids).
+    pub fn get_next_track_cover_art_id(&self) -> Option<CoverArtId> {
+        let st = self.read_state();
+        let next_track_id = self.compute_next_track_id()?;
+        let &next_group_idx = st.library.track_to_group_index.get(&next_track_id)?;
+        st.library.groups[next_group_idx].cover_art_id.clone()
+    }
+
+    /// Get cover art IDs for the albums within
+    /// [`NEXT_TRACK_SURROUNDING_GROUPS`] either side of the next track's
+    /// album, excluding that album itself (which
+    /// [`get_next_track_cover_art_id`](Self::get_next_track_cover_art_id)
+    /// covers). Returns an empty vector if there is no next track or if the
+    /// library is not populated.
     pub fn get_next_track_surrounding_cover_art_ids(&self) -> Vec<CoverArtId> {
         let st = self.read_state();
 
-        // Get the next track ID
         let Some(next_track_id) = self.compute_next_track_id() else {
             return vec![];
         };
-
-        // Find the group index for the next track
         let Some(&next_group_idx) = st.library.track_to_group_index.get(&next_track_id) else {
             return vec![];
         };
 
-        let mut cover_art_ids = vec![];
         let groups = &st.library.groups;
-
-        // We would ostensibly include the groups before and after the next track's group here,
-        // but the naive implementation doesn't work, and I have no interest in debugging it today.
-
-        // Get the next track's group (center)
-        if let Some(cover_art_id) = &groups[next_group_idx].cover_art_id {
-            cover_art_ids.push(cover_art_id.clone());
-        }
-
-        cover_art_ids
+        let start = next_group_idx.saturating_sub(NEXT_TRACK_SURROUNDING_GROUPS);
+        let end = (next_group_idx + NEXT_TRACK_SURROUNDING_GROUPS + 1).min(groups.len());
+        (start..end)
+            .filter(|&idx| idx != next_group_idx)
+            .filter_map(|idx| groups[idx].cover_art_id.clone())
+            .collect()
     }
 
     pub fn set_scroll_target(&self, track_id: &TrackId) {

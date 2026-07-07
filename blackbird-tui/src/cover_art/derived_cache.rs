@@ -203,9 +203,20 @@ where
         changed
     }
 
-    /// Removes every entry whose key matches the predicate.
-    pub(super) fn evict_matching(&mut self, matches: impl Fn(&K) -> bool) {
-        self.entries.retain(|key, _| !matches(key));
+    /// Removes every entry whose key matches the predicate, returning the
+    /// removed keys so the caller can release any external resources keyed by
+    /// them (e.g. transmitted terminal images).
+    pub(super) fn evict_matching(&mut self, matches: impl Fn(&K) -> bool) -> Vec<K> {
+        let mut removed = Vec::new();
+        self.entries.retain(|key, _| {
+            if matches(key) {
+                removed.push(key.clone());
+                false
+            } else {
+                true
+            }
+        });
+        removed
     }
 }
 

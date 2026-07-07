@@ -84,7 +84,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
 
     // Compute art color grid using full-resolution data when available.
     let (grid, loading) = app.cover_art_cache.get_full_res_art_grid(
-        &app.logic,
         Some(&cover_art_id),
         art_cols,
         actual_art_pixel_rows,
@@ -93,7 +92,6 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     // Request a graphics-protocol image (Kitty/iTerm2/Sixel/halfblocks).
     // Returns None while computing or when no picker is configured.
     let protocol = app.cover_art_cache.get_protocol(
-        &app.logic,
         Some(&cover_art_id),
         Resolution::Full,
         art_cols as u16,
