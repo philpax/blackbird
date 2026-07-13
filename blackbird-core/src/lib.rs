@@ -471,22 +471,38 @@ impl Logic {
     }
 
     pub fn seek_current(&self, position: Duration) {
-        // Optimistically update the displayed position so the UI reflects
-        // the seek target immediately, even if the playback thread's
-        // debounce delays the actual hardware seek.
-        if let Some(tap) = &mut self.write_state().current_track_and_position {
-            tap.position = position;
-        }
+        self.apply_seek_to_state(position);
         self.send_to_playback(LogicToPlaybackMessage::Seek(position));
     }
 
     /// Seek without debouncing. Used on scrub bar release to ensure the
     /// final position is always applied.
     pub fn seek_current_immediate(&self, position: Duration) {
-        if let Some(tap) = &mut self.write_state().current_track_and_position {
-            tap.position = position;
-        }
+        self.apply_seek_to_state(position);
         self.send_to_playback(LogicToPlaybackMessage::SeekImmediate(position));
+    }
+
+    /// Optimistically updates the displayed position so the UI reflects the
+    /// seek target immediately, even if the playback thread's debounce delays
+    /// the actual hardware seek.
+    ///
+    /// A seek back to the very start is treated as a restart of the track,
+    /// which begins a new listening session for scrobbling purposes. Without
+    /// this, a rewound track that had already scrobbled would never scrobble
+    /// again, as the seek does not go through `TrackStarted`.
+    fn apply_seek_to_state(&self, position: Duration) {
+        let mut st = self.write_state();
+        let Some(tap) = &mut st.current_track_and_position else {
+            return;
+        };
+        tap.position = position;
+        let track_id = tap.track_id.clone();
+        if position == Duration::ZERO {
+            st.scrobble_state = ScrobbleState {
+                track_id: Some(track_id),
+                ..Default::default()
+            };
+        }
     }
 
     pub fn next(&self) {
