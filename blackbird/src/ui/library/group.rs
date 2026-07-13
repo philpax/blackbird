@@ -68,11 +68,9 @@ pub fn ui<'a>(
             ui.add_space(LEFT_OF_ALBUM_ART_LEFT_MARGIN);
             let art_rect =
                 egui::Rect::from_min_size(ui.cursor().left_top(), vec2(art_size, art_size));
-            egui::Image::new(cover_art_cache.get(
-                logic,
-                group.cover_art_id.as_ref(),
-                CachePriority::Visible,
-            ))
+            egui::Image::new(
+                cover_art_cache.get(group.cover_art_id.as_ref(), CachePriority::Visible),
+            )
             .show_loading_spinner(false)
             .paint_at(ui, art_rect);
             // Sense hover on the art area.
@@ -198,11 +196,9 @@ pub fn ui<'a>(
                     max: image_pos + vec2(image_size, image_size),
                 };
 
-                egui::Image::new(cover_art_cache.get(
-                    logic,
-                    group.cover_art_id.as_ref(),
-                    CachePriority::Visible,
-                ))
+                egui::Image::new(
+                    cover_art_cache.get(group.cover_art_id.as_ref(), CachePriority::Visible),
+                )
                 .show_loading_spinner(false)
                 .paint_at(ui, art_rect);
                 ui.allocate_rect(art_rect, egui::Sense::hover());

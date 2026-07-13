@@ -65,6 +65,12 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
 ] }
 
+# philpax/ratatui-image fork adding kitty image deletion (`delete_image_sequence`)
+# and `Picker::is_tmux()`, used by the TUI to bound the terminal's image store.
+# See blackbird-tui/src/cover_art/mod.rs.
+[patch.crates-io]
+ratatui-image = { git = "https://github.com/philpax/ratatui-image", branch = "delete-image-sequence" }
+
 [profile.dev.package.image]
 opt-level = 3
 

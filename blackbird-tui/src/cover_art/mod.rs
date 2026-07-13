@@ -17,7 +17,11 @@ pub use quantize::{
     ArtColorGrid, ArtColors, QuadrantColors, compute_art_grid, compute_quadrant_colors,
 };
 
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use blackbird_client_shared::{
     cover_art_cache::{self, CachePriority, ClientData, Resolution},
@@ -29,13 +33,21 @@ use image::{
     imageops::{self, FilterType},
 };
 use ratatui::layout::Size;
-use ratatui_image::{FontSize, Resize, picker::Picker, protocol::Protocol, sliced::SlicedProtocol};
+use ratatui_image::{
+    FontSize, Resize,
+    picker::{Picker, ProtocolType},
+    protocol::{Protocol, kitty::Kitty},
+    sliced::SlicedProtocol,
+};
 
 use derived_cache::DerivedCache;
 use quantize::image_aspect_ratio;
 
 const POOL_SIZE: usize = 4;
-const MAX_CACHE_SIZE: usize = 50;
+/// Sized for the demand set: up to three pages of library entries (the
+/// viewport plus a `Nearby` page either side) and the next-track
+/// neighbourhood, with headroom for recently offscreen art.
+const MAX_CACHE_SIZE: usize = 150;
 const CACHE_ENTRY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Clone)]
@@ -79,13 +91,6 @@ pub struct CoverArtCache {
     /// Color grids for the library BelowAlbum art and the overlay, keyed by
     /// `(CoverArtId, cols, rows)`.
     grids: DerivedCache<GridKey, ArtColorGrid>,
-    /// `(CoverArtId, Resolution)` pairs requested with `Visible` priority
-    /// since the last `begin_frame()`. The TUI uses lazy redraw, so entries
-    /// in this set are touched every tick via `keep_visible_alive()` to keep
-    /// the cache from timing them out while no draws are happening (e.g.
-    /// while paused), which would otherwise cause a high-res → low-res →
-    /// high-res flicker on the next redraw.
-    visible_this_frame: HashSet<(CoverArtId, Resolution)>,
 
     // ── Image protocol (graphics protocol) caches ──────────────────────────
     /// The terminal graphics protocol picker, set via [`set_picker`].
@@ -104,6 +109,40 @@ pub struct CoverArtCache {
     /// size (`large_art_cols()`), so a resize produces new keys and
     /// recomputes the art.
     sliced_protocols: DerivedCache<ProtocolKey, SlicedProtocol>,
+    /// Protocol keys drawn since the last [`begin_frame`]. An image protocol
+    /// transmits its image to the terminal once, then only emits lightweight
+    /// placeholder cells that reference it by id; the transmitted image
+    /// persists in the terminal's own store. [`update`] evicts protocols not
+    /// drawn in the most recent frame, and deletes their terminal images (see
+    /// `protocol_ids`), so the terminal's store stays bounded to what is on
+    /// screen. Tracked separately per cache because a fixed-size and a sliced
+    /// protocol can share a key.
+    ///
+    /// [`begin_frame`]: CoverArtCache::begin_frame
+    /// [`update`]: CoverArtCache::update
+    visible_protocols: HashSet<ProtocolKey>,
+    visible_sliced_protocols: HashSet<ProtocolKey>,
+    /// The kitty image id assigned to each live protocol, so its terminal
+    /// image can be deleted on eviction and overwritten (rather than
+    /// duplicated) when the same key is rebuilt at a higher resolution.
+    /// Without this bookkeeping the terminal accumulates an image per
+    /// distinct (art, size) ever shown until it hits its own storage limit
+    /// and evicts images that are still on screen, blanking them. Separate
+    /// maps mirror the two protocol caches; both draw ids from
+    /// `next_protocol_id`.
+    protocol_ids: HashMap<ProtocolKey, u32>,
+    sliced_protocol_ids: HashMap<ProtocolKey, u32>,
+    /// Monotonic source of kitty image ids. Starts at 0 and pre-increments,
+    /// so ids begin at 1 (id 0 is avoided) and never repeat within a session.
+    next_protocol_id: u32,
+    /// Kitty image-deletion escape sequences accumulated during [`update`],
+    /// drained by the render loop via [`take_pending_deletes`] and written to
+    /// the terminal. Deferred rather than written inline because the cache
+    /// has no terminal handle.
+    ///
+    /// [`update`]: CoverArtCache::update
+    /// [`take_pending_deletes`]: CoverArtCache::take_pending_deletes
+    pending_deletes: String,
 }
 
 impl CoverArtCache {
@@ -117,10 +156,15 @@ impl CoverArtCache {
             pool: ThreadPool::new(POOL_SIZE),
             colors: DerivedCache::new("thumbnail colors"),
             grids: DerivedCache::new("color grid"),
-            visible_this_frame: HashSet::new(),
             protocol_picker: None,
             protocols: DerivedCache::new("image protocol"),
             sliced_protocols: DerivedCache::new("sliced image protocol"),
+            visible_protocols: HashSet::new(),
+            visible_sliced_protocols: HashSet::new(),
+            protocol_ids: HashMap::new(),
+            sliced_protocol_ids: HashMap::new(),
+            next_protocol_id: 0,
+            pending_deletes: String::new(),
         }
     }
 
@@ -136,44 +180,80 @@ impl CoverArtCache {
         self.protocol_picker.is_some()
     }
 
-    /// Reset the per-frame visibility set. Call once at the start of each
-    /// draw; the `get*` methods then re-populate it as visible art is
-    /// requested.
+    /// Start a new demand frame in the underlying cache, and reset the set
+    /// of protocols considered visible. Call once at the start of each draw;
+    /// the `get*` methods then rebuild both the demand set and the visible-
+    /// protocol set from the art that is actually rendered. Between draws
+    /// the last frame's demand and visibility stay in effect, keeping
+    /// visible art alive while the UI is idle (e.g. while paused).
     pub fn begin_frame(&mut self) {
-        self.visible_this_frame.clear();
+        self.inner.begin_frame();
+        self.visible_protocols.clear();
+        self.visible_sliced_protocols.clear();
     }
 
-    /// Refresh `last_requested` on every entry that was requested with
-    /// `Visible` priority during the most recent draw. The TUI only redraws
-    /// when something changes, so without this the cache would time out
-    /// visible art after `CACHE_ENTRY_TIMEOUT` whenever the UI is idle.
-    pub fn keep_visible_alive(&mut self) {
-        for (id, resolution) in &self.visible_this_frame {
-            self.inner.touch_for_keepalive(id, *resolution);
-        }
-    }
-
-    /// Processes incoming cover art data and color/grid computations.
+    /// Reconciles the underlying cache against the current demand (fetches,
+    /// eviction, prefetch) and drains completed color/grid computations.
     /// Returns `true` if any visual state changed.
-    pub fn update(&mut self) -> bool {
+    pub fn update(&mut self, logic: &Logic) -> bool {
         let mut changed = false;
 
-        let result = self.inner.update();
+        let result = self.inner.update(logic);
         if !result.evicted.is_empty() || !result.upgraded.is_empty() {
             changed = true;
         }
+        let is_tmux = self.protocol_picker.as_ref().is_some_and(Picker::is_tmux);
         for id in &result.evicted {
             self.colors.evict_matching(|color_id| color_id == id);
             self.grids.evict_matching(|(grid_id, _, _)| grid_id == id);
-            // Remove protocol caches for this id. Kitty virtual placements
-            // are removed by the terminal itself once their unicode
-            // placeholders stop being drawn; the transmitted image data
-            // persists until the terminal evicts it from its own store.
-            self.protocols
+            let evicted = self
+                .protocols
                 .evict_matching(|(proto_id, _, _)| proto_id == id);
-            self.sliced_protocols
+            forget_protocol_images(
+                &mut self.pending_deletes,
+                &mut self.protocol_ids,
+                is_tmux,
+                &evicted,
+            );
+            let evicted = self
+                .sliced_protocols
                 .evict_matching(|(sliced_id, _, _)| sliced_id == id);
+            forget_protocol_images(
+                &mut self.pending_deletes,
+                &mut self.sliced_protocol_ids,
+                is_tmux,
+                &evicted,
+            );
         }
+
+        // Evict image protocols whose art was not drawn in the most recent
+        // frame, so re-entering the viewport rebuilds and re-transmits them,
+        // and delete their terminal images so the terminal's store stays
+        // bounded to what is on screen (see the `protocol_ids` field).
+        // Undrawn protocols aren't visible, so dropping them changes nothing
+        // on screen — hence no `changed` update here. Color grids have no
+        // terminal-side state and are left tied to the byte cache above.
+        let evicted = {
+            let visible = &self.visible_protocols;
+            self.protocols.evict_matching(|key| !visible.contains(key))
+        };
+        forget_protocol_images(
+            &mut self.pending_deletes,
+            &mut self.protocol_ids,
+            is_tmux,
+            &evicted,
+        );
+        let evicted = {
+            let visible = &self.visible_sliced_protocols;
+            self.sliced_protocols
+                .evict_matching(|key| !visible.contains(key))
+        };
+        forget_protocol_images(
+            &mut self.pending_deletes,
+            &mut self.sliced_protocol_ids,
+            is_tmux,
+            &evicted,
+        );
 
         // Upgraded entries need no explicit invalidation: `changed` above
         // forces a redraw, and the `get*` methods compare the cached source
@@ -187,18 +267,34 @@ impl CoverArtCache {
         changed
     }
 
+    /// Takes the kitty image-deletion escape sequences accumulated since the
+    /// last call, for the render loop to write to the terminal. Returns
+    /// `None` when there is nothing to delete. Deleting an image the terminal
+    /// no longer holds is a harmless no-op, so the exact write timing does
+    /// not matter as long as it follows the frame that stopped drawing the
+    /// art (which the render loop guarantees by draining after `update`).
+    pub fn take_pending_deletes(&mut self) -> Option<String> {
+        (!self.pending_deletes.is_empty()).then(|| std::mem::take(&mut self.pending_deletes))
+    }
+
+    /// Record a `Nearby` demand for library-resolution art: albums just
+    /// outside the viewport, kept warm so scrolling doesn't flash
+    /// placeholder art.
+    pub fn demand_nearby(&mut self, cover_art_id: Option<&CoverArtId>) {
+        self.inner
+            .demand(cover_art_id, Resolution::Library, CachePriority::Nearby);
+    }
+
     /// Get quadrant colors for a cover art entry at low resolution.
     /// Used for LeftOfAlbum thumbnail colors.
-    pub fn get(&mut self, logic: &Logic, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
+    pub fn get(&mut self, cover_art_id: Option<&CoverArtId>) -> QuadrantColors {
         let Some(id) = cover_art_id else {
             return QuadrantColors::default();
         };
 
-        self.visible_this_frame
-            .insert((id.clone(), Resolution::Low));
         let _ = self
             .inner
-            .get(logic, Some(id), Resolution::Low, CachePriority::Visible);
+            .get(Some(id), Resolution::Low, CachePriority::Visible);
 
         // The colors always come from the 16px low-res image, which is
         // trivially cheap to process — compute synchronously so the first
@@ -223,37 +319,34 @@ impl CoverArtCache {
     }
 
     /// Returns a variable-size color grid for library BelowAlbum display.
-    /// Requests library-resolution data and computes a grid in a background
+    /// Demands library-resolution data and computes a grid in a background
     /// thread; returns a fallback grid while computing.
     pub fn get_art_grid(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
     ) -> (Arc<ArtColorGrid>, bool) {
-        self.art_grid_at(logic, cover_art_id, cols, rows, Resolution::Library)
+        self.art_grid_at(cover_art_id, cols, rows, Resolution::Library)
     }
 
     /// Returns a variable-size color grid for the overlay using full-resolution
     /// data. Falls back to lower resolutions while full-res is loading.
     pub fn get_full_res_art_grid(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
     ) -> (Arc<ArtColorGrid>, bool) {
-        self.art_grid_at(logic, cover_art_id, cols, rows, Resolution::Full)
+        self.art_grid_at(cover_art_id, cols, rows, Resolution::Full)
     }
 
     /// Returns a color grid computed from the best available data at or
-    /// below `resolution`, requesting that resolution from the server. The
-    /// boolean is `true` while better data is loading or a recompute is in
-    /// flight.
+    /// below `resolution`, demanding that resolution from the cache (which
+    /// fetches it on the next `update`). The boolean is `true` while better
+    /// data is loading or a recompute is in flight.
     fn art_grid_at(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         cols: usize,
         rows: usize,
@@ -263,13 +356,8 @@ impl CoverArtCache {
             return (Arc::new(ArtColorGrid::empty(cols, rows)), false);
         };
 
-        self.visible_this_frame.insert((id.clone(), resolution));
-
-        // Request data at the target resolution (triggers a network fetch if
-        // needed).
-        let _ = self
-            .inner
-            .get(logic, Some(id), resolution, CachePriority::Visible);
+        // Record demand at the target resolution; `update()` fetches it.
+        let _ = self.inner.get(Some(id), resolution, CachePriority::Visible);
 
         let key = (id.clone(), cols, rows);
 
@@ -302,19 +390,9 @@ impl CoverArtCache {
         (grid, loading)
     }
 
-    /// Preload album art for albums surrounding the next track in the queue.
-    pub fn preload_next_track_surrounding_art(&mut self, logic: &Logic) {
-        self.inner.preload_next_track_surrounding_art(logic);
-    }
-
     /// Populate the background prefetch queue with cover art IDs.
     pub fn populate_prefetch_queue(&mut self, cover_art_ids: Vec<CoverArtId>) {
         self.inner.populate_prefetch_queue(cover_art_ids);
-    }
-
-    /// Advance the background prefetcher by one tick.
-    pub fn tick_prefetch(&mut self, logic: &Logic) {
-        self.inner.tick_prefetch(logic);
     }
 
     /// Returns the aspect ratio (height / width) of the source image, or 1.0
@@ -342,7 +420,6 @@ impl CoverArtCache {
     /// can fall back to the existing half-block rendering.
     pub fn get_protocol(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         resolution: Resolution,
         width: u16,
@@ -351,22 +428,19 @@ impl CoverArtCache {
         let picker = self.protocol_picker.clone()?;
         let id = cover_art_id?;
 
-        // Trigger a fetch at the requested resolution.
-        let _ = self
-            .inner
-            .get(logic, Some(id), resolution, CachePriority::Visible);
-        self.visible_this_frame.insert((id.clone(), resolution));
+        // Record demand at the requested resolution; `update()` fetches it.
+        let _ = self.inner.get(Some(id), resolution, CachePriority::Visible);
 
         let key = (id.clone(), width, height);
+        self.visible_protocols.insert(key.clone());
+        let image_id = alloc_id(&mut self.protocol_ids, &mut self.next_protocol_id, &key);
         let source = best_raw_bytes_up_to(&mut self.inner, id, resolution);
         let size = Size { width, height };
 
         self.protocols
             .get_or_compute(&self.pool, &key, source, move |bytes| {
                 let dyn_img = decode_centered(&bytes, picker.font_size(), size)?;
-                picker
-                    .new_protocol(dyn_img, size, Resize::Fit(None))
-                    .map_err(|e| e.to_string())
+                build_protocol(&picker, dyn_img, size, image_id)
             })
             .value
     }
@@ -384,30 +458,102 @@ impl CoverArtCache {
     /// when no picker is configured.
     pub fn get_sliced_protocol(
         &mut self,
-        logic: &Logic,
         cover_art_id: Option<&CoverArtId>,
         size: Size,
     ) -> Option<Arc<SlicedProtocol>> {
         let picker = self.protocol_picker.clone()?;
         let id = cover_art_id?;
 
-        // Trigger a library-res fetch.
+        // Record a library-res demand; `update()` fetches it.
         let _ = self
             .inner
-            .get(logic, Some(id), Resolution::Library, CachePriority::Visible);
-        self.visible_this_frame
-            .insert((id.clone(), Resolution::Library));
+            .get(Some(id), Resolution::Library, CachePriority::Visible);
 
         let key = (id.clone(), size.width, size.height);
+        self.visible_sliced_protocols.insert(key.clone());
+        let image_id = alloc_id(
+            &mut self.sliced_protocol_ids,
+            &mut self.next_protocol_id,
+            &key,
+        );
         let source = best_raw_bytes_up_to(&mut self.inner, id, Resolution::Library);
 
         self.sliced_protocols
             .get_or_compute(&self.pool, &key, source, move |bytes| {
                 let dyn_img = decode_centered(&bytes, picker.font_size(), size)?;
-                SlicedProtocol::new_with_resize(&picker, dyn_img, size, Resize::Fit(None))
-                    .map_err(|e| e.to_string())
+                build_sliced_protocol(&picker, dyn_img, size, image_id)
             })
             .value
+    }
+}
+
+/// Builds a fixed-size protocol for the picker's terminal graphics protocol.
+///
+/// For kitty, the protocol is constructed directly with `image_id` (a
+/// blackbird-managed id) so its terminal image can be reused across rebuilds
+/// and deleted on eviction — the only protocol with a persistent terminal-side
+/// image store to manage. `decode_centered` already sizes the image to the
+/// exact target pixel area, so no further resizing is needed; other protocols
+/// go through the picker, which embeds their image data inline per render and
+/// has no id to manage.
+fn build_protocol(
+    picker: &Picker,
+    image: DynamicImage,
+    size: Size,
+    image_id: u32,
+) -> Result<Protocol, String> {
+    match picker.protocol_type() {
+        ProtocolType::Kitty => Kitty::new(image, size, image_id, picker.is_tmux())
+            .map(Protocol::Kitty)
+            .map_err(|e| e.to_string()),
+        _ => picker
+            .new_protocol(image, size, Resize::Fit(None))
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// The [`build_protocol`] equivalent for scrollable [`SlicedProtocol`] art.
+fn build_sliced_protocol(
+    picker: &Picker,
+    image: DynamicImage,
+    size: Size,
+    image_id: u32,
+) -> Result<SlicedProtocol, String> {
+    match picker.protocol_type() {
+        ProtocolType::Kitty => Kitty::new(image, size, image_id, picker.is_tmux())
+            .map(SlicedProtocol::Kitty)
+            .map_err(|e| e.to_string()),
+        _ => SlicedProtocol::new_with_resize(picker, image, size, Resize::Fit(None))
+            .map_err(|e| e.to_string()),
+    }
+}
+
+/// Returns the stable kitty image id for `key`, allocating the next id from
+/// `next` on first use. Ids start at 1 (0 is avoided) and never repeat within
+/// a session, so a rebuilt protocol reuses its id — the terminal overwrites
+/// its image rather than storing a duplicate.
+fn alloc_id(ids: &mut HashMap<ProtocolKey, u32>, next: &mut u32, key: &ProtocolKey) -> u32 {
+    *ids.entry(key.clone()).or_insert_with(|| {
+        *next = next.wrapping_add(1);
+        *next
+    })
+}
+
+/// Queues deletions of the terminal images for `evicted_keys`, removing their
+/// ids from `ids`. A key with no assigned id (never rendered) is skipped;
+/// deleting an id the terminal never received is a harmless no-op.
+fn forget_protocol_images(
+    pending: &mut String,
+    ids: &mut HashMap<ProtocolKey, u32>,
+    is_tmux: bool,
+    evicted_keys: &[ProtocolKey],
+) {
+    for key in evicted_keys {
+        if let Some(image_id) = ids.remove(key) {
+            pending.push_str(&ratatui_image::protocol::kitty::delete_image_sequence(
+                image_id, is_tmux,
+            ));
+        }
     }
 }
 
@@ -457,6 +603,46 @@ fn best_raw_bytes_up_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(name: &str) -> ProtocolKey {
+        (CoverArtId(name.into()), 4, 4)
+    }
+
+    /// Ids are allocated once per key, are stable across repeated lookups,
+    /// start at 1 (never 0), and increase monotonically for new keys.
+    #[test]
+    fn test_alloc_id_stable_and_monotonic() {
+        let mut ids = HashMap::new();
+        let mut next = 0;
+        let (a, b) = (key("a"), key("b"));
+
+        assert_eq!(alloc_id(&mut ids, &mut next, &a), 1);
+        assert_eq!(alloc_id(&mut ids, &mut next, &b), 2);
+        // The same key keeps its id and allocates nothing new.
+        assert_eq!(alloc_id(&mut ids, &mut next, &a), 1);
+        assert_eq!(next, 2);
+    }
+
+    /// Forgetting a protocol queues a delete for its image id, removes the
+    /// id from the map, and skips keys that were never assigned an id.
+    #[test]
+    fn test_forget_protocol_images() {
+        let mut ids = HashMap::new();
+        let mut next = 0;
+        let k = key("a");
+        let image_id = alloc_id(&mut ids, &mut next, &k);
+
+        let mut pending = String::new();
+        forget_protocol_images(&mut pending, &mut ids, false, std::slice::from_ref(&k));
+        assert!(pending.contains(&format!("i={image_id}")));
+        assert!(pending.contains("a=d,d=I"));
+        assert!(!ids.contains_key(&k), "the id is released on delete");
+
+        // A key with no assigned id produces no delete sequence.
+        let mut pending = String::new();
+        forget_protocol_images(&mut pending, &mut ids, false, &[key("never-rendered")]);
+        assert!(pending.is_empty());
+    }
 
     /// Creates a small 2×2 PNG test image (solid red).
     fn test_png() -> Vec<u8> {

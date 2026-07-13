@@ -221,6 +221,20 @@ pub(crate) fn render_library_view(
 
                 let visible_row_range = first_visible_row..last_visible_row;
 
+                // Demand art for one page of rows above and below the
+                // viewport at `Nearby` priority, so scrolling doesn't flash
+                // placeholder art. Visible groups re-demand theirs at
+                // `Visible` when rendered below, which takes precedence.
+                let page_rows = last_visible_row - first_visible_row;
+                let nearby_row_range = first_visible_row.saturating_sub(page_rows)
+                    ..(last_visible_row + page_rows).min(total_rows);
+                let nearby_groups = logic.get_visible_groups(nearby_row_range, |g| {
+                    group::line_count(g, album_art_style, album_spacing)
+                });
+                for grp in nearby_groups.groups {
+                    cover_art_cache.demand_nearby(grp.cover_art_id.as_ref());
+                }
+
                 // Calculate which groups are in view
                 let visible_groups = logic.get_visible_groups(visible_row_range.clone(), |g| {
                     group::line_count(g, album_art_style, album_spacing)

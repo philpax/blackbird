@@ -661,12 +661,10 @@ impl App {
             // Get both the fallback (library-res or lower) and full-res sources.
             // The fallback is painted first so it remains visible while egui
             // decodes the full-res texture, avoiding a flash.
-            let fallback_source =
-                self.cover_art_cache
-                    .get(logic, Some(&hover.cover_art_id), CachePriority::Visible);
-            let full_res_source = self
+            let fallback_source = self
                 .cover_art_cache
-                .get_full_res(logic, Some(&hover.cover_art_id));
+                .get(Some(&hover.cover_art_id), CachePriority::Visible);
+            let full_res_source = self.cover_art_cache.get_full_res(Some(&hover.cover_art_id));
 
             let screen = ctx.screen_rect();
             let popup_max_width = screen.width() * 0.4;
