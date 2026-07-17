@@ -329,6 +329,38 @@ impl Library {
     }
 }
 
+/// Maps typographic Unicode characters to their ASCII equivalents.
+///
+/// These characters — curly quotes, en/em dashes, ellipsis, non-breaking and
+/// other narrow spaces, full-width Latin letters — have no NFKD compatibility
+/// decomposition, so they survive [`fold_diacritics`] unchanged and break
+/// matching. Mapping them to ASCII before the NFKD fold lets the downstream
+/// punctuation handling treat them uniformly.
+fn fold_lookalikes(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            // Single curly quotes: ' ' ‚ ‛ -> '
+            // Double curly quotes: " " „ ‟ -> "
+            // Dashes: – — ― -> -
+            // Ellipsis: … -> . (collapsed to ASCII punctuation, then stripped/spaced)
+            // Various Unicode spaces -> ASCII space
+            match c {
+                '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}' => '\'',
+                '\u{201C}' | '\u{201D}' | '\u{201E}' | '\u{201F}' => '"',
+                '\u{2013}' | '\u{2014}' | '\u{2015}' => '-',
+                '\u{2026}' => '.',
+                // Non-breaking space + general punctuation spaces (U+2000–U+200A)
+                // + narrow no-break space (U+202F) + medium mathematical space (U+205F).
+                '\u{00A0}' | '\u{2000}'..='\u{200A}' | '\u{202F}' | '\u{205F}' => ' ',
+                // Full-width Latin letters and ASCII punctuation (U+FF01–U+FF5E)
+                // map to their ASCII counterparts by subtracting the full-width offset.
+                '\u{FF01}'..='\u{FF5E}' => char::from_u32(c as u32 - 0xFEE0).unwrap_or(c),
+                _ => c,
+            }
+        })
+        .collect()
+}
+
 /// Folds diacritics so that e.g. `"Röyksopp"` becomes `"Royksopp"`.
 ///
 /// Uses NFKD decomposition (breaking precomposed accented characters into a
@@ -349,8 +381,9 @@ fn fold_diacritics(s: &str) -> String {
 
 /// Returns deduplicated normalized variants of `s` for indexing or querying.
 ///
-/// The input is first folded via [`fold_diacritics`], then up to two further
-/// forms are emitted:
+/// The input is first passed through [`fold_lookalikes`] (mapping typographic
+/// characters to ASCII), then folded via [`fold_diacritics`], then up to two
+/// further forms are emitted:
 /// - `stripped`: lowercase, with ASCII punctuation removed outright.
 /// - `spaced`: lowercase, with ASCII punctuation replaced by spaces and runs
 ///   of whitespace collapsed.
@@ -360,9 +393,10 @@ fn fold_diacritics(s: &str) -> String {
 /// only one variant is returned. Indexing and querying both apply this
 /// function, so e.g. a query of `"ac dc"` finds a track titled `"AC/DC"` via
 /// the spaced variant, while `"acdc"` finds it via the stripped variant, and
-/// `"royksopp"` finds `"Röyksopp"` via the fold.
+/// `"royksopp"` finds `"Röyksopp"` via the fold, and `"i'm"` finds `"i'm"`
+/// (U+2019 right single quotation mark) via the lookalike fold.
 fn normalize_variants(s: &str) -> SmallVec<[SmolStr; 2]> {
-    let folded = fold_diacritics(s);
+    let folded = fold_diacritics(&fold_lookalikes(s));
 
     let stripped: String = folded
         .chars()
@@ -433,6 +467,32 @@ mod tests {
         assert_eq!(variants("Sigur Rós"), vec!["sigur ros"]);
         assert_eq!(variants("Café del Mar"), vec!["cafe del mar"]);
         assert_eq!(variants("Mötley Crüe"), vec!["motley crue"]);
+    }
+
+    #[test]
+    fn normalize_variants_folds_lookalikes() {
+        // Curly apostrophe (U+2019) becomes ASCII apostrophe.
+        assert_eq!(
+            variants("i'm the president"),
+            vec!["im the president", "i m the president"]
+        );
+        // Curly double quotes (U+201C/U+201D).
+        assert_eq!(variants("\u{201C}hello\u{201D}"), vec!["hello"]);
+        // En dash (U+2013) and em dash (U+2014) become ASCII hyphen.
+        assert_eq!(
+            variants("rock\u{2013}n\u{2013}roll"),
+            vec!["rocknroll", "rock n roll"]
+        );
+        assert_eq!(variants("AC\u{2014}DC"), vec!["acdc", "ac dc"]);
+        // Ellipsis (U+2026) becomes ASCII period, then is stripped/spaced.
+        assert_eq!(variants("one\u{2026}two"), vec!["onetwo", "one two"]);
+        // Non-breaking space (U+00A0) becomes ASCII space.
+        assert_eq!(variants("hello\u{00A0}world"), vec!["hello world"]);
+        // Full-width Latin (U+FF21 'Ａ' -> 'A').
+        assert_eq!(
+            variants("\u{FF21}\u{FF23}/\u{FF24}\u{FF23}"),
+            vec!["acdc", "ac dc"]
+        );
     }
 
     /// A single track specification for test fixtures: `(track_id, title, artist, album_id, album_name)`.
@@ -596,6 +656,27 @@ mod tests {
         assert_eq!(search_ids(&mut lib, "sigur ros"), vec!["t2"]);
         // And so is the track title ("Starálfur" -> "staralfur").
         assert_eq!(search_ids(&mut lib, "staralfur"), vec!["t2"]);
+    }
+
+    #[test]
+    fn search_folds_unicode_lookalikes() {
+        let mut lib = build_library(&[
+            ("t1", "i\u{2019}m the president", "Artist", "a1", "Album"),
+            ("t2", "rock\u{2014}n\u{2014}roll", "Band", "a2", "Album Two"),
+        ]);
+
+        // Curly apostrophe in the title, ASCII apostrophe in the query.
+        assert_eq!(search_ids(&mut lib, "i'm the president"), vec!["t1"]);
+        // And the reverse: ASCII in title is not present here, but curly
+        // apostrophe in the query should also find the curly-apostrophe title.
+        assert_eq!(search_ids(&mut lib, "i\u{2019}m the president"), vec!["t1"]);
+        // Em dash (U+2014) in the title, ASCII hyphen in the query.
+        assert_eq!(search_ids(&mut lib, "rock-n-roll"), vec!["t2"]);
+        // Em dash in the query as well.
+        assert_eq!(
+            search_ids(&mut lib, "rock\u{2014}n\u{2014}roll"),
+            vec!["t2"]
+        );
     }
 
     #[test]
