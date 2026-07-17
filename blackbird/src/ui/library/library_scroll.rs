@@ -130,7 +130,7 @@ pub fn render(
 
         ui.painter().line_segment(
             [pos2(line_start_x, y), pos2(line_end_x, y)],
-            Stroke::new(2.0, style.track_name_playing_color32()),
+            Stroke::new(2.0_f32, style.track_name_playing_color32()),
         );
     }
 }

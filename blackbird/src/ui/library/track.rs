@@ -152,7 +152,7 @@ pub fn ui(
 
         ui.painter().line(
             vec![line_start, line_end],
-            PathStroke::new(1.0, style.track_name_hovered_color32()),
+            PathStroke::new(1.0_f32, style.track_name_hovered_color32()),
         );
     }
 
@@ -164,7 +164,7 @@ pub fn ui(
 
         ui.painter().line(
             vec![line_start, line_end],
-            PathStroke::new(1.0, style.track_name_hovered_color32()),
+            PathStroke::new(1.0_f32, style.track_name_hovered_color32()),
         );
     }
 
