@@ -100,6 +100,13 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .add_modifier(Modifier::BOLD),
     ));
 
+    if let Some(play_count) = tdd.play_count {
+        track_spans.push(Span::styled(
+            format!(" {play_count}"),
+            Style::default().fg(app.config.style.track_number_color()),
+        ));
+    }
+
     // Line 2: heart album by artist
     let album_spans = vec![
         Span::styled(album_heart, album_heart_style),

@@ -119,6 +119,7 @@ pub struct TrackDisplayDetails {
     pub track_position: Duration,
     pub show_time: bool,
     pub starred: bool,
+    pub play_count: Option<u64>,
 }
 impl TrackDisplayDetails {
     pub fn from_track_and_position(
@@ -139,6 +140,7 @@ impl TrackDisplayDetails {
             track_position: track_and_position.position,
             show_time: true,
             starred: track.starred,
+            play_count: track.play_count,
         })
     }
 
