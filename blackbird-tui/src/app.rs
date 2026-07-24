@@ -53,6 +53,8 @@ pub struct App {
     pub scrub_dragging: bool,
     /// Preview seek ratio while dragging the scrub bar (0.0–1.0).
     pub scrub_preview_ratio: Option<f32>,
+    /// Whether the user is dragging the lyrics sidebar border to resize it.
+    pub lyrics_sidebar_dragging: bool,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -101,6 +103,7 @@ impl App {
             tick_count: 0,
             scrub_dragging: false,
             scrub_preview_ratio: None,
+            lyrics_sidebar_dragging: false,
 
             library: LibraryState::new(),
             search: SearchState::new(),
@@ -143,11 +146,14 @@ impl App {
                 }
                 self.library.needs_scroll_to_playing = false;
 
+                // Reset the sidebar scroll state for the new track.
+                self.lyrics.reset_sidebar_view();
+
                 // Request lyrics if inline lyrics are enabled or the panel is open.
                 let panel_open = self.focused_panel == FocusedPanel::Lyrics;
                 if self.lyrics.shared.on_track_started(
                     &tap.track_id,
-                    self.config.layout.base.show_inline_lyrics,
+                    self.config.layout.base.lyrics_display,
                     panel_open,
                 ) {
                     self.logic.request_lyrics(&tap.track_id);
@@ -207,8 +213,10 @@ impl App {
         }
 
         // Reload config from disk if changed (check once per second).
-        // Skip while settings is open — in-memory changes haven't been saved yet.
+        // Skip while settings is open or sidebar is being dragged — in-memory
+        // changes haven't been saved yet and would be overwritten.
         if self.focused_panel != FocusedPanel::Settings
+            && !self.lyrics_sidebar_dragging
             && self.last_config_check.elapsed() >= Duration::from_secs(1)
         {
             self.last_config_check = Instant::now();

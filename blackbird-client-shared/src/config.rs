@@ -28,13 +28,77 @@ impl AlbumArtStyle {
     }
 }
 
+/// Trait for enums that can be displayed in a settings dropdown.
+/// Implemented for config enums that have a fixed set of variants with
+/// human-readable labels.
+pub trait EnumerableEnum: Copy + PartialEq + 'static {
+    /// All variants for UI display/cycling.
+    const ALL: &'static [Self];
+    /// Returns a human-readable label for display in UI.
+    fn as_str(&self) -> &'static str;
+}
+
+impl EnumerableEnum for AlbumArtStyle {
+    const ALL: &'static [AlbumArtStyle] = AlbumArtStyle::ALL;
+    fn as_str(&self) -> &'static str {
+        AlbumArtStyle::as_str(self)
+    }
+}
+
+impl EnumerableEnum for LyricsDisplay {
+    const ALL: &'static [LyricsDisplay] = LyricsDisplay::ALL;
+    fn as_str(&self) -> &'static str {
+        LyricsDisplay::as_str(self)
+    }
+}
+
+/// Controls how lyrics are displayed in the client UI.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LyricsDisplay {
+    /// Lyrics are not shown.
+    Off,
+    /// Lyrics are shown inline at the bottom of the content area.
+    #[default]
+    Inline,
+    /// Lyrics are shown in a sidebar on the left side of the content area.
+    Left,
+    /// Lyrics are shown in a sidebar on the right side of the content area.
+    Right,
+}
+
+impl LyricsDisplay {
+    /// All variants for UI display/cycling.
+    pub const ALL: &[LyricsDisplay] = &[
+        LyricsDisplay::Off,
+        LyricsDisplay::Inline,
+        LyricsDisplay::Left,
+        LyricsDisplay::Right,
+    ];
+
+    /// Returns a human-readable label for display in UI.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LyricsDisplay::Off => "off",
+            LyricsDisplay::Inline => "inline",
+            LyricsDisplay::Left => "left",
+            LyricsDisplay::Right => "right",
+        }
+    }
+
+    /// Returns `true` if lyrics should be shown in a sidebar.
+    pub fn is_sidebar(self) -> bool {
+        matches!(self, LyricsDisplay::Left | LyricsDisplay::Right)
+    }
+}
+
 /// Layout configuration for the library and player UI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Layout {
-    /// Whether to show the current synced lyric line inline in the player UI.
-    #[serde(default = "default_true")]
-    pub show_inline_lyrics: bool,
+    /// How lyrics are displayed in the UI.
+    #[serde(default)]
+    pub lyrics_display: LyricsDisplay,
     /// How album art is displayed in the library view.
     #[serde(default)]
     pub album_art_style: AlbumArtStyle,
@@ -48,7 +112,7 @@ pub struct Layout {
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            show_inline_lyrics: true,
+            lyrics_display: LyricsDisplay::default(),
             album_art_style: AlbumArtStyle::default(),
             album_spacing: default_album_spacing(),
             scroll_multiplier: default_scroll_multiplier(),
@@ -139,5 +203,84 @@ impl Default for LastPlayback {
             playback_mode: PlaybackMode::default(),
             sort_order: SortOrder::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyrics_display_roundtrip() {
+        for variant in LyricsDisplay::ALL {
+            let layout = Layout {
+                lyrics_display: *variant,
+                ..Default::default()
+            };
+            let toml_str = toml::to_string(&layout).unwrap();
+            let parsed: Layout = toml::from_str(&toml_str).unwrap();
+            assert_eq!(
+                layout.lyrics_display, parsed.lyrics_display,
+                "roundtrip failed for {variant:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lyrics_display_default_is_inline() {
+        assert_eq!(LyricsDisplay::default(), LyricsDisplay::Inline);
+    }
+
+    #[test]
+    fn layout_default_has_inline_lyrics() {
+        let layout = Layout::default();
+        assert_eq!(layout.lyrics_display, LyricsDisplay::Inline);
+    }
+
+    #[test]
+    fn layout_with_old_show_inline_lyrics_field_parses() {
+        // Old configs with `show_inline_lyrics` should still parse. The old
+        // field is silently ignored (caught by serde's default on the new
+        // `lyrics_display` field), and `lyrics_display` defaults to `Inline`.
+        let toml_str = r#"
+show_inline_lyrics = false
+"#;
+        let layout: Layout = toml::from_str(toml_str).unwrap();
+        assert_eq!(layout.lyrics_display, LyricsDisplay::Inline);
+    }
+
+    #[test]
+    fn layout_with_lyrics_display_right_parses() {
+        let toml_str = r#"
+lyrics_display = "right"
+"#;
+        let layout: Layout = toml::from_str(toml_str).unwrap();
+        assert_eq!(layout.lyrics_display, LyricsDisplay::Right);
+    }
+
+    #[test]
+    fn layout_with_lyrics_display_off_parses() {
+        let toml_str = r#"
+lyrics_display = "off"
+"#;
+        let layout: Layout = toml::from_str(toml_str).unwrap();
+        assert_eq!(layout.lyrics_display, LyricsDisplay::Off);
+    }
+
+    #[test]
+    fn layout_with_lyrics_display_left_parses() {
+        let toml_str = r#"
+lyrics_display = "left"
+"#;
+        let layout: Layout = toml::from_str(toml_str).unwrap();
+        assert_eq!(layout.lyrics_display, LyricsDisplay::Left);
+    }
+
+    #[test]
+    fn lyrics_display_is_sidebar() {
+        assert!(!LyricsDisplay::Off.is_sidebar());
+        assert!(!LyricsDisplay::Inline.is_sidebar());
+        assert!(LyricsDisplay::Left.is_sidebar());
+        assert!(LyricsDisplay::Right.is_sidebar());
     }
 }

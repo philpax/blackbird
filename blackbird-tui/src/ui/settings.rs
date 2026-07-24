@@ -94,6 +94,15 @@ enum SettingsRow {
         set: fn(&mut crate::config::Config, AlbumArtStyle),
         default: fn() -> AlbumArtStyle,
     },
+    /// Dynamic enum field using index-based get/set with a static variant list.
+    EnumFieldDyn {
+        label: &'static str,
+        section: Section,
+        get: fn(&crate::config::Config) -> usize,
+        set: fn(&mut crate::config::Config, usize),
+        default: fn() -> usize,
+        variants: &'static [&'static str],
+    },
     HsvField {
         label: &'static str,
         index: usize,
@@ -205,12 +214,29 @@ fn build_rows() -> Vec<SettingsRow> {
         // Layout section.
         SettingsRow::SectionSpacer,
         SettingsRow::SectionHeader("Layout"),
-        SettingsRow::BoolField {
-            label: "Show inline lyrics",
+        SettingsRow::EnumFieldDyn {
+            label: "Lyrics display",
             section: Section::Layout,
-            get: |c| c.layout.base.show_inline_lyrics,
-            set: |c, v| c.layout.base.show_inline_lyrics = v,
-            default: || Layout::default().show_inline_lyrics,
+            get: |c| {
+                use blackbird_client_shared::config::LyricsDisplay;
+                LyricsDisplay::ALL
+                    .iter()
+                    .position(|v| *v == c.layout.base.lyrics_display)
+                    .unwrap_or(0)
+            },
+            set: |c, idx| {
+                use blackbird_client_shared::config::LyricsDisplay;
+                c.layout.base.lyrics_display =
+                    LyricsDisplay::ALL.get(idx).copied().unwrap_or_default();
+            },
+            default: || {
+                use blackbird_client_shared::config::LyricsDisplay;
+                LyricsDisplay::ALL
+                    .iter()
+                    .position(|v| *v == LyricsDisplay::default())
+                    .unwrap_or(0)
+            },
+            variants: &["off", "inline", "left", "right"],
         },
         SettingsRow::EnumField {
             label: "Album art style",
@@ -612,6 +638,33 @@ fn render_row(
             }
             Line::from(spans)
         }
+        SettingsRow::EnumFieldDyn {
+            label,
+            get,
+            default,
+            variants,
+            ..
+        } => {
+            let value_idx = get(config);
+            let default_idx = default();
+            let is_default = value_idx == default_idx;
+            let value_str = variants.get(value_idx).copied().unwrap_or("?");
+            let indicator = if is_selected { "> " } else { "  " };
+            let mut spans = vec![
+                Span::styled(
+                    indicator.to_string(),
+                    Style::default().fg(if is_selected { highlight } else { text_fg }),
+                ),
+                Span::styled(
+                    format!("{label}: {value_str}"),
+                    Style::default().fg(if is_selected { highlight } else { text_fg }),
+                ),
+            ];
+            if !is_default {
+                spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
+            }
+            Line::from(spans)
+        }
         SettingsRow::HsvField { label, index } => {
             let hsv = *config.style.field(*index);
             let default_hsv = shared_style::Style::default_field(*index);
@@ -914,6 +967,20 @@ pub fn handle_key(
                         server_changed = true;
                     }
                 }
+                SettingsRow::EnumFieldDyn {
+                    get,
+                    set,
+                    section,
+                    variants,
+                    ..
+                } => {
+                    let current = get(config);
+                    let next = (current + 1) % variants.len();
+                    set(config, next);
+                    if *section == Section::Server {
+                        server_changed = true;
+                    }
+                }
                 SettingsRow::HsvField { .. } => {
                     state.editing = true;
                     state.hsv_component = HsvComponent::H;
@@ -990,6 +1057,17 @@ pub fn handle_key(
                         server_changed = true;
                     }
                 }
+                SettingsRow::EnumFieldDyn {
+                    default,
+                    set,
+                    section,
+                    ..
+                } => {
+                    set(config, default());
+                    if *section == Section::Server {
+                        server_changed = true;
+                    }
+                }
                 SettingsRow::HsvField { index, .. } => {
                     *config.style.field_mut(*index) = shared_style::Style::default_field(*index);
                 }
@@ -1006,7 +1084,8 @@ pub fn handle_key(
                 | SettingsRow::UsizeField { section, .. }
                 | SettingsRow::F32Field { section, .. }
                 | SettingsRow::U64Field { section, .. }
-                | SettingsRow::EnumField { section, .. } => Some(*section),
+                | SettingsRow::EnumField { section, .. }
+                | SettingsRow::EnumFieldDyn { section, .. } => Some(*section),
                 SettingsRow::HsvField { .. } => Some(Section::Colors),
             };
             if let Some(section) = section {
@@ -1327,4 +1406,96 @@ fn human_readable_label(name: &str) -> String {
         }
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lyrics_display_row_cycles_through_all_variants() {
+        let mut state = SettingsState::new();
+        let mut config = crate::config::Config::default();
+
+        // Find the "Lyrics display" row.
+        let row_idx = state
+            .rows
+            .iter()
+            .position(|r| matches!(r, SettingsRow::EnumFieldDyn { label, .. } if *label == "Lyrics display"))
+            .expect("Lyrics display row should exist");
+        state.selected_index = row_idx;
+
+        // Default is "inline" (index 1). Cycling forward goes:
+        // inline → left → right → off → inline → ...
+        let expected_sequence = ["inline", "left", "right", "off"];
+
+        for (i, expected_variant) in expected_sequence.iter().enumerate() {
+            // Before cycling, the current value should match expected_sequence[i].
+            let line = render_row(
+                &state.rows[row_idx],
+                &config,
+                &shared_style::Style::default(),
+                true,
+                &state,
+            );
+            let line_str = line
+                .spans
+                .iter()
+                .map(|s| s.content.as_ref())
+                .collect::<String>();
+            assert!(
+                line_str.contains(expected_variant),
+                "step {i}: expected rendered text to contain '{expected_variant}', got: {line_str}"
+            );
+
+            // Cycle to the next variant.
+            let _ = handle_key(&mut state, &mut config, Action::Select);
+        }
+
+        // After cycling through all 4 variants, we should be back at "inline".
+        let line = render_row(
+            &state.rows[row_idx],
+            &config,
+            &shared_style::Style::default(),
+            true,
+            &state,
+        );
+        let line_str = line
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect::<String>();
+        assert!(
+            line_str.contains("inline"),
+            "should have cycled back to 'inline'"
+        );
+    }
+
+    #[test]
+    fn lyrics_display_row_resets_to_default() {
+        let mut state = SettingsState::new();
+        let mut config = crate::config::Config::default();
+
+        let row_idx = state
+            .rows
+            .iter()
+            .position(|r| matches!(r, SettingsRow::EnumFieldDyn { label, .. } if *label == "Lyrics display"))
+            .expect("Lyrics display row should exist");
+        state.selected_index = row_idx;
+
+        // Cycle to a non-default value.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert_ne!(
+            config.layout.base.lyrics_display,
+            blackbird_client_shared::config::LyricsDisplay::default()
+        );
+
+        // Reset the field.
+        let _ = handle_key(&mut state, &mut config, Action::ResetField);
+        assert_eq!(
+            config.layout.base.lyrics_display,
+            blackbird_client_shared::config::LyricsDisplay::default()
+        );
+    }
 }

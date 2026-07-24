@@ -2,6 +2,8 @@ use std::time::Duration;
 
 use blackbird_core::{LyricsData, blackbird_state::TrackId, bs::StructuredLyrics};
 
+use crate::config::LyricsDisplay;
+
 /// Find the index of the current lyrics line based on playback position.
 /// Returns 0 for unsynced lyrics or if no line matches.
 pub fn find_current_lyrics_line(
@@ -48,10 +50,10 @@ impl LyricsState {
     pub fn on_track_started(
         &mut self,
         track_id: &TrackId,
-        show_inline_lyrics: bool,
+        lyrics_display: LyricsDisplay,
         panel_open: bool,
     ) -> bool {
-        if !show_inline_lyrics && !panel_open {
+        if lyrics_display == LyricsDisplay::Off && !panel_open {
             return false;
         }
         self.track_id = Some(track_id.clone());

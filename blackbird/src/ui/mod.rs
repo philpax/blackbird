@@ -131,7 +131,7 @@ impl App {
                 // Request lyrics if inline lyrics are enabled or the panel is open.
                 if self.ui_state.lyrics.shared.on_track_started(
                     &track_and_position.track_id,
-                    config.shared.layout.show_inline_lyrics,
+                    config.shared.layout.lyrics_display,
                     self.ui_state.lyrics.open,
                 ) {
                     self.ui_state.lyrics.auto_scroll = true;
@@ -561,7 +561,10 @@ impl App {
             });
 
         // Draw inline lyrics as an overlay at the bottom of the central panel.
-        if config.shared.layout.show_inline_lyrics
+        // The egui client doesn't implement a sidebar, so Left/Right fall back
+        // to showing the inline overlay (same as Inline).
+        if config.shared.layout.lyrics_display
+            != blackbird_client_shared::config::LyricsDisplay::Off
             && self.ui_state.lyrics.shared.has_synced_lyrics()
         {
             let panel_rect = ctx.available_rect();

@@ -543,24 +543,71 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
     let now_playing_area = main.now_playing;
     let scrub_area = main.scrub_bar;
-    let library_area = main.content;
     let help_bar_area = main.help_bar;
 
     let x = mouse.column;
     let y = mouse.row;
 
+    // Compute the content layout (including optional lyrics sidebar) matching
+    // ui::draw, so mouse hit-testing uses the same rects.
+    let is_loading = !app.logic.has_loaded_all_tracks();
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let show_sidebar =
+        lyrics_display.is_sidebar() && app.focused_panel != FocusedPanel::Lyrics && !is_loading;
+    let content_layout = if show_sidebar {
+        ui::layout::split_content_with_sidebar(
+            main.content,
+            lyrics_display,
+            app.config.layout.lyrics_sidebar_width,
+        )
+    } else {
+        ui::layout::ContentLayout {
+            main: main.content,
+            lyrics_sidebar: None,
+            lyrics_border: None,
+        }
+    };
+    let library_area = content_layout.main;
+
     // Check whether the cursor is over the inline lyrics overlay so we can
     // block interactions that would otherwise reach the library underneath.
-    let over_inline_lyrics = app.config.layout.base.show_inline_lyrics
+    // The inline overlay is only shown when lyrics_display is Inline.
+    let over_inline_lyrics = lyrics_display
+        == blackbird_client_shared::config::LyricsDisplay::Inline
         && app.lyrics.shared.has_synced_lyrics()
-        && ui::layout::inline_lyrics_overlay(main.content)
+        && ui::layout::inline_lyrics_overlay(content_layout.main)
             .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+
+    // Check whether the cursor is over the lyrics sidebar.
+    let over_lyrics_sidebar = content_layout
+        .lyrics_sidebar
+        .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+
+    // Check whether the cursor is over the lyrics sidebar border (drag handle).
+    // The border is 1 column wide, so we add tolerance toward the sidebar side
+    // to make it easier to grab. Tolerance extends away from the main content
+    // so it doesn't interfere with the library's scrollbar.
+    let over_lyrics_border = content_layout.lyrics_border.is_some_and(|r| {
+        let tol = ui::layout::LYRICS_SIDEBAR_DRAG_TOLERANCE;
+        let is_right_sidebar =
+            lyrics_display == blackbird_client_shared::config::LyricsDisplay::Right;
+        // Right sidebar: border is to the left of the sidebar, so tolerance
+        // extends right (into the sidebar, away from the library scrollbar).
+        // Left sidebar: border is to the right of the sidebar, so tolerance
+        // extends left (into the sidebar, away from the library scrollbar).
+        let (x_start, x_end) = if is_right_sidebar {
+            (r.x, r.x + r.width + tol)
+        } else {
+            (r.x.saturating_sub(tol), r.x + r.width)
+        };
+        y >= r.y && y < r.y + r.height && x >= x_start && x < x_end
+    });
 
     match mouse.kind {
         MouseEventKind::Moved => {
-            // Suppress hover position when cursor is over the overlay so
-            // library rows underneath don't get underlined.
-            if over_inline_lyrics {
+            // Suppress hover position when cursor is over the overlay or sidebar
+            // so library rows underneath don't get underlined.
+            if over_inline_lyrics || over_lyrics_sidebar || over_lyrics_border {
                 app.mouse_position = None;
             } else {
                 app.mouse_position = Some((x, y));
@@ -628,8 +675,23 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 return;
             }
 
-            // --- Inline lyrics overlay (absorbs clicks) ---
+            // --- Lyrics sidebar border (start drag-to-resize) ---
+            if over_lyrics_border {
+                app.lyrics_sidebar_dragging = true;
+                return;
+            }
+
+            // --- Lyrics sidebar content (click to seek) ---
+            if over_lyrics_sidebar && let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                handle_sidebar_click(app, sidebar_rect, x, y);
+                return;
+            }
+
+            // --- Inline lyrics overlay (click → switch to sidebar mode) ---
             if over_inline_lyrics {
+                app.config.layout.base.lyrics_display =
+                    ui::lyrics::inline_overlay_click_switches_to_sidebar();
+                app.config.save();
                 return;
             }
 
@@ -687,6 +749,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
             app.scrub_dragging = false;
             app.scrub_preview_ratio = None;
+            // Save config if the sidebar was being resized.
+            if app.lyrics_sidebar_dragging {
+                app.lyrics_sidebar_dragging = false;
+                app.config.save();
+            }
             ui::library::handle_mouse_up(app);
             if app.focused_panel == FocusedPanel::Search
                 && let Some(sa) = app.search.handle_mouse_up(&app.logic)
@@ -711,6 +778,32 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 return;
             }
 
+            // Continue lyrics sidebar border drag.
+            if app.lyrics_sidebar_dragging {
+                if let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                    let is_left =
+                        lyrics_display == blackbird_client_shared::config::LyricsDisplay::Left;
+                    // For a left sidebar, the outer edge is sidebar_rect.x.
+                    // For a right sidebar, the outer edge is sidebar_rect.x + sidebar_rect.width - 1.
+                    let sidebar_outer_x = if is_left {
+                        sidebar_rect.x
+                    } else {
+                        sidebar_rect.x + sidebar_rect.width
+                    };
+                    let content_width = main.content.width;
+                    let max_width = (content_width / 2).max(ui::layout::LYRICS_SIDEBAR_MIN_WIDTH);
+                    let new_width = ui::lyrics::compute_sidebar_width_from_drag(
+                        x,
+                        sidebar_outer_x,
+                        is_left,
+                        ui::layout::LYRICS_SIDEBAR_MIN_WIDTH,
+                        max_width,
+                    );
+                    app.config.layout.lyrics_sidebar_width = new_width;
+                }
+                return;
+            }
+
             if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_mouse_drag(app, library_area, x, y);
             } else if app.focused_panel == FocusedPanel::Search {
@@ -718,7 +811,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::ScrollUp => {
-            if app.focused_panel == FocusedPanel::Library {
+            if over_lyrics_sidebar {
+                app.lyrics.sidebar_user_scrolled = true;
+                app.lyrics.sidebar_scroller.apply_wheel(
+                    -1,
+                    ui::layout::SCROLL_WHEEL_STEPS,
+                    app.lyrics.sidebar_total_rows,
+                );
+            } else if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_scroll(app, -1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
                 ui::lyrics::move_selection(
@@ -745,7 +845,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         MouseEventKind::ScrollDown => {
-            if app.focused_panel == FocusedPanel::Library {
+            if over_lyrics_sidebar {
+                app.lyrics.sidebar_user_scrolled = true;
+                app.lyrics.sidebar_scroller.apply_wheel(
+                    1,
+                    ui::layout::SCROLL_WHEEL_STEPS,
+                    app.lyrics.sidebar_total_rows,
+                );
+            } else if app.focused_panel == FocusedPanel::Library {
                 ui::library::handle_scroll(app, 1, ui::layout::SCROLL_WHEEL_STEPS);
             } else if app.focused_panel == FocusedPanel::Lyrics {
                 ui::lyrics::move_selection(
@@ -773,6 +880,51 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
         }
         _ => {}
+    }
+}
+
+/// Handle a click in the lyrics sidebar — seek to the clicked line's timestamp.
+fn handle_sidebar_click(app: &mut App, sidebar_area: Rect, _x: u16, y: u16) {
+    let Some(lyrics_data) = &app.lyrics.shared.data else {
+        return;
+    };
+    if lyrics_data.line.is_empty() {
+        return;
+    }
+
+    // The sidebar has a border; the inner area starts 1 row below and 1 col in.
+    let inner = Rect::new(
+        sidebar_area.x + 1,
+        sidebar_area.y + 1,
+        sidebar_area.width.saturating_sub(2),
+        sidebar_area.height.saturating_sub(2),
+    );
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let scroll_offset = app.lyrics.sidebar_scroller.line;
+    let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
+        lyrics_data,
+        app.logic.get_playing_position(),
+    );
+
+    // Rebuild the back-mapping to convert clicked row → logical line index.
+    let (_, back_mapping) = ui::lyrics::build_wrapped_lyrics(
+        lyrics_data,
+        current_line_idx,
+        inner.width as usize,
+        &app.config.style,
+    );
+
+    if let Some(line_index) =
+        ui::lyrics::sidebar_click_to_line_index(y, inner, scroll_offset, &back_mapping)
+        && let Some(duration) = ui::lyrics::line_index_to_duration(lyrics_data, line_index)
+    {
+        app.logic.seek_current(duration);
+        // Re-enable auto-follow after seeking, mirroring the full-panel behavior
+        // where seeking clears the selection and returns to auto-follow.
+        app.lyrics.sidebar_user_scrolled = false;
     }
 }
 

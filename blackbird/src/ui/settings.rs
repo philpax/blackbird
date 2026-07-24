@@ -3,7 +3,7 @@ use egui::{
     Window, ecolor::Hsva,
 };
 
-use blackbird_client_shared::{config::AlbumArtStyle, style as shared_style};
+use blackbird_client_shared::style as shared_style;
 
 use crate::config::{Config, General, Keybindings};
 
@@ -78,11 +78,11 @@ pub fn ui(ctx: &Context, config: &mut Config, settings: &mut SettingsState) -> b
                     // ── Layout ──────────────────────────────────────
                     let layout_default = blackbird_client_shared::config::Layout::default();
                     section(ui, "Layout", |ui| {
-                        changed |= bool_row(
+                        changed |= enum_row(
                             ui,
-                            "Show inline lyrics",
-                            &mut config.shared.layout.show_inline_lyrics,
-                            &layout_default.show_inline_lyrics,
+                            "Lyrics display",
+                            &mut config.shared.layout.lyrics_display,
+                            &layout_default.lyrics_display,
                         );
                         changed |= enum_row(
                             ui,
@@ -446,11 +446,11 @@ fn bool_row(ui: &mut egui::Ui, label: &str, value: &mut bool, default: &bool) ->
 }
 
 /// An enum field row (label | combo box | reset). Returns `true` if the value changed.
-fn enum_row(
+fn enum_row<T: blackbird_client_shared::config::EnumerableEnum>(
     ui: &mut egui::Ui,
     label: &str,
-    value: &mut AlbumArtStyle,
-    default: &AlbumArtStyle,
+    value: &mut T,
+    default: &T,
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -458,7 +458,7 @@ fn enum_row(
         ComboBox::from_id_salt(label)
             .selected_text(value.as_str())
             .show_ui(ui, |ui| {
-                for variant in AlbumArtStyle::ALL {
+                for variant in T::ALL {
                     if ui
                         .selectable_value(value, *variant, variant.as_str())
                         .changed()

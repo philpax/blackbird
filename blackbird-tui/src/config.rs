@@ -58,6 +58,9 @@ pub struct Layout {
     /// Controls how album art is rendered (graphics protocol vs. half-blocks).
     #[serde(default)]
     pub album_art_protocol: AlbumArtProtocol,
+    /// Width of the lyrics sidebar in terminal columns, when visible.
+    #[serde(default = "default_lyrics_sidebar_width")]
+    pub lyrics_sidebar_width: u16,
     /// Shared layout settings.
     #[serde(flatten)]
     pub base: blackbird_client_shared::config::Layout,
@@ -70,10 +73,15 @@ impl Default for Layout {
         Self {
             use_terminal_background: false,
             album_art_protocol: AlbumArtProtocol::default(),
+            lyrics_sidebar_width: default_lyrics_sidebar_width(),
             base: blackbird_client_shared::config::Layout::default(),
             extra: toml::Table::new(),
         }
     }
+}
+
+fn default_lyrics_sidebar_width() -> u16 {
+    30
 }
 
 impl blackbird_shared::config::ConfigFile for Config {}
@@ -130,12 +138,15 @@ mod tests {
     fn config_preserves_unknown_layout_fields() {
         let toml_str = r#"
 [layout]
-show_inline_lyrics = true
+lyrics_display = "right"
 use_terminal_background = false
 some_gui_only_field = 42
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert!(config.layout.base.show_inline_lyrics);
+        assert_eq!(
+            config.layout.base.lyrics_display,
+            blackbird_client_shared::config::LyricsDisplay::Right
+        );
         assert!(!config.layout.use_terminal_background);
         // The unknown field should be preserved in the catch-all.
         assert_eq!(
@@ -170,5 +181,24 @@ album_art_protocol = "image"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.layout.album_art_protocol, AlbumArtProtocol::Image);
+    }
+
+    #[test]
+    fn config_roundtrip_lyrics_sidebar_width() {
+        let mut config = Config::default();
+        config.layout.lyrics_sidebar_width = 42;
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(toml_str.contains("lyrics_sidebar_width = 42"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config, parsed);
+    }
+
+    #[test]
+    fn config_lyrics_sidebar_width_defaults_to_30() {
+        let toml_str = r#"
+[layout]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.lyrics_sidebar_width, 30);
     }
 }

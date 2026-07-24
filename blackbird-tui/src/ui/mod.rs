@@ -193,46 +193,80 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_scrub_bar(frame, app, main.scrub_bar);
     }
 
+    // Split the content area with an optional lyrics sidebar. The sidebar is
+    // only shown when the full lyrics panel is not focused (to avoid showing
+    // lyrics twice) and lyrics_display is Left or Right.
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let show_sidebar =
+        lyrics_display.is_sidebar() && app.focused_panel != FocusedPanel::Lyrics && !is_loading;
+    let content_layout = if show_sidebar {
+        layout::split_content_with_sidebar(
+            main.content,
+            lyrics_display,
+            app.config.layout.lyrics_sidebar_width,
+        )
+    } else {
+        layout::ContentLayout {
+            main: main.content,
+            lyrics_sidebar: None,
+            lyrics_border: None,
+        }
+    };
+
+    let content_area = content_layout.main;
+
     match app.focused_panel {
-        FocusedPanel::Library => library::draw(frame, app, main.content),
+        FocusedPanel::Library => library::draw(frame, app, content_area),
         FocusedPanel::Search => search::draw(
             frame,
             &mut app.search,
             &app.config.style,
             &app.logic,
-            main.content,
+            content_area,
         ),
         FocusedPanel::Lyrics => lyrics::draw(
             frame,
             &app.lyrics,
             &app.config.style,
             app.logic.get_playing_position(),
-            main.content,
+            content_area,
         ),
-        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, main.content),
+        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, content_area),
         FocusedPanel::Queue => queue::draw(
             frame,
             &app.queue,
             &app.config.style,
             &app.logic,
-            main.content,
+            content_area,
         ),
         FocusedPanel::Settings => settings::draw(
             frame,
             &mut app.settings,
             &app.config.style,
             &app.config,
-            main.content,
+            content_area,
         ),
+    }
+
+    // Draw the lyrics sidebar if present.
+    if let Some(sidebar_area) = content_layout.lyrics_sidebar {
+        lyrics::draw_sidebar(
+            frame,
+            &mut app.lyrics,
+            &app.config.style,
+            app.logic.get_playing_position(),
+            sidebar_area,
+        );
     }
 
     draw_help_bar(frame, app, main.help_bar);
 
     // Draw inline lyrics as an overlay at the bottom of the content area.
+    // Only shown when lyrics_display is Inline (not Off, Left, or Right).
     if !is_loading
-        && app.config.layout.base.show_inline_lyrics
+        && lyrics_display == blackbird_client_shared::config::LyricsDisplay::Inline
         && app.lyrics.shared.has_synced_lyrics()
-        && let Some(overlay) = layout::inline_lyrics_overlay(main.content)
+        && let Some(overlay) = layout::inline_lyrics_overlay(content_area)
     {
         draw_inline_lyrics(frame, app, overlay);
     }
