@@ -146,8 +146,8 @@ impl App {
                 }
                 self.library.needs_scroll_to_playing = false;
 
-                // Reset the sidebar scroll state for the new track.
-                self.lyrics.reset_sidebar_view();
+                // Reset all lyrics view state for the new track.
+                self.lyrics.reset_view();
 
                 // Request lyrics if inline lyrics are enabled or the panel is open.
                 let panel_open = self.focused_panel == FocusedPanel::Lyrics;
@@ -260,18 +260,41 @@ impl App {
     }
 
     pub fn toggle_lyrics(&mut self) {
-        if self.focused_panel == FocusedPanel::Lyrics {
-            self.focused_panel = FocusedPanel::Library;
-        } else {
-            self.focused_panel = FocusedPanel::Lyrics;
-            self.lyrics.reset_view();
-            // Request lyrics if not already loaded for the current track.
-            let playing_id = self.logic.get_playing_track_id();
-            if self.lyrics.shared.on_panel_opened(playing_id.as_ref())
-                && let Some(track_id) = playing_id
-            {
-                self.logic.request_lyrics(&track_id);
+        let lyrics_display = self.config.layout.base.lyrics_display;
+        if lyrics_display.is_sidebar() {
+            // When a sidebar is visible, the lyrics keybinding toggles focus
+            // to/from the sidebar rather than opening the full panel.
+            if self.focused_panel == FocusedPanel::Lyrics {
+                self.focused_panel = FocusedPanel::Library;
+            } else {
+                // Do not reset the view — the sidebar's scroll position
+                // should be preserved when focusing, as the user may be
+                // reading at a scrolled position.
+                self.focus_lyrics_panel(false);
             }
+        } else {
+            // No sidebar: the keybinding opens/closes the full panel.
+            if self.focused_panel == FocusedPanel::Lyrics {
+                self.focused_panel = FocusedPanel::Library;
+            } else {
+                self.focus_lyrics_panel(true);
+            }
+        }
+    }
+
+    /// Focus the lyrics panel and request lyrics if not already loaded.
+    /// When `reset` is true, resets the view state (used for the full panel).
+    pub(crate) fn focus_lyrics_panel(&mut self, reset: bool) {
+        self.focused_panel = FocusedPanel::Lyrics;
+        if reset {
+            self.lyrics.reset_view();
+        }
+        // Request lyrics if not already loaded for the current track.
+        let playing_id = self.logic.get_playing_track_id();
+        if self.lyrics.shared.on_panel_opened(playing_id.as_ref())
+            && let Some(track_id) = playing_id
+        {
+            self.logic.request_lyrics(&track_id);
         }
     }
 

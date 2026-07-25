@@ -552,8 +552,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     // ui::draw, so mouse hit-testing uses the same rects.
     let is_loading = !app.logic.has_loaded_all_tracks();
     let lyrics_display = app.config.layout.base.lyrics_display;
-    let show_sidebar =
-        lyrics_display.is_sidebar() && app.focused_panel != FocusedPanel::Lyrics && !is_loading;
+    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
     let content_layout = if show_sidebar {
         ui::layout::split_content_with_sidebar(
             main.content,
@@ -681,8 +680,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 return;
             }
 
-            // --- Lyrics sidebar content (click to seek) ---
+            // --- Lyrics sidebar content (click to focus + seek) ---
             if over_lyrics_sidebar && let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                // Focus the sidebar if not already focused, mirroring
+                // toggle_lyrics for the sidebar case (no reset_view —
+                // preserve scroll position).
+                if app.focused_panel != FocusedPanel::Lyrics {
+                    app.focus_lyrics_panel(false);
+                }
                 handle_sidebar_click(app, sidebar_rect, x, y);
                 return;
             }
@@ -701,12 +706,27 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 && x >= library_area.x
                 && x < library_area.x + library_area.width
             {
-                if app.focused_panel == FocusedPanel::Library {
+                // When the sidebar is focused, clicking the library area
+                // switches focus to the library and handles the click as a
+                // library click (play track, star, etc.). When the full lyrics
+                // panel is active (no sidebar), the lyrics are rendered in
+                // this area, so clicks route to the lyrics handler.
+                if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
+                    app.focused_panel = FocusedPanel::Library;
+                    ui::library::handle_mouse_click(app, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Library {
                     ui::library::handle_mouse_click(app, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Search {
                     app.search.handle_mouse_click(library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Lyrics {
-                    ui::lyrics::handle_mouse_click(&mut app.lyrics, &app.logic, library_area, x, y);
+                    ui::lyrics::handle_mouse_click(
+                        &mut app.lyrics,
+                        &app.logic,
+                        &app.config.style,
+                        library_area,
+                        x,
+                        y,
+                    );
                 } else if app.focused_panel == FocusedPanel::Queue {
                     ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Settings {
@@ -810,122 +830,24 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 app.search.handle_mouse_drag(library_area, x, y);
             }
         }
-        MouseEventKind::ScrollUp => {
-            if over_lyrics_sidebar {
-                app.lyrics.sidebar_user_scrolled = true;
-                app.lyrics.sidebar_scroller.apply_wheel(
-                    -1,
-                    ui::layout::SCROLL_WHEEL_STEPS,
-                    app.lyrics.sidebar_total_rows,
-                );
-            } else if app.focused_panel == FocusedPanel::Library {
-                ui::library::handle_scroll(app, -1, ui::layout::SCROLL_WHEEL_STEPS);
-            } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(
-                    &mut app.lyrics,
-                    app.logic.get_playing_position(),
-                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
-                );
-            } else if app.focused_panel == FocusedPanel::Queue {
-                ui::queue::scroll_selection(
-                    &mut app.queue,
-                    &app.logic,
-                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
-                );
-            } else if app.focused_panel == FocusedPanel::Logs {
-                app.logs.scroll_offset = app
-                    .logs
-                    .scroll_offset
-                    .saturating_sub(ui::layout::SCROLL_WHEEL_STEPS);
-            } else if app.focused_panel == FocusedPanel::Settings {
-                ui::settings::scroll_selection(
-                    &mut app.settings,
-                    -(ui::layout::SCROLL_WHEEL_STEPS as i32),
-                );
-            }
-        }
-        MouseEventKind::ScrollDown => {
-            if over_lyrics_sidebar {
-                app.lyrics.sidebar_user_scrolled = true;
-                app.lyrics.sidebar_scroller.apply_wheel(
-                    1,
-                    ui::layout::SCROLL_WHEEL_STEPS,
-                    app.lyrics.sidebar_total_rows,
-                );
-            } else if app.focused_panel == FocusedPanel::Library {
-                ui::library::handle_scroll(app, 1, ui::layout::SCROLL_WHEEL_STEPS);
-            } else if app.focused_panel == FocusedPanel::Lyrics {
-                ui::lyrics::move_selection(
-                    &mut app.lyrics,
-                    app.logic.get_playing_position(),
-                    ui::layout::SCROLL_WHEEL_STEPS as i32,
-                );
-            } else if app.focused_panel == FocusedPanel::Queue {
-                ui::queue::scroll_selection(
-                    &mut app.queue,
-                    &app.logic,
-                    ui::layout::SCROLL_WHEEL_STEPS as i32,
-                );
-            } else if app.focused_panel == FocusedPanel::Logs {
-                let log_len = app.logs.log_buffer.len();
-                if log_len > 0 {
-                    app.logs.scroll_offset =
-                        (app.logs.scroll_offset + ui::layout::SCROLL_WHEEL_STEPS).min(log_len - 1);
-                }
-            } else if app.focused_panel == FocusedPanel::Settings {
-                ui::settings::scroll_selection(
-                    &mut app.settings,
-                    ui::layout::SCROLL_WHEEL_STEPS as i32,
-                );
-            }
-        }
+        // ScrollUp and ScrollDown are handled by the coalesced scroll path
+        // in run_app (via apply_scroll), not here.
         _ => {}
     }
 }
 
 /// Handle a click in the lyrics sidebar — seek to the clicked line's timestamp.
-fn handle_sidebar_click(app: &mut App, sidebar_area: Rect, _x: u16, y: u16) {
-    let Some(lyrics_data) = &app.lyrics.shared.data else {
-        return;
-    };
-    if lyrics_data.line.is_empty() {
-        return;
-    }
-
-    // The sidebar has a border; the inner area starts 1 row below and 1 col in.
-    let inner = Rect::new(
-        sidebar_area.x + 1,
-        sidebar_area.y + 1,
-        sidebar_area.width.saturating_sub(2),
-        sidebar_area.height.saturating_sub(2),
-    );
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let scroll_offset = app.lyrics.sidebar_scroller.line;
-    let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
-        lyrics_data,
-        app.logic.get_playing_position(),
-    );
-
-    // Rebuild the back-mapping to convert clicked row → logical line index.
-    let (_, back_mapping) = ui::lyrics::build_wrapped_lyrics(
-        lyrics_data,
-        current_line_idx,
-        inner.width as usize,
+/// Delegates to the unified `handle_mouse_click` which uses the back-mapping
+/// approach shared by both views.
+fn handle_sidebar_click(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
+    ui::lyrics::handle_mouse_click(
+        &mut app.lyrics,
+        &app.logic,
         &app.config.style,
+        sidebar_area,
+        x,
+        y,
     );
-
-    if let Some(line_index) =
-        ui::lyrics::sidebar_click_to_line_index(y, inner, scroll_offset, &back_mapping)
-        && let Some(duration) = ui::lyrics::line_index_to_duration(lyrics_data, line_index)
-    {
-        app.logic.seek_current(duration);
-        // Re-enable auto-follow after seeking, mirroring the full-panel behavior
-        // where seeking clears the selection and returns to auto-follow.
-        app.lyrics.sidebar_user_scrolled = false;
-    }
 }
 
 fn handle_help_bar_click(app: &mut App, x: u16) {
@@ -1008,9 +930,26 @@ fn apply_scroll(app: &mut App, scroll_delta: i32) {
     let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
     let direction = scroll_delta.signum();
 
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let is_loading = !app.logic.has_loaded_all_tracks();
+    let sidebar_visible = lyrics_display.is_sidebar() && !is_loading;
+
     match app.focused_panel {
         FocusedPanel::Library => {
             ui::library::handle_scroll(app, direction, steps);
+        }
+        FocusedPanel::Lyrics if sidebar_visible => {
+            // When the sidebar is focused, scroll the shared Scroller rather
+            // than moving the selection cursor. Guard against stale
+            // total_rows (0 before the first draw renders lyrics) to avoid
+            // silently swallowing the scroll and setting user_scrolled in
+            // a stuck state.
+            if app.lyrics.total_rows > 0 {
+                app.lyrics.user_scrolled = true;
+                app.lyrics
+                    .scroller
+                    .apply_wheel(direction, steps, app.lyrics.total_rows);
+            }
         }
         FocusedPanel::Lyrics => {
             ui::lyrics::move_selection(

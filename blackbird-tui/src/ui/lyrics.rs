@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Paragraph},
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -22,53 +22,81 @@ pub enum LyricsAction {
 }
 
 /// TUI-specific lyrics view state wrapping the shared data state.
+///
+/// Both the full-panel and sidebar views share this state: a single `Scroller`
+/// for scroll position, a `selected_index` for keyboard selection, and flags
+/// for auto-follow behavior.
 pub struct LyricsViewState {
     pub shared: blackbird_client_shared::lyrics::LyricsState,
-    pub scroll_offset: usize,
     /// Keyboard-selected line index for scrubbing. `None` = auto-follow playback.
     pub selected_index: Option<usize>,
-    /// Sidebar scroll state, separate from the full-panel scroll.
-    pub sidebar_scroller: super::scroll::Scroller,
-    /// Whether the user has manually scrolled the sidebar (disables auto-follow).
-    pub sidebar_user_scrolled: bool,
-    /// Total rendered row count in the sidebar, updated each draw. Used by
-    /// mouse wheel handlers to compute correct scroll bounds.
-    pub sidebar_total_rows: usize,
+    /// Shared scroll state for both the full-panel and sidebar views.
+    pub scroller: super::scroll::Scroller,
+    /// Whether the user has manually scrolled (disables auto-follow).
+    pub user_scrolled: bool,
+    /// Total rendered row count, updated each draw. Used by mouse wheel handlers
+    /// to compute correct scroll bounds.
+    pub total_rows: usize,
 }
 
 impl LyricsViewState {
     pub fn new() -> Self {
         Self {
             shared: blackbird_client_shared::lyrics::LyricsState::new(),
-            scroll_offset: 0,
             selected_index: None,
-            sidebar_scroller: super::scroll::Scroller::new(),
-            sidebar_user_scrolled: false,
-            sidebar_total_rows: 0,
+            scroller: super::scroll::Scroller::new(),
+            user_scrolled: false,
+            total_rows: 0,
         }
     }
 
-    /// Resets the view-specific state (scroll and selection).
+    /// Resets all view-specific state (scroll, selection, auto-follow).
     pub fn reset_view(&mut self) {
-        self.scroll_offset = 0;
         self.selected_index = None;
-        self.reset_sidebar_view();
-    }
-
-    /// Resets the sidebar scroll state (e.g. on track change).
-    pub fn reset_sidebar_view(&mut self) {
-        self.sidebar_scroller = super::scroll::Scroller::new();
-        self.sidebar_user_scrolled = false;
-        self.sidebar_total_rows = 0;
+        self.scroller = super::scroll::Scroller::new();
+        self.user_scrolled = false;
+        self.total_rows = 0;
     }
 }
 
+/// Draws the full-panel lyrics view. Always shows the selection indicator.
 pub fn draw(
     frame: &mut Frame,
-    lyrics: &LyricsViewState,
+    lyrics: &mut LyricsViewState,
     style: &shared_style::Style,
     playing_position: Option<Duration>,
     area: Rect,
+) {
+    draw_lyrics_content(frame, lyrics, style, playing_position, area, true);
+}
+
+/// Draws the lyrics sidebar into the given area. Shows the selection indicator
+/// only when focused.
+pub fn draw_sidebar(
+    frame: &mut Frame,
+    lyrics: &mut LyricsViewState,
+    style: &shared_style::Style,
+    playing_position: Option<Duration>,
+    area: Rect,
+    is_focused: bool,
+) {
+    draw_lyrics_content(frame, lyrics, style, playing_position, area, is_focused);
+}
+
+/// Unified rendering pipeline for both the full-panel and sidebar lyrics views.
+///
+/// Renders a bordered block with title " Lyrics ", handles loading/empty states,
+/// pre-wraps lyric lines via [`build_wrapped_lyrics`], manages scroll state
+/// via a shared [`Scroller`], supports keyboard selection (`selected_index`),
+/// auto-follows playback unless the user has manually scrolled or selected,
+/// and renders a scrollbar when content overflows.
+fn draw_lyrics_content(
+    frame: &mut Frame,
+    lyrics: &mut LyricsViewState,
+    style: &shared_style::Style,
+    playing_position: Option<Duration>,
+    area: Rect,
+    is_focused: bool,
 ) {
     let block = Block::default()
         .title(" Lyrics ")
@@ -77,6 +105,10 @@ pub fn draw(
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
 
     if lyrics.shared.loading {
         let loading = Paragraph::new("Loading lyrics...")
@@ -102,93 +134,63 @@ pub fn draw(
     let current_line_idx =
         blackbird_client_shared::lyrics::find_current_lyrics_line(lyrics_data, playing_position);
 
-    let selected_index = lyrics.selected_index;
-    let track_name_hovered_color = style.track_name_hovered_color();
+    // Reserve 1 column for the scrollbar when content will overflow. This
+    // prevents the scrollbar from overwriting the last character of lyric
+    // lines that reach the full inner width.
+    let max_width = (inner.width as usize).saturating_sub(1);
 
-    // Pre-compute style colors to avoid borrow conflicts in closure.
-    let text_color = style.text_color();
-    let track_duration_color = style.track_duration_color();
-    let track_name_playing_color = style.track_name_playing_color();
+    let (wrapped_lines, back_mapping) = build_wrapped_lyrics(
+        lyrics_data,
+        current_line_idx,
+        max_width,
+        style,
+        lyrics.selected_index,
+        is_focused,
+    );
 
-    let items: Vec<ListItem> = lyrics_data
-        .line
-        .iter()
-        .enumerate()
-        .map(|(idx, line)| {
-            let is_current = lyrics_data.synced && idx == current_line_idx;
-            let is_past = lyrics_data.synced && idx < current_line_idx;
-            let is_selected = selected_index == Some(idx);
+    let total_rows = wrapped_lines.len();
 
-            let line_color = if is_selected {
-                track_name_hovered_color
-            } else if is_current {
-                text_color
-            } else if is_past {
-                Color::Rgb(128, 128, 128)
-            } else {
-                Color::Rgb(180, 180, 180)
-            };
+    // Store the total rendered row count for mouse wheel scroll bounds.
+    lyrics.total_rows = total_rows;
 
-            let mut spans = Vec::new();
+    // Update the scroller's visible height for correct bounds computation.
+    lyrics.scroller.visible_height = inner.height as usize;
 
-            // Selection indicator
-            if is_selected {
-                spans.push(Span::styled(
-                    "> ",
-                    Style::default()
-                        .fg(track_name_hovered_color)
-                        .add_modifier(Modifier::BOLD),
-                ));
-            } else {
-                spans.push(Span::raw("  "));
-            }
-
-            if let Some(start_ms) = line.start
-                && !line.value.trim().is_empty()
-            {
-                let timestamp_secs = (start_ms / 1000) as u32;
-                let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
-                let ts_color = if is_selected {
-                    track_name_hovered_color
-                } else if is_current {
-                    track_name_playing_color
-                } else {
-                    track_duration_color
-                };
-                spans.push(Span::styled(
-                    format!("{timestamp_str:>6} "),
-                    Style::default().fg(ts_color),
-                ));
-            }
-
-            let text_style = if is_selected || is_current {
-                Style::default().fg(line_color).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(line_color)
-            };
-
-            spans.push(Span::styled(&line.value, text_style));
-
-            ListItem::new(Line::from(spans))
-        })
-        .collect();
-
-    let list = List::new(items);
-
-    let mut list_state = ListState::default();
-    if lyrics_data.synced {
-        // If the user has a keyboard selection, center on that; otherwise follow playback.
-        let focus_line = selected_index.unwrap_or(current_line_idx);
-        list_state.select(Some(focus_line));
-        let visible_height = inner.height as usize;
-        let offset = focus_line.saturating_sub(visible_height / 2);
-        *list_state.offset_mut() = offset;
-    } else {
-        list_state.select(selected_index);
-        *list_state.offset_mut() = lyrics.scroll_offset;
+    // Auto-follow: scroll to keep the current line visible, unless the user
+    // has manually scrolled or has an active selection.
+    let auto_follow = lyrics_data.synced && !lyrics.user_scrolled;
+    if auto_follow {
+        // When the user has a keyboard selection, center on that; otherwise
+        // follow playback.
+        let focus_line_idx = lyrics.selected_index.unwrap_or(current_line_idx);
+        // Find the first rendered row of the focus line.
+        let current_row = back_mapping
+            .iter()
+            .position(|&line_idx| line_idx == focus_line_idx)
+            .unwrap_or(0);
+        // Center the focus line in the viewport.
+        let target = current_row.saturating_sub(lyrics.scroller.visible_height / 2);
+        lyrics.scroller.line = target;
     }
 
-    frame.render_stateful_widget(list, inner, &mut list_state);
+    lyrics.scroller.clamp(total_rows);
+
+    let scroll_offset = lyrics.scroller.line as u16;
+
+    let paragraph = Paragraph::new(wrapped_lines).scroll((scroll_offset, 0));
+
+    frame.render_widget(paragraph, inner);
+
+    // Render scrollbar if content overflows.
+    if lyrics.scroller.needs_scrollbar(total_rows) {
+        lyrics.scroller.render_scrollbar(
+            frame,
+            inner,
+            total_rows,
+            style.track_duration_color(),
+            style.track_name_playing_color(),
+        );
+    }
 }
 
 pub fn handle_key(
@@ -228,10 +230,18 @@ pub fn handle_key(
     None
 }
 
-/// Handle click in the lyrics area — seek to the clicked line.
+/// Unified click handler for both the full-panel and sidebar lyrics views.
+///
+/// Uses the back-mapping approach: computes the inner area, gets the scroll
+/// offset from the shared `Scroller`, rebuilds the back-mapping, and converts
+/// the clicked row to a logical line index → seek duration.
+///
+/// The `area` parameter is the full rect (including border) of the lyrics
+/// view, and `y` is the absolute terminal row of the click.
 pub fn handle_mouse_click(
     lyrics: &mut LyricsViewState,
     logic: &bc::Logic,
+    style: &shared_style::Style,
     area: Rect,
     _x: u16,
     y: u16,
@@ -243,33 +253,46 @@ pub fn handle_mouse_click(
         return;
     }
 
-    // The lyrics area has a border; the inner area starts 1 row below.
-    let inner_y = area.y + 1;
-    let inner_height = area.height.saturating_sub(2); // top + bottom border
-    if y < inner_y || y >= inner_y + inner_height {
+    // The lyrics area has a border; the inner area starts 1 row below and
+    // 1 column in.
+    let inner = Rect::new(
+        area.x + 1,
+        area.y + 1,
+        area.width.saturating_sub(2),
+        area.height.saturating_sub(2),
+    );
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    let row_in_list = (y - inner_y) as usize;
+    if y < inner.y || y >= inner.y + inner.height {
+        return;
+    }
 
-    // Determine the scroll offset that was used during rendering.
+    let scroll_offset = lyrics.scroller.line;
+
     let current_line_idx = blackbird_client_shared::lyrics::find_current_lyrics_line(
         lyrics_data,
         logic.get_playing_position(),
     );
-    let scroll_offset = if lyrics_data.synced {
-        if let Some(selected) = lyrics.selected_index {
-            selected.saturating_sub(inner_height as usize / 2)
-        } else {
-            current_line_idx.saturating_sub(inner_height as usize / 2)
-        }
-    } else {
-        lyrics.scroll_offset
-    };
 
-    let clicked_index = scroll_offset + row_in_list;
-    if clicked_index < lyrics_data.line.len() {
-        seek_to_line(lyrics, logic, clicked_index);
+    // Rebuild the back-mapping with the same width used during rendering
+    // (including the scrollbar column reservation: inner.width - 1).
+    let max_width = (inner.width as usize).saturating_sub(1);
+    let (_, back_mapping) = build_wrapped_lyrics(
+        lyrics_data,
+        current_line_idx,
+        max_width,
+        style,
+        lyrics.selected_index,
+        // The selection indicator state doesn't affect the number of wrapped
+        // rows — it only affects the text width available for wrapping, and
+        // we always reserve the 2-char indicator space.
+        true,
+    );
+
+    if let Some(line_index) = sidebar_click_to_line_index(y, inner, scroll_offset, &back_mapping) {
+        seek_to_line(lyrics, logic, line_index);
     }
 }
 
@@ -316,12 +339,11 @@ pub fn seek_to_selected(lyrics: &mut LyricsViewState, logic: &bc::Logic) {
     let Some(lyrics_data) = &lyrics.shared.data else {
         return;
     };
-    if let Some(line) = lyrics_data.line.get(selected)
-        && let Some(start_ms) = line.start
-    {
-        logic.seek_current(Duration::from_millis(start_ms as u64));
+    if let Some(duration) = line_index_to_duration(lyrics_data, selected) {
+        logic.seek_current(duration);
         // Clear selection so the view returns to auto-follow.
         lyrics.selected_index = None;
+        lyrics.user_scrolled = false;
     }
 }
 
@@ -330,15 +352,14 @@ pub fn seek_to_line(lyrics: &mut LyricsViewState, logic: &bc::Logic, line_index:
     let Some(lyrics_data) = &lyrics.shared.data else {
         return;
     };
-    if let Some(line) = lyrics_data.line.get(line_index)
-        && let Some(start_ms) = line.start
-    {
-        logic.seek_current(Duration::from_millis(start_ms as u64));
+    if let Some(duration) = line_index_to_duration(lyrics_data, line_index) {
+        logic.seek_current(duration);
         lyrics.selected_index = None;
+        lyrics.user_scrolled = false;
     }
 }
 
-// ── Sidebar rendering and interaction ──────────────────────────────────────
+// ── Wrapped lyrics rendering ───────────────────────────────────────────────
 
 /// Wraps a single lyric line's text into rows that fit within `max_width`
 /// display columns. Returns a `Vec` of `String` rows.
@@ -408,24 +429,38 @@ pub fn wrap_lyric_line(text: &str, max_width: usize) -> Vec<String> {
     }
 }
 
+/// Width of the timestamp prefix (e.g. "1:23 ") in the sidebar.
+const SIDEBAR_TIMESTAMP_WIDTH: usize = 7;
+/// Width of the selection indicator prefix ("> " or "  ").
+const SELECTION_INDICATOR_WIDTH: usize = 2;
+
 /// Pre-wraps all lyric lines into a flat list of rendered rows, with a parallel
 /// back-mapping from rendered row index to logical line index.
 ///
 /// Each rendered row is a `Line` ready for `Paragraph`. The back-mapping array
 /// lets click-to-seek convert a clicked Y coordinate (rendered row) back to the
 /// logical lyric line it belongs to.
-/// Width of the timestamp prefix (e.g. "1:23 ") in the sidebar.
-const SIDEBAR_TIMESTAMP_WIDTH: usize = 7;
-
+///
+/// When `show_selection_indicator` is true, each line's first row gets a 2-char
+/// prefix: `> ` if selected, `  ` otherwise. To prevent reflow when focus
+/// changes, the 2-char indicator space is always reserved (even when not
+/// focused, the space is used for leading spaces), so the first row's text
+/// width is always `max_width - 2 - SIDEBAR_TIMESTAMP_WIDTH`.
+///
+/// When `show_selection_indicator` is false, no prefix is added and the first
+/// row's text width is `max_width - SIDEBAR_TIMESTAMP_WIDTH` (current behavior).
 pub fn build_wrapped_lyrics(
     lyrics_data: &StructuredLyrics,
     current_line_idx: usize,
     max_width: usize,
     style: &shared_style::Style,
+    selected_index: Option<usize>,
+    show_selection_indicator: bool,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let text_color = style.text_color();
     let track_duration_color = style.track_duration_color();
     let track_name_playing_color = style.track_name_playing_color();
+    let track_name_hovered_color = style.track_name_hovered_color();
 
     let mut lines = Vec::new();
     let mut back_mapping = Vec::new();
@@ -433,8 +468,11 @@ pub fn build_wrapped_lyrics(
     for (idx, lyric_line) in lyrics_data.line.iter().enumerate() {
         let is_current = lyrics_data.synced && idx == current_line_idx;
         let is_past = lyrics_data.synced && idx < current_line_idx;
+        let is_selected = selected_index == Some(idx);
 
-        let line_color = if is_current {
+        let line_color = if is_selected {
+            track_name_hovered_color
+        } else if is_current {
             text_color
         } else if is_past {
             Color::Rgb(128, 128, 128)
@@ -442,7 +480,7 @@ pub fn build_wrapped_lyrics(
             Color::Rgb(180, 180, 180)
         };
 
-        let text_style = if is_current {
+        let text_style = if is_selected || is_current {
             Style::default().fg(line_color).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(line_color)
@@ -459,7 +497,9 @@ pub fn build_wrapped_lyrics(
             if let Some(start_ms) = lyric_line.start {
                 let timestamp_secs = (start_ms / 1000) as u32;
                 let timestamp_str = seconds_to_hms_string(timestamp_secs, false);
-                let ts_color = if is_current {
+                let ts_color = if is_selected {
+                    track_name_hovered_color
+                } else if is_current {
                     track_name_playing_color
                 } else {
                     track_duration_color
@@ -476,25 +516,50 @@ pub fn build_wrapped_lyrics(
             None
         };
 
-        // The first wrapped row gets the timestamp prefix, so it has less
-        // width available for text.
-        let first_row_width = max_width.saturating_sub(SIDEBAR_TIMESTAMP_WIDTH);
+        // The selection indicator prefix: "> " for selected, "  " otherwise.
+        // The 2-char indicator space is always reserved (even when not focused)
+        // to prevent reflow when focus changes. When show_selection_indicator
+        // is false, the indicator is rendered as spaces — the wrapping width
+        // stays constant, so back-mapping is consistent between rendering and
+        // click handling regardless of focus state.
+        let indicator = if is_selected && show_selection_indicator {
+            "> "
+        } else {
+            "  "
+        };
+        let indicator_style = if is_selected && show_selection_indicator {
+            Style::default()
+                .fg(track_name_hovered_color)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let indicator_span = Span::styled(indicator, indicator_style);
+
+        // The first wrapped row gets the indicator and timestamp prefix, so
+        // it has less width available for text. The indicator space is always
+        // reserved to keep the wrapping width constant across focus changes.
+        let indicator_width = SELECTION_INDICATOR_WIDTH;
+        let first_row_width = max_width
+            .saturating_sub(indicator_width)
+            .saturating_sub(SIDEBAR_TIMESTAMP_WIDTH);
         let text_width = first_row_width.max(1);
         let wrapped_rows = wrap_lyric_line(&display_text, text_width);
 
         for (row_i, row_text) in wrapped_rows.iter().enumerate() {
             back_mapping.push(idx);
-            if row_i == 0
-                && let Some(ts) = &timestamp_span
-            {
-                lines.push(Line::from(vec![
-                    ts.clone(),
-                    Span::styled(row_text.clone(), text_style),
-                ]));
+            if row_i == 0 {
+                let mut spans = Vec::new();
+                spans.push(indicator_span.clone());
+                if let Some(ts) = &timestamp_span {
+                    spans.push(ts.clone());
+                }
+                spans.push(Span::styled(row_text.clone(), text_style));
+                lines.push(Line::from(spans));
             } else {
                 // Continuation rows are indented to align with the text after
-                // the timestamp.
-                let indent = " ".repeat(SIDEBAR_TIMESTAMP_WIDTH);
+                // the indicator and timestamp.
+                let indent = " ".repeat(indicator_width + SIDEBAR_TIMESTAMP_WIDTH);
                 lines.push(Line::from(vec![
                     Span::raw(indent),
                     Span::styled(row_text.clone(), text_style),
@@ -506,107 +571,10 @@ pub fn build_wrapped_lyrics(
     (lines, back_mapping)
 }
 
-/// Draws the lyrics sidebar into the given area.
-///
-/// The sidebar renders a bordered block with title " Lyrics ", then pre-wraps
-/// each lyric line into rows that fit the inner width. The current line is
-/// highlighted. A scrollbar is rendered if content overflows.
-pub fn draw_sidebar(
-    frame: &mut Frame,
-    lyrics: &mut LyricsViewState,
-    style: &shared_style::Style,
-    playing_position: Option<Duration>,
-    area: Rect,
-) {
-    let block = Block::default()
-        .title(" Lyrics ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.album_color()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    if lyrics.shared.loading {
-        let loading = Paragraph::new("Loading lyrics...")
-            .style(Style::default().fg(style.track_duration_color()));
-        frame.render_widget(loading, inner);
-        return;
-    }
-
-    let Some(lyrics_data) = &lyrics.shared.data else {
-        let msg = Paragraph::new("No lyrics available.")
-            .style(Style::default().fg(style.track_duration_color()));
-        frame.render_widget(msg, inner);
-        return;
-    };
-
-    if lyrics_data.line.is_empty() {
-        let msg = Paragraph::new("No lyrics available.")
-            .style(Style::default().fg(style.track_duration_color()));
-        frame.render_widget(msg, inner);
-        return;
-    }
-
-    let current_line_idx =
-        blackbird_client_shared::lyrics::find_current_lyrics_line(lyrics_data, playing_position);
-
-    // Reserve 1 column for the scrollbar when content will overflow. This
-    // prevents the scrollbar from overwriting the last character of lyric
-    // lines that reach the full inner width.
-    let max_width = (inner.width as usize).saturating_sub(1);
-
-    let (wrapped_lines, back_mapping) =
-        build_wrapped_lyrics(lyrics_data, current_line_idx, max_width, style);
-
-    let total_rows = wrapped_lines.len();
-
-    // Store the total rendered row count for mouse wheel scroll bounds.
-    lyrics.sidebar_total_rows = total_rows;
-
-    // Update the scroller's visible height for correct bounds computation.
-    lyrics.sidebar_scroller.visible_height = inner.height as usize;
-
-    // Auto-follow: scroll to keep the current line visible, unless the user
-    // has manually scrolled.
-    if lyrics_data.synced && !lyrics.sidebar_user_scrolled {
-        // Find the first rendered row of the current logical line.
-        let current_row = back_mapping
-            .iter()
-            .position(|&line_idx| line_idx == current_line_idx)
-            .unwrap_or(0);
-        // Center the current line in the viewport.
-        let target = current_row.saturating_sub(lyrics.sidebar_scroller.visible_height / 2);
-        lyrics.sidebar_scroller.line = target;
-    }
-
-    lyrics.sidebar_scroller.clamp(total_rows);
-
-    let scroll_offset = lyrics.sidebar_scroller.line as u16;
-
-    let paragraph = Paragraph::new(wrapped_lines).scroll((scroll_offset, 0));
-
-    frame.render_widget(paragraph, inner);
-
-    // Render scrollbar if content overflows.
-    if lyrics.sidebar_scroller.needs_scrollbar(total_rows) {
-        lyrics.sidebar_scroller.render_scrollbar(
-            frame,
-            inner,
-            total_rows,
-            style.track_duration_color(),
-            style.track_name_playing_color(),
-        );
-    }
-}
-
 /// Pure function: maps a click Y coordinate to a logical lyric line index.
 ///
 /// `y` is the absolute terminal row. `inner_area` is the inner rect of the
-/// sidebar (after border). `scroll_offset` is the current scroll position in
+/// lyrics view (after border). `scroll_offset` is the current scroll position in
 /// rendered rows. `back_mapping` maps rendered row index → logical line index.
 pub fn sidebar_click_to_line_index(
     y: u16,
@@ -681,6 +649,10 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    fn make_style() -> shared_style::Style {
+        shared_style::Style::default()
     }
 
     #[test]
@@ -844,5 +816,140 @@ mod tests {
         assert_eq!(compute_sidebar_width_from_drag(5, 0, true, 10, 40), 10);
         // Clamp to max.
         assert_eq!(compute_sidebar_width_from_drag(50, 0, true, 10, 40), 40);
+    }
+
+    // ── Selection indicator tests ──────────────────────────────────────────
+
+    #[test]
+    fn selection_indicator_appears_on_selected_line_when_shown() {
+        let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
+        let style = make_style();
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
+        // Line 0 should start with "  " (not selected).
+        // Line 1 should start with "> " (selected).
+        let line0_str = line_to_string(&lines[0]);
+        assert!(
+            line0_str.starts_with("  "),
+            "line 0 should start with '  ', got: {line0_str:?}"
+        );
+        let line1_str = line_to_string(&lines[1]);
+        assert!(
+            line1_str.starts_with("> "),
+            "line 1 should start with '> ', got: {line1_str:?}"
+        );
+    }
+
+    #[test]
+    fn selection_indicator_absent_when_not_shown() {
+        let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
+        let style = make_style();
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), false);
+        // No ">" indicator should be present on any line.
+        for (i, line) in lines.iter().enumerate() {
+            let s = line_to_string(line);
+            assert!(
+                !s.starts_with("> "),
+                "line {i} should not have '> ' indicator, got: {s:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn selected_line_uses_hovered_color() {
+        let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
+        let style = make_style();
+        let hovered_color = style.track_name_hovered_color();
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
+        // Line 1 is selected; its text span should use the hovered color.
+        // The line has 3 spans: indicator, timestamp, text.
+        let line1 = &lines[1];
+        assert!(line1.spans.len() >= 3, "expected at least 3 spans");
+        let text_span = &line1.spans[2];
+        assert_eq!(
+            text_span.style.fg,
+            Some(hovered_color),
+            "selected line text should use hovered color"
+        );
+    }
+
+    #[test]
+    fn both_views_produce_identical_output_when_focused() {
+        let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
+        let style = make_style();
+        // Full panel: is_focused=true
+        let (full_lines, full_back) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
+        // Sidebar: is_focused=true
+        let (sidebar_lines, sidebar_back) =
+            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
+        // Back-mappings should be identical.
+        assert_eq!(full_back, sidebar_back);
+        // Lines should have the same count.
+        assert_eq!(full_lines.len(), sidebar_lines.len());
+    }
+
+    #[test]
+    fn no_reflow_when_focus_changes() {
+        // The 2-char indicator space is always reserved, so the wrapping width
+        // is constant regardless of focus state. This means the number of
+        // wrapped rows (and thus the back-mapping) is identical whether or not
+        // the selection indicator is shown.
+        let lyrics_data = make_lyrics(
+            true,
+            &[(Some(0), "first line"), (Some(5000), "second line here")],
+        );
+        let style = make_style();
+        // Use a width where 2 extra/less chars could cause a different wrap.
+        let (focused_lines, focused_back) =
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), true);
+        let (unfocused_lines, unfocused_back) =
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), false);
+        // Same number of wrapped rows → no reflow.
+        assert_eq!(
+            focused_lines.len(),
+            unfocused_lines.len(),
+            "row count should not change with focus state"
+        );
+        // Same back-mapping → click-to-seek is consistent.
+        assert_eq!(
+            focused_back, unfocused_back,
+            "back-mapping should not change with focus state"
+        );
+    }
+
+    /// Helper to convert a `Line` to a plain string for assertion.
+    fn line_to_string(line: &Line) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    // ── move_selection tests ──────────────────────────────────────────────
+
+    #[test]
+    fn move_selection_down_from_current_line() {
+        let mut state = LyricsViewState::new();
+        state.shared.data = Some(make_lyrics(
+            true,
+            &[(Some(0), "a"), (Some(1000), "b"), (Some(2000), "c")],
+        ));
+        // No selection yet; move down from current line (index 0).
+        move_selection(&mut state, None, 1);
+        assert_eq!(state.selected_index, Some(1));
+    }
+
+    #[test]
+    fn move_selection_up_clamps_at_zero() {
+        let mut state = LyricsViewState::new();
+        state.shared.data = Some(make_lyrics(true, &[(Some(0), "a"), (Some(1000), "b")]));
+        state.selected_index = Some(0);
+        move_selection(&mut state, None, -1);
+        assert_eq!(state.selected_index, Some(0));
+    }
+
+    #[test]
+    fn move_selection_down_clamps_at_last() {
+        let mut state = LyricsViewState::new();
+        state.shared.data = Some(make_lyrics(true, &[(Some(0), "a"), (Some(1000), "b")]));
+        state.selected_index = Some(1);
+        move_selection(&mut state, None, 1);
+        assert_eq!(state.selected_index, Some(1));
     }
 }

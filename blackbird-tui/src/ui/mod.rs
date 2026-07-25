@@ -194,11 +194,13 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     // Split the content area with an optional lyrics sidebar. The sidebar is
-    // only shown when the full lyrics panel is not focused (to avoid showing
-    // lyrics twice) and lyrics_display is Left or Right.
+    // shown when lyrics_display is Left or Right and the app is not loading.
+    // When FocusedPanel::Lyrics is active with a sidebar visible, the sidebar
+    // gets keyboard focus and the main area renders the library (the default
+    // view). The full lyrics panel only appears when FocusedPanel::Lyrics is
+    // active and there is no sidebar (lyrics_display is Inline or Off).
     let lyrics_display = app.config.layout.base.lyrics_display;
-    let show_sidebar =
-        lyrics_display.is_sidebar() && app.focused_panel != FocusedPanel::Lyrics && !is_loading;
+    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
     let content_layout = if show_sidebar {
         layout::split_content_with_sidebar(
             main.content,
@@ -215,7 +217,15 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let content_area = content_layout.main;
 
-    match app.focused_panel {
+    // When the sidebar is visible and focused, render the library (default
+    // view) in the main area instead of the full lyrics panel.
+    let render_panel = if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
+        FocusedPanel::Library
+    } else {
+        app.focused_panel
+    };
+
+    match render_panel {
         FocusedPanel::Library => library::draw(frame, app, content_area),
         FocusedPanel::Search => search::draw(
             frame,
@@ -226,7 +236,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ),
         FocusedPanel::Lyrics => lyrics::draw(
             frame,
-            &app.lyrics,
+            &mut app.lyrics,
             &app.config.style,
             app.logic.get_playing_position(),
             content_area,
@@ -248,14 +258,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         ),
     }
 
-    // Draw the lyrics sidebar if present.
+    // Draw the lyrics sidebar if present. When the sidebar is focused
+    // (FocusedPanel::Lyrics + sidebar visible), pass is_focused = true so
+    // the selection indicator is rendered.
     if let Some(sidebar_area) = content_layout.lyrics_sidebar {
+        let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
         lyrics::draw_sidebar(
             frame,
             &mut app.lyrics,
             &app.config.style,
             app.logic.get_playing_position(),
             sidebar_area,
+            sidebar_focused,
         );
     }
 
