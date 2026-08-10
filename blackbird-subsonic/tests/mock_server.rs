@@ -64,15 +64,6 @@ impl MockServer {
             .insert(endpoint.to_string(), wrap_response(subsonic_response_json));
     }
 
-    /// Records `endpoint` and its query string as a request that was received.
-    #[allow(dead_code)]
-    pub fn record(&self, endpoint: &str, query: &str) {
-        self.requests
-            .lock()
-            .unwrap()
-            .push((endpoint.to_string(), query.to_string()));
-    }
-
     /// Returns a client pointed at this server.
     pub fn client(&self) -> Client {
         Client::new(

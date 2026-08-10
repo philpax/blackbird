@@ -781,6 +781,110 @@ fn results_area(area: Rect) -> Rect {
 mod tests {
     use super::*;
 
+    /// Builds a minimal `App` for layout/geometry tests. The logic's mpsc
+    /// senders and the app's receivers are dummy (dropped immediately);
+    /// `sidebar_layout` only reads the sidebar order and configured heights.
+    fn test_app() -> App {
+        let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
+        let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
+        let (similar_songs_loaded_tx, similar_songs_loaded_rx) =
+            std::sync::mpsc::channel::<bc::SimilarSongsData>();
+        let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
+        let (track_updated_tx, track_updated_rx) = std::sync::mpsc::channel::<()>();
+        let logic = bc::Logic::new(bc::LogicArgs {
+            base_url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            transcode: false,
+            volume: 0.0,
+            apply_replaygain: false,
+            replaygain_preamp_db: 0.0,
+            sort_order: bc::SortOrder::default(),
+            playback_mode: bc::PlaybackMode::default(),
+            last_playback: None,
+            cover_art_loaded_tx,
+            lyrics_loaded_tx,
+            similar_songs_loaded_tx,
+            library_populated_tx,
+            track_updated_tx,
+        });
+        let playback_to_logic_rx = logic.subscribe_to_playback_events();
+        App::new(
+            crate::config::Config::default(),
+            logic,
+            playback_to_logic_rx,
+            crate::cover_art::CoverArtCache::new(cover_art_loaded_rx),
+            lyrics_loaded_rx,
+            similar_songs_loaded_rx,
+            library_populated_rx,
+            track_updated_rx,
+            crate::log_buffer::LogBuffer::new(),
+        )
+    }
+
+    /// The component rects from `sidebar_layout` tile `[area.y, area.y +
+    /// area.height)` exactly: each rect starts where the previous ended, and
+    /// the last one never exceeds the area (rounding remainder absorbed).
+    #[test]
+    fn sidebar_layout_rects_cover_area_exactly() {
+        let area = Rect::new(0, 0, 20, 30);
+        let mut app = test_app();
+        app.sidebar.order = [SidebarComponentId::Lyrics, SidebarComponentId::SimilarSongs]
+            .into_iter()
+            .collect();
+
+        let rects = sidebar_layout(area, &app);
+        assert_eq!(rects.len(), 2);
+        // First rect starts at the area top.
+        assert_eq!(rects[0].y, area.y);
+        // The last rect's bottom edge is exactly the area bottom (no overflow).
+        assert_eq!(rects[1].y + rects[1].height, area.y + area.height);
+        // Rects are contiguous: next starts where previous ended.
+        assert_eq!(rects[1].y, rects[0].y + rects[0].height);
+        // Neither rect exceeds the area height.
+        assert!(rects.iter().all(|r| r.y + r.height <= area.y + area.height));
+    }
+
+    /// A single component spans the full area, regardless of configured
+    /// heights (mismatched heights fall back to equal shares = 1/1).
+    #[test]
+    fn sidebar_layout_single_component_spans_area() {
+        let area = Rect::new(3, 5, 20, 12);
+        let mut app = test_app();
+        app.sidebar.order = [SidebarComponentId::SimilarSongs].into_iter().collect();
+
+        let rects = sidebar_layout(area, &app);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].y, area.y);
+        assert_eq!(rects[0].height, area.height);
+    }
+
+    /// Dense fractions (heights summing to much more than 1, e.g. all values
+    /// near the drag clamp of 0.95) must still produce rects that tile the
+    /// area without exceeding it: the fractions are normalized first.
+    #[test]
+    fn sidebar_layout_dense_fractions_never_overflow() {
+        let area = Rect::new(0, 0, 20, 100);
+        let mut app = test_app();
+        app.sidebar.order = [
+            SidebarComponentId::Lyrics,
+            SidebarComponentId::SimilarSongs,
+            SidebarComponentId::Lyrics,
+        ]
+        .into_iter()
+        .collect();
+        app.config.layout.base.sidebar.heights = vec![0.95, 0.95, 0.95];
+
+        let rects = sidebar_layout(area, &app);
+        assert_eq!(rects.len(), 3);
+        // Normalized fractions sum to 1 (each ~1/3 ≈ 33), so heights are sane.
+        assert!(rects.iter().all(|r| r.height >= 1));
+        assert!(rects.iter().all(|r| r.y + r.height <= area.y + area.height));
+        // Contiguity: last bottom == area bottom.
+        let last = rects.last().unwrap();
+        assert_eq!(last.y + last.height, area.y + area.height);
+    }
+
     fn child(id: &str, is_dir: bool) -> bc::bs::Child {
         bc::bs::Child {
             id: id.to_string(),

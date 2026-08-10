@@ -761,6 +761,10 @@ impl Logic {
     ///
     /// On failure an empty list is delivered (so the UI clears any stale
     /// results) and `AppStateError::SimilarSongsFetchFailed` is set.
+    ///
+    /// `last_requested_similar_track` stays set after completion (mirroring
+    /// `last_requested_lyrics_track`), so a second request for the same track
+    /// is skipped until a different track is requested.
     pub fn request_similar_songs(&self, track_id: &TrackId, count: usize) {
         // A hand-edited config must not bypass the settings UI's 1..=100 clamp.
         let count = count.clamp(1, 100);
@@ -1469,5 +1473,181 @@ mod tests {
             ..AppState::default()
         };
         assert!(!state.error.as_ref().unwrap().is_similar_related());
+    }
+
+    // ── Similar-songs dispatch through Logic ──────────────────────────────
+    //
+    // Belt-and-braces: the endpoint *selection* is already pinned by
+    // `test_similar_endpoint_selection_by_capability` and the client *parse*
+    // paths by the opensubsonic integration tests. This test additionally
+    // drives the full `Logic::request_similar_songs` dispatch against a local
+    // HTTP server and asserts the endpoint that actually gets hit matches the
+    // extension advertised in state.
+    //
+    // The Logic's `initial_fetch` also hits the server (ping, extensions,
+    // fetch-all); the server returns error bodies for those so they fail
+    // non-fatally, and we wait on the delivered similar-songs channel for the
+    // request to complete.
+
+    /// Minimal canned-HTTP server recording the endpoints hit, mirroring the
+    /// subsonic crate's mock server. Serves a canned body for the given
+    /// endpoint and a Subsonic error for everything else.
+    struct TestServer {
+        hits: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        base_url: String,
+    }
+
+    impl TestServer {
+        fn spawn(similar_endpoint: &str) -> Self {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let hits = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+            let hits_thread = hits.clone();
+            // The inner list key differs per endpoint: getSonicSimilarTracks
+            // uses `track`, getSimilarSongs2 uses `song`. Only the dispatched
+            // endpoint matters here; the parse shapes are pinned elsewhere.
+            let (inner_key, expected_endpoint) = if similar_endpoint == "sonicSimilarTracks" {
+                ("track", "getSonicSimilarTracks")
+            } else {
+                ("song", "getSimilarSongs2")
+            };
+            let similar_body = format!(
+                r#"{{"subsonic-response":{{"status":"ok","version":"1.16.1","{similar_endpoint}":{{"{inner_key}":[]}}}}}}"#
+            );
+            let expected_endpoint = expected_endpoint.to_string();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else {
+                        break;
+                    };
+                    let hits = hits_thread.clone();
+                    let similar_body = similar_body.clone();
+                    let expected_endpoint = expected_endpoint.clone();
+                    std::thread::spawn(move || {
+                        use std::io::{BufRead, BufReader, Write};
+                        let mut reader = BufReader::new(stream.try_clone().unwrap());
+                        let mut request_line = String::new();
+                        if reader.read_line(&mut request_line).is_err() {
+                            return;
+                        }
+                        let Some(path) = request_line.split_whitespace().nth(1) else {
+                            return;
+                        };
+                        let path = path.trim_start_matches('/');
+                        let path = path.strip_prefix("rest/").unwrap_or(path);
+                        let (endpoint, _query) = match path.split_once('?') {
+                            Some((e, q)) => (e.to_string(), q.to_string()),
+                            None => (path.to_string(), String::new()),
+                        };
+                        let mut line = String::new();
+                        loop {
+                            line.clear();
+                            if reader.read_line(&mut line).is_err() || line.trim().is_empty() {
+                                break;
+                            }
+                        }
+                        hits.lock().unwrap().push(endpoint.clone());
+                        let body = if endpoint == expected_endpoint {
+                            similar_body.clone()
+                        } else {
+                            r#"{"subsonic-response":{"status":"failed","version":"1.16.1","error":{"code":0,"message":"not stubbed"}}}"#.to_string()
+                        };
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    });
+                }
+            });
+            Self { hits, base_url }
+        }
+    }
+
+    /// Builds a Logic with a test server, injects the given extensions into
+    /// state, and returns (logic, similar-songs receiver, server).
+    fn logic_with_extensions(
+        extensions: Vec<bs::OpenSubsonicExtension>,
+        similar_endpoint: &str,
+    ) -> (
+        Logic,
+        std::sync::mpsc::Receiver<SimilarSongsData>,
+        TestServer,
+    ) {
+        let server = TestServer::spawn(similar_endpoint);
+        let (cover_art_loaded_tx, _) = std::sync::mpsc::channel::<CoverArt>();
+        let (lyrics_loaded_tx, _) = std::sync::mpsc::channel::<LyricsData>();
+        let (similar_songs_loaded_tx, similar_songs_loaded_rx) =
+            std::sync::mpsc::channel::<SimilarSongsData>();
+        let (library_populated_tx, _) = std::sync::mpsc::channel::<()>();
+        let (track_updated_tx, _) = std::sync::mpsc::channel::<()>();
+        let logic = Logic::new(LogicArgs {
+            base_url: server.base_url.clone(),
+            username: String::new(),
+            password: String::new(),
+            transcode: false,
+            volume: 0.0,
+            apply_replaygain: false,
+            replaygain_preamp_db: 0.0,
+            sort_order: SortOrder::default(),
+            playback_mode: PlaybackMode::default(),
+            last_playback: None,
+            cover_art_loaded_tx,
+            lyrics_loaded_tx,
+            similar_songs_loaded_tx,
+            library_populated_tx,
+            track_updated_tx,
+        });
+        // Inject the advertised extensions directly into state.
+        logic.get_state().write().unwrap().open_subsonic_extensions = extensions;
+        (logic, similar_songs_loaded_rx, server)
+    }
+
+    #[test]
+    fn test_request_similar_songs_dispatches_to_advertised_endpoint() {
+        use blackbird_state::TrackId;
+
+        // sonicSimilarity advertised → getSonicSimilarTracks (canned response
+        // uses the sonic shape `song` for the empty list; the parse is pinned
+        // elsewhere, this only checks the dispatched endpoint).
+        let (logic, rx, server) =
+            logic_with_extensions(vec![extension("sonicSimilarity")], "sonicSimilarTracks");
+        logic.request_similar_songs(&TrackId("seed".into()), 5);
+        let delivered = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("similar-songs delivery should arrive");
+        assert_eq!(delivered.similar.len(), 0);
+        assert!(
+            server
+                .hits
+                .lock()
+                .unwrap()
+                .contains(&"getSonicSimilarTracks".to_string()),
+            "expected getSonicSimilarTracks to be hit, got {:?}",
+            server.hits.lock().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_request_similar_songs_falls_back_without_extension() {
+        use blackbird_state::TrackId;
+
+        // No sonicSimilarity → getSimilarSongs2.
+        let (logic, rx, server) = logic_with_extensions(vec![], "similarSongs2");
+        logic.request_similar_songs(&TrackId("seed".into()), 5);
+        let delivered = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("similar-songs delivery should arrive");
+        assert_eq!(delivered.similar.len(), 0);
+        assert!(
+            server
+                .hits
+                .lock()
+                .unwrap()
+                .contains(&"getSimilarSongs2".to_string()),
+            "expected getSimilarSongs2 to be hit, got {:?}",
+            server.hits.lock().unwrap()
+        );
     }
 }
