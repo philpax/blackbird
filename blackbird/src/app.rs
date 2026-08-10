@@ -149,7 +149,7 @@ impl App {
         // is a snapshot of the config's component list; recomputing a
         // 4-element SmallVec each tick is cheap and picks up both live
         // settings edits and external config reloads.
-        self.sidebar.update_from_config(&self.config);
+        self.sidebar.update_from_config(&mut self.config);
         // The inline-lyrics flag tracks the `show_inline_lyrics` setting,
         // independent of sidebar state.
         self.inline_lyrics_mode = self.config.layout.show_inline_lyrics;

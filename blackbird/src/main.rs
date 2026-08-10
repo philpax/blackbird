@@ -877,10 +877,12 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             }
 
             // Continue a sidebar component-boundary drag (adjust the heights
-            // of the two adjacent components).
+            // of the two adjacent components, and keep scrolling the
+            // similar-songs component under the boundary).
             if let Some(boundary) = app.sidebar_component_drag {
                 if let Some(sidebar_rect) = content_layout.lyrics_sidebar {
                     ui::sidebar::adjust_component_heights(app, sidebar_rect, boundary, y);
+                    ui::sidebar::handle_boundary_drag(app, sidebar_rect, boundary, x, y);
                 }
                 return;
             }
@@ -898,11 +900,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 ui::library::handle_mouse_drag(app, library_area, x, y);
             } else if app.focused_panel == FocusedPanel::Search {
                 app.search.handle_mouse_drag(library_area, x, y);
-            } else if app.focused_panel == FocusedPanel::Lyrics {
+            } else if app.focused_panel == FocusedPanel::Lyrics
+                && app.sidebar.similar_songs_enabled()
+            {
                 // Route content drags in the sidebar (or full panel) to the
-                // focused similar-songs component, if that's what's under the
-                // cursor. The lyrics component handles its own drag-less
-                // scroll; the similar-songs component supports content drags.
+                // similar-songs component if it's under the cursor and enabled.
+                // When the sidebar is visible but the similar-songs component
+                // isn't in the order, there's nothing to drag. The lyrics
+                // component handles its own drag-less scroll.
                 let sidebar_area = content_layout.lyrics_sidebar.unwrap_or(library_area);
                 ui::sidebar::handle_mouse_drag(app, sidebar_area, x, y);
             }

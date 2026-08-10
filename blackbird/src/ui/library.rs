@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 use ratatui_image::{
     protocol::Protocol,
@@ -968,10 +968,7 @@ fn draw_connection_error(
 /// present, so the library matches the framed sidebar panels). `outer` is the
 /// full area the frame covers; the content draws into its inner rect.
 pub fn draw_in_frame(frame: &mut Frame, app: &mut App, outer: Rect, border_color: Color) {
-    let block = Block::default()
-        .title(" Library ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color));
+    let block = super::framed_block(" Library ", border_color);
     let inner = block.inner(outer);
     frame.render_widget(block, outer);
     draw(frame, app, inner);

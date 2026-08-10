@@ -76,7 +76,10 @@ pub fn scroll_region_at(
                 return ScrollRegion::Sidebar { component: i };
             }
         }
-        return ScrollRegion::Sidebar { component: 0 };
+        // The cursor is in the sidebar area but not over a component (e.g. in
+        // the inter-component tolerance band). Treat it as unscrollable rather
+        // than falling back to component 0.
+        return ScrollRegion::None;
     }
 
     if my >= content.y

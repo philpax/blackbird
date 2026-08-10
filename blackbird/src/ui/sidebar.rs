@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph},
 };
 use smallvec::SmallVec;
 
@@ -66,7 +66,7 @@ impl SidebarState {
     /// Rebuilds the order from the shared config, re-mapping the focused
     /// component to the new order so focus doesn't drift. Also rebalances the
     /// proportional heights when the component list changed.
-    pub fn update_from_config(&mut self, config: &crate::config::Config) {
+    pub fn update_from_config(&mut self, config: &mut crate::config::Config) {
         let order: SmallVec<[SidebarComponentId; 4]> = config
             .layout
             .base
@@ -80,12 +80,23 @@ impl SidebarState {
         } else {
             self.focused_component = self.focused_component.min(order.len() - 1);
         }
+        // Rebalance the proportional heights when the component count changed
+        // (e.g. the config was edited externally), so `heights` always matches
+        // the order.
+        if order.len() != self.order.len() {
+            config.layout.base.sidebar.rebalance_heights();
+        }
         self.order = order;
     }
 
     /// Whether the sidebar has any components.
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()
+    }
+
+    /// Whether the similar-songs component is enabled in the sidebar order.
+    pub fn similar_songs_enabled(&self) -> bool {
+        self.order.contains(&SidebarComponentId::SimilarSongs)
     }
 }
 
@@ -136,6 +147,17 @@ impl SimilarSongsState {
         self.selected_index = 0;
     }
 
+    /// Clamps `selected_index` into the results range, resetting to 0 when the
+    /// list is empty. Shared by `on_loaded` and the selection-movement paths so
+    /// a shrinking result set never leaves the selection out of range.
+    fn clamp_selection(&mut self) {
+        if self.results.is_empty() {
+            self.selected_index = 0;
+        } else {
+            self.selected_index = self.selected_index.min(self.results.len() - 1);
+        }
+    }
+
     /// Called when similar-songs data arrives. The caller only forwards data
     /// for the *current* track, so stale responses are already filtered.
     pub fn on_loaded(&mut self, data: &bc::SimilarSongsData) {
@@ -149,9 +171,7 @@ impl SimilarSongsState {
             .filter(|child| !child.is_dir)
             .map(|child| TrackId(child.id.clone()))
             .collect();
-        if self.selected_index >= self.results.len() {
-            self.selected_index = 0;
-        }
+        self.clamp_selection();
         self.viewport.cancel_inertia();
         self.viewport.clamp(self.results.len());
     }
@@ -319,15 +339,9 @@ pub fn draw_sidebar(frame: &mut Frame, app: &mut App, area: Rect, is_focused: bo
 }
 
 /// Draws the full-panel view of the sidebar components (used when no sidebar is
-/// visible), filling the content area.
+/// visible), filling the content area. The caller guarantees the component list
+/// is non-empty; an empty sidebar renders the library with a hint instead.
 pub fn draw_panel(frame: &mut Frame, app: &mut App, area: Rect) {
-    if app.sidebar.is_empty() {
-        let msg = Paragraph::new("No sidebar components enabled.")
-            .style(Style::default().fg(app.config.style.library.track_duration().to_color()));
-        frame.render_widget(msg, area);
-        return;
-    }
-
     let component_rects = sidebar_layout(area, app);
     // Clone the order so `draw_component` can borrow `app` mutably.
     let order: SmallVec<[SidebarComponentId; 4]> = app.sidebar.order.clone();
@@ -416,10 +430,7 @@ fn sidebar_layout(area: Rect, app: &App) -> SmallVec<[Rect; 4]> {
 /// Draws the similar-songs component (bordered block + result list).
 pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let style = &app.config.style;
-    let block = Block::default()
-        .title(" Similar songs ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.sidebar.similar_border().to_color()));
+    let block = super::framed_block(" Similar songs ", style.sidebar.similar_border().to_color());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -448,6 +459,10 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
         return;
     }
 
+    // Render-time viewport maintenance: `visible_height` reflects the actual
+    // space this frame, and `clamp` keeps `line` valid when the available
+    // height or result count changed since the last event. This is runtime
+    // render state (never persisted to config), so mutating it here is safe.
     similar.viewport.visible_height = inner.height as usize;
     similar.viewport.clamp(similar.results.len());
 
@@ -496,16 +511,7 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
                         Style::default().fg(string_to_color(artist)),
                     ),
                     Span::raw(" - "),
-                    Span::styled(
-                        d.track_title.to_string(),
-                        Style::default()
-                            .fg(title_color)
-                            .add_modifier(if is_selected {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            }),
-                    ),
+                    Span::styled(d.track_title.to_string(), Style::default().fg(title_color)),
                     Span::styled(
                         format!(" [{dur_str}]"),
                         Style::default().fg(if is_selected {
@@ -647,6 +653,29 @@ pub fn handle_mouse_drag(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
             return;
         }
     }
+}
+
+/// Feeds a component-boundary drag to the similar-songs component adjacent to
+/// the boundary, so its list keeps tracking the cursor while the user resizes.
+/// Components on the other side of the boundary (lyrics) have no content-drag
+/// behavior, so this is a no-op for them.
+pub fn handle_boundary_drag(app: &mut App, sidebar_area: Rect, boundary: usize, x: u16, y: u16) {
+    let order: SmallVec<[SidebarComponentId; 4]> = app.sidebar.order.clone();
+    let Some(component) = order.get(boundary).or_else(|| order.get(boundary + 1)) else {
+        return;
+    };
+    if *component != SidebarComponentId::SimilarSongs {
+        return;
+    }
+    let component_rects = sidebar_layout(sidebar_area, app);
+    let Some(rect) = component_rects
+        .get(boundary)
+        .or_else(|| component_rects.get(boundary + 1))
+        .copied()
+    else {
+        return;
+    };
+    app.similar_songs.handle_mouse_drag(rect, x, y);
 }
 
 /// Returns the sidebar component boundary index whose dividing row is under

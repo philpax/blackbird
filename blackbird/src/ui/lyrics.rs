@@ -7,7 +7,7 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
 };
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -97,10 +97,7 @@ fn draw_lyrics_content(
     is_focused: bool,
     mouse: Option<(u16, u16)>,
 ) {
-    let block = Block::default()
-        .title(" Lyrics ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.sidebar.lyrics_border().to_color()));
+    let block = super::framed_block(" Lyrics ", style.sidebar.lyrics_border().to_color());
 
     let inner = block.inner(area);
     frame.render_widget(block, area);

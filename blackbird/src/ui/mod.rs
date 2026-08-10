@@ -29,6 +29,17 @@ use crate::{
     keys,
 };
 
+/// Builds a bordered block with a title and border colour, the common framing
+/// used by the library (when a sidebar is present) and every sidebar
+/// component. Callers render the block over `area` and draw content into
+/// `block.inner(area)`.
+pub(crate) fn framed_block(title: &str, border_color: Color) -> Block<'static> {
+    Block::default()
+        .title(title.to_string())
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+}
+
 /// Returns the effective background color: either the configured background
 /// or `Color::Reset` (terminal native) when `use_terminal_background` is set.
 pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
@@ -189,7 +200,28 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                 content_area,
             );
         }
-        FocusedPanel::Lyrics => sidebar::draw_panel(frame, app, content_area),
+        FocusedPanel::Lyrics => {
+            if app.sidebar.is_empty() {
+                // The sidebar has no components enabled while Lyrics was
+                // focused: fall back to the library (unframed, since no
+                // sidebar is present) with a hint that nothing is configured.
+                library::draw(frame, app, content_area);
+                let hint = Paragraph::new("No sidebar components enabled.").style(
+                    Style::default().fg(app.config.style.library.track_duration().to_color()),
+                );
+                frame.render_widget(
+                    hint,
+                    Rect::new(
+                        content_area.x + 1,
+                        content_area.y + 1,
+                        content_area.width.saturating_sub(2),
+                        1,
+                    ),
+                );
+            } else {
+                sidebar::draw_panel(frame, app, content_area)
+            }
+        }
         FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, content_area),
         FocusedPanel::Queue => queue::draw(
             frame,
