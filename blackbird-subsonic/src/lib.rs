@@ -22,4 +22,11 @@ mod misc;
 mod lyrics;
 pub use lyrics::*;
 
+mod extensions;
+pub use extensions::*;
+
+mod similar;
+#[allow(unused_imports)]
+pub use similar::*;
+
 mod request;

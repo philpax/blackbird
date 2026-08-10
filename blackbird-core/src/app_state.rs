@@ -3,6 +3,8 @@ use std::time::Duration;
 use blackbird_state::{AlbumId, CoverArtId, TrackId};
 use serde::{Deserialize, Serialize};
 
+use crate::bs::OpenSubsonicExtension;
+
 use crate::{Library, PlaybackState, TrackDisplayDetails, queue::QueueState};
 
 /// The sort order for displaying albums in the library.
@@ -140,6 +142,11 @@ pub struct AppState {
     pub scrobble_state: ScrobbleState,
 
     pub error: Option<AppStateError>,
+
+    /// The OpenSubsonic extensions advertised by the server, fetched at
+    /// library load/reload. Empty for servers that don't support the
+    /// `getOpenSubsonicExtensions` endpoint.
+    pub open_subsonic_extensions: Vec<OpenSubsonicExtension>,
 }
 
 impl Default for AppState {
@@ -158,6 +165,7 @@ impl Default for AppState {
             replaygain_preamp_db: 0.0,
             scrobble_state: ScrobbleState::default(),
             error: None,
+            open_subsonic_extensions: Vec::new(),
         }
     }
 }
@@ -208,6 +216,13 @@ pub enum AppStateError {
         album_id: AlbumId,
         error: String,
     },
+    SimilarSongsFetchFailed {
+        track_id: TrackId,
+        error: String,
+    },
+    OpenSubsonicExtensionsFetchFailed {
+        error: String,
+    },
 }
 impl AppStateError {
     /// Should be paired with [`Self::display_message`]
@@ -221,6 +236,10 @@ impl AppStateError {
             AppStateError::UnstarTrackFailed { .. } => "Failed to unstar track",
             AppStateError::StarAlbumFailed { .. } => "Failed to star album",
             AppStateError::UnstarAlbumFailed { .. } => "Failed to unstar album",
+            AppStateError::SimilarSongsFetchFailed { .. } => "Failed to fetch similar songs",
+            AppStateError::OpenSubsonicExtensionsFetchFailed { .. } => {
+                "Failed to fetch OpenSubsonic extensions"
+            }
         }
     }
 
@@ -261,6 +280,15 @@ impl AppStateError {
             }
             AppStateError::UnstarAlbumFailed { album_id, error } => {
                 format!("Failed to unstar album `{}`: {error}", album_id,)
+            }
+            AppStateError::SimilarSongsFetchFailed { track_id, error } => {
+                format!(
+                    "Failed to fetch similar songs for track `{}`: {error}",
+                    TrackDisplayDetails::string_report_without_time(track_id, state)
+                )
+            }
+            AppStateError::OpenSubsonicExtensionsFetchFailed { error } => {
+                format!("Failed to fetch OpenSubsonic extensions: {error}")
             }
         }
     }

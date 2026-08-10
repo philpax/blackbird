@@ -57,7 +57,12 @@ impl Client {
     }
 
     fn parse_response<T: DeserializeOwned>(bytes: &[u8]) -> ClientResult<T> {
-        let response: Response<T> = serde_json::from_slice(bytes)?;
+        // Deserialize into an untyped body first so a failed response is
+        // recognized before the endpoint-specific body is parsed. The typed
+        // `SubsonicResponse<T>` uses `#[serde(flatten)]`, which would
+        // otherwise try to parse the body first and report a confusing
+        // "missing field" error instead of the server's actual error.
+        let response: Response<serde_json::Value> = serde_json::from_slice(bytes)?;
 
         if response.subsonic_response.status == ResponseStatus::Failed {
             return Err(match response.subsonic_response.error {
@@ -72,6 +77,12 @@ impl Client {
             });
         }
 
+        // For successful responses, re-parse with the typed body. This keeps
+        // the original semantics for unit-tupled bodies (e.g. `ping` uses
+        // `T = ()`, where the body is derived from the envelope's remaining
+        // fields rather than a `null` literal) and for `#[serde(flatten)]`
+        // bodies in general.
+        let response: Response<T> = serde_json::from_slice(bytes)?;
         Ok(response.subsonic_response.body)
     }
 

@@ -57,11 +57,14 @@ pub struct Logic {
 
     cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
+    similar_songs_loaded_tx: std::sync::mpsc::Sender<SimilarSongsData>,
     library_populated_tx: std::sync::mpsc::Sender<()>,
     track_updated_tx: std::sync::mpsc::Sender<()>,
 
     /// Guards against duplicate in-flight lyrics requests for the same track.
     last_requested_lyrics_track: std::sync::Mutex<Option<TrackId>>,
+    /// Guards against duplicate in-flight similar-songs requests for the same track.
+    last_requested_similar_track: std::sync::Mutex<Option<TrackId>>,
 
     state: Arc<RwLock<AppState>>,
     client: Arc<bs::Client>,
@@ -104,6 +107,12 @@ pub const NEXT_TRACK_SURROUNDING_GROUPS: usize = 3;
 pub struct LyricsData {
     pub track_id: TrackId,
     pub lyrics: Option<bs::StructuredLyrics>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SimilarSongsData {
+    pub track_id: TrackId,
+    pub similar: Vec<bs::Child>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +215,7 @@ pub struct LogicArgs {
     pub last_playback: Option<(TrackId, Duration)>,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
+    pub similar_songs_loaded_tx: std::sync::mpsc::Sender<SimilarSongsData>,
     pub library_populated_tx: std::sync::mpsc::Sender<()>,
     pub track_updated_tx: std::sync::mpsc::Sender<()>,
 }
@@ -225,6 +235,7 @@ impl Logic {
             last_playback,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
+            similar_songs_loaded_tx,
             library_populated_tx,
             track_updated_tx,
         }: LogicArgs,
@@ -273,10 +284,12 @@ impl Logic {
 
             cover_art_loaded_tx,
             lyrics_loaded_tx,
+            similar_songs_loaded_tx,
             library_populated_tx,
             track_updated_tx,
 
             last_requested_lyrics_track: std::sync::Mutex::new(None),
+            last_requested_similar_track: std::sync::Mutex::new(None),
 
             state,
             client,
@@ -738,6 +751,133 @@ impl Logic {
             }
         });
     }
+
+    /// Reloads the OpenSubsonic extensions from the server.
+    ///
+    /// Non-fatal: a server that errors on `getOpenSubsonicExtensions` (or
+    /// returns an empty list) leaves the previous set (or empty) in place and
+    /// surfaces `AppStateError::OpenSubsonicExtensionsFetchFailed` without
+    /// failing any surrounding load.
+    pub fn request_open_subsonic_extensions(&self) {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        self.tokio_thread.spawn(async move {
+            fetch_open_subsonic_extensions(&client, &state).await;
+        });
+    }
+
+    /// Fetch similar songs for the given track, delivering the result on
+    /// `similar_songs_loaded_tx`.
+    ///
+    /// The endpoint is chosen from the server's advertised capabilities:
+    /// `getSonicSimilarTracks` when it advertises the `sonicSimilarity`
+    /// extension, falling back to `getSimilarSongs2` otherwise.
+    ///
+    /// On failure an empty list is delivered (so the UI clears any stale
+    /// results) and `AppStateError::SimilarSongsFetchFailed` is set.
+    pub fn request_similar_songs(&self, track_id: &TrackId, count: usize) {
+        // Skip if we already have an in-flight request for this track.
+        {
+            let mut last = self.last_requested_similar_track.lock().unwrap();
+            if last.as_ref() == Some(track_id) {
+                return;
+            }
+            *last = Some(track_id.clone());
+        }
+
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let track_id = track_id.clone();
+        let similar_songs_loaded_tx = self.similar_songs_loaded_tx.clone();
+
+        self.tokio_thread.spawn(async move {
+            let endpoint = {
+                let loaded = state.read().unwrap().open_subsonic_extensions.clone();
+                similar_endpoint_for(&loaded)
+            };
+            let result = match endpoint {
+                SimilarEndpoint::SonicSimilarTracks => {
+                    client
+                        .get_sonic_similar_tracks(&track_id.0, Some(count))
+                        .await
+                }
+                SimilarEndpoint::SimilarSongs2 => {
+                    client.get_similar_songs2(&track_id.0, Some(count)).await
+                }
+            };
+
+            match result {
+                Ok(similar) => {
+                    similar_songs_loaded_tx
+                        .send(SimilarSongsData {
+                            track_id: track_id.clone(),
+                            similar,
+                        })
+                        .unwrap();
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "Failed to fetch similar songs for track {}: {}",
+                        track_id.0,
+                        e
+                    );
+                    // Deliver an empty list so the UI clears stale results.
+                    similar_songs_loaded_tx
+                        .send(SimilarSongsData {
+                            track_id: track_id.clone(),
+                            similar: vec![],
+                        })
+                        .unwrap();
+                    state.write().unwrap().error = Some(AppStateError::SimilarSongsFetchFailed {
+                        track_id: track_id.clone(),
+                        error: e.to_string(),
+                    });
+                }
+            }
+        });
+    }
+}
+
+/// Which server endpoint similar songs are fetched from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimilarEndpoint {
+    /// The OpenSubsonic `getSonicSimilarTracks` extension endpoint, preferred
+    /// when the server advertises `sonicSimilarity`.
+    SonicSimilarTracks,
+    /// The classic `getSimilarSongs2` endpoint.
+    SimilarSongs2,
+}
+
+/// Selects the similar-songs endpoint based on the server's advertised
+/// OpenSubsonic extensions: `getSonicSimilarTracks` when `sonicSimilarity` is
+/// advertised, `getSimilarSongs2` otherwise.
+pub fn similar_endpoint_for(extensions: &[bs::OpenSubsonicExtension]) -> SimilarEndpoint {
+    if extensions.iter().any(|e| e.name == "sonicSimilarity") {
+        SimilarEndpoint::SonicSimilarTracks
+    } else {
+        SimilarEndpoint::SimilarSongs2
+    }
+}
+
+/// Fetches the server's OpenSubsonic extensions and stores them in
+/// `AppState.open_subsonic_extensions`.
+///
+/// Non-fatal: an error (or empty list) leaves the previous set (or empty) in
+/// place and surfaces `AppStateError::OpenSubsonicExtensionsFetchFailed`
+/// without propagating. This deliberately does not use `?` so a server that
+/// errors on `getOpenSubsonicExtensions` cannot fail a surrounding load.
+async fn fetch_open_subsonic_extensions(client: &bs::Client, state: &Arc<RwLock<AppState>>) {
+    match client.get_open_subsonic_extensions().await {
+        Ok(extensions) => {
+            state.write().unwrap().open_subsonic_extensions = extensions;
+        }
+        Err(e) => {
+            tracing::debug!("Failed to fetch OpenSubsonic extensions: {}", e);
+            state.write().unwrap().error = Some(AppStateError::OpenSubsonicExtensionsFetchFailed {
+                error: e.to_string(),
+            });
+        }
+    }
 }
 impl Logic {
     pub fn get_playing_track_and_position(&self) -> Option<TrackAndPosition> {
@@ -787,6 +927,21 @@ impl Logic {
 
     pub fn get_state(&self) -> Arc<RwLock<AppState>> {
         self.state.clone()
+    }
+
+    /// Returns the OpenSubsonic extensions advertised by the server (empty
+    /// when the server doesn't support `getOpenSubsonicExtensions`).
+    pub fn get_open_subsonic_extensions(&self) -> Vec<bs::OpenSubsonicExtension> {
+        self.read_state().open_subsonic_extensions.clone()
+    }
+
+    /// Returns `true` when the server advertises the `sonicSimilarity`
+    /// OpenSubsonic extension (`getSonicSimilarTracks`).
+    pub fn supports_sonic_similarity(&self) -> bool {
+        matches!(
+            similar_endpoint_for(&self.read_state().open_subsonic_extensions),
+            SimilarEndpoint::SonicSimilarTracks
+        )
     }
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {
@@ -1153,6 +1308,13 @@ impl Logic {
                 async move {
                     client.ping().await?;
 
+                    // Fetch the server's OpenSubsonic extensions. Deliberately
+                    // NOT using `?`: a server that errors on
+                    // `getOpenSubsonicExtensions` must not turn into a failed
+                    // initial fetch — the extensions are an enhancement, and
+                    // the error is surfaced non-fatally instead.
+                    fetch_open_subsonic_extensions(&client, &state).await;
+
                     let result = blackbird_state::fetch_all(&client, |batch_count, total_count| {
                         tracing::info!("Fetched {batch_count} tracks, total {total_count} tracks");
                     })
@@ -1260,5 +1422,37 @@ impl Logic {
 
     fn read_state(&'_ self) -> RwLockReadGuard<'_, AppState> {
         self.state.read().unwrap()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extension(name: &str) -> bs::OpenSubsonicExtension {
+        bs::OpenSubsonicExtension {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_similar_endpoint_selection_by_capability() {
+        // No extensions → fall back to getSimilarSongs2.
+        assert_eq!(similar_endpoint_for(&[]), SimilarEndpoint::SimilarSongs2);
+
+        // Unrelated extensions → still getSimilarSongs2.
+        let unrelated = [extension("lyrics"), extension("artwork")];
+        assert_eq!(
+            similar_endpoint_for(&unrelated),
+            SimilarEndpoint::SimilarSongs2
+        );
+
+        // Advertising sonicSimilarity → getSonicSimilarTracks.
+        let sonic = [extension("lyrics"), extension("sonicSimilarity")];
+        assert_eq!(
+            similar_endpoint_for(&sonic),
+            SimilarEndpoint::SonicSimilarTracks
+        );
     }
 }

@@ -277,6 +277,7 @@ dependencies = [
  "ratatui",
  "ratatui-image",
  "serde",
+ "smallvec",
  "smol_str",
  "toml",
  "tracing",
@@ -396,6 +397,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

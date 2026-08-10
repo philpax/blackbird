@@ -24,6 +24,7 @@ ratatui = { workspace = true }
 ratatui-image = { workspace = true }
 crossterm = { workspace = true }
 smol_str = { workspace = true }
+smallvec = { workspace = true }
 unicode-width = { workspace = true }
 image = { workspace = true }
 
