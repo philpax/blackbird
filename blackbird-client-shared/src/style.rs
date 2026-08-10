@@ -1,6 +1,6 @@
 //! Style definitions shared between the blackbird clients.
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 
 /// HSV color representation (hue 0-1, saturation 0-1, value 0-1).
@@ -81,14 +81,43 @@ pub fn hsv_to_rgb(hsv: Hsv) -> Rgb {
 }
 
 /// Metadata for one HSV style field within a group.
+///
+/// The accessors are the only way to reach a field generically; there is no
+/// index arithmetic to keep in sync with the struct definitions.
+#[derive(Debug)]
 pub struct FieldInfo {
     /// A human-readable label for settings UI.
     pub label: &'static str,
     /// The default HSV value.
     pub default: Hsv,
+    get_fn: fn(&Style) -> &Hsv,
+    get_mut_fn: fn(&mut Style) -> &mut Hsv,
+}
+
+impl FieldInfo {
+    /// The field's current value within `style`.
+    pub fn get(&self, style: &Style) -> Hsv {
+        *(self.get_fn)(style)
+    }
+
+    /// A mutable reference to the field's value within `style`.
+    pub fn get_mut<'a>(&self, style: &'a mut Style) -> &'a mut Hsv {
+        (self.get_mut_fn)(style)
+    }
+
+    /// Whether the field still holds its default value.
+    pub fn is_default(&self, style: &Style) -> bool {
+        self.get(style) == self.default
+    }
+
+    /// Restores the field to its default value.
+    pub fn reset(&self, style: &mut Style) {
+        *self.get_mut(style) = self.default;
+    }
 }
 
 /// Metadata for one style group (a concept) shown in settings.
+#[derive(Debug)]
 pub struct GroupInfo {
     /// The group name (settings section header).
     pub name: &'static str,
@@ -96,461 +125,158 @@ pub struct GroupInfo {
     pub fields: &'static [FieldInfo],
 }
 
-macro_rules! group {
+/// Declares the entire style tree: the group structs, their per-field `Rgb`
+/// accessors, the [`Style`] aggregate, and the [`GROUPS`] metadata used to
+/// drive settings UI.
+macro_rules! style {
     (
-        $(#[$doc:meta])*
-        $group:ident {
-            $(
-                $(#[$field_doc:meta])*
-                $field:ident: [$($default:expr),+],
-            )*
-        }
-    ) => {
-        $(#[$doc])*
-        #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
-        #[serde(rename_all = "snake_case")]
-        pub struct $group {
-            $(
-                #[doc = concat!("HSV colour for ", stringify!($field))]
-                pub $field: Hsv,
-            )*
-        }
-        impl Default for $group {
-            fn default() -> Self {
-                Self { $($field: [$($default),+],)* }
+        $(
+            $(#[$group_doc:meta])*
+            $group:ident: $Group:ident = $group_label:literal {
+                $(
+                    $(#[$field_doc:meta])*
+                    $field:ident = $field_label:literal, [$($default:expr),+ $(,)?];
+                )*
             }
-        }
-        impl $group {
-            /// The fields in this group, in display order.
-            pub const FIELDS: &'static [FieldInfo] = &[
-                $(FieldInfo { label: stringify!($field), default: [$($default),+] },)*
-            ];
-            /// The number of fields in this group.
-            pub const FIELD_COUNT: usize = 0 $(+ { let _ = stringify!($field); 1 })*;
-            $(
-                #[doc = concat!("Returns the gamma-corrected `Rgb` for ", stringify!($field), ".")]
-                pub fn $field(&self) -> Rgb {
-                    hsv_to_rgb(self.$field)
+        )*
+    ) => {
+        $(
+            $(#[$group_doc])*
+            #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+            #[serde(default, rename_all = "snake_case")]
+            pub struct $Group {
+                $(
+                    $(#[$field_doc])*
+                    pub $field: Hsv,
+                )*
+            }
+
+            impl Default for $Group {
+                fn default() -> Self {
+                    Self { $($field: [$($default),+],)* }
                 }
+            }
+
+            impl $Group {
+                $(
+                    #[doc = concat!("The gamma-corrected `Rgb` for `", stringify!($field), "`.")]
+                    pub fn $field(&self) -> Rgb {
+                        hsv_to_rgb(self.$field)
+                    }
+                )*
+            }
+        )*
+
+        /// Style configuration with HSV colours for various UI elements,
+        /// grouped by concept. The groups serialize as `[general]`,
+        /// `[library]`, etc., and each group tolerates missing fields.
+        #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+        #[serde(default)]
+        pub struct Style {
+            $(
+                $(#[$group_doc])*
+                pub $group: $Group,
             )*
         }
+
+        /// All style groups, in display order.
+        pub const GROUPS: &[GroupInfo] = &[
+            $(
+                GroupInfo {
+                    name: $group_label,
+                    fields: &[
+                        $(
+                            FieldInfo {
+                                label: $field_label,
+                                default: [$($default),+],
+                                get_fn: {
+                                    fn get(style: &Style) -> &Hsv {
+                                        &style.$group.$field
+                                    }
+                                    get
+                                },
+                                get_mut_fn: {
+                                    fn get_mut(style: &mut Style) -> &mut Hsv {
+                                        &mut style.$group.$field
+                                    }
+                                    get_mut
+                                },
+                            },
+                        )*
+                    ],
+                },
+            )*
+        ];
     };
 }
 
-group!(
+style! {
     /// General app-wide colours (background, default text).
-    General {
+    general: General = "General" {
         /// The app background.
-        background: [0.65, 0.40, 0.01],
+        background = "Background", [0.65, 0.40, 0.01];
         /// Default text colour.
-        text: [0.0, 0.0, 1.0],
+        text = "Text", [0.0, 0.0, 1.0];
     }
-);
 
-group!(
     /// Library list colours.
-    Library {
+    library: Library = "Library" {
         /// Group/album header colour.
-        album: [0.58, 0.90, 0.60],
+        album = "Album", [0.58, 0.90, 0.60];
         /// Album length colour.
-        album_length: [0.0, 0.0, 0.75],
+        album_length = "Album length", [0.0, 0.0, 0.75];
         /// Album year colour.
-        album_year: [0.0, 0.0, 0.40],
+        album_year = "Album year", [0.0, 0.0, 0.40];
         /// Track number colour.
-        track_number: [0.60, 0.5, 0.90],
+        track_number = "Track number", [0.60, 0.5, 0.90];
         /// Track length colour.
-        track_length: [0.60, 0.90, 0.70],
+        track_length = "Track length", [0.60, 0.90, 0.70];
         /// Track name colour.
-        track_name: [0.0, 0.0, 1.0],
+        track_name = "Track name", [0.0, 0.0, 1.0];
         /// Track name colour when hovered.
-        track_name_hovered: [0.6, 0.6, 1.0],
+        track_name_hovered = "Track name (hovered)", [0.6, 0.6, 1.0];
         /// Track name colour when playing.
-        track_name_playing: [0.55, 0.70, 1.0],
+        track_name_playing = "Track name (playing)", [0.55, 0.70, 1.0];
         /// Track duration colour.
-        track_duration: [0.0, 0.0, 0.5],
+        track_duration = "Track duration", [0.0, 0.0, 0.5];
         /// Library frame border colour.
-        border: [0.12, 0.85, 0.75],
+        border = "Border", [0.12, 0.85, 0.75];
     }
-);
 
-group!(
     /// Current-track sidebar component colours.
-    Sidebar {
+    sidebar: Sidebar = "Sidebar" {
         /// Lyrics text colour.
-        lyrics_text: [0.0, 0.0, 1.0],
+        lyrics_text = "Lyrics text", [0.0, 0.0, 1.0];
         /// Lyrics timestamp colour.
-        lyrics_timestamp: [0.0, 0.0, 0.5],
+        lyrics_timestamp = "Lyrics timestamp", [0.0, 0.0, 0.5];
         /// Similar-songs text colour.
-        similar_text: [0.0, 0.0, 1.0],
+        similar_text = "Similar songs text", [0.0, 0.0, 1.0];
         /// Lyrics panel frame border colour.
-        lyrics_border: [0.55, 0.85, 0.75],
+        lyrics_border = "Lyrics border", [0.55, 0.85, 0.75];
         /// Similar-songs panel frame border colour.
-        similar_border: [0.35, 0.80, 0.70],
+        similar_border = "Similar songs border", [0.35, 0.80, 0.70];
     }
-);
 
-group!(
     /// Now-playing bar and scrub bar colours.
-    NowPlaying {
+    now_playing: NowPlaying = "Now playing" {
         /// Now-playing text colour.
-        text: [0.0, 0.0, 1.0],
+        text = "Text", [0.0, 0.0, 1.0];
         /// Track name colour.
-        track_name: [0.0, 0.0, 1.0],
+        track_name = "Track name", [0.0, 0.0, 1.0];
         /// Playing-track highlight colour.
-        track_name_playing: [0.55, 0.70, 1.0],
+        track_name_playing = "Track name (playing)", [0.55, 0.70, 1.0];
         /// Duration colour.
-        duration: [0.0, 0.0, 0.5],
+        duration = "Duration", [0.0, 0.0, 0.5];
         /// Now-playing frame border colour.
-        border: [0.75, 0.80, 0.70],
+        border = "Border", [0.75, 0.80, 0.70];
     }
-);
 
-group!(
     /// Other panel (search/queue/logs/settings) colours.
-    Panels {
+    panels: Panels = "Panels" {
         /// Panel frame border colour.
-        border: [0.30, 0.75, 0.80],
+        border = "Border", [0.30, 0.75, 0.80];
         /// Search input highlight colour.
-        search_highlight: [0.55, 0.70, 1.0],
-    }
-);
-
-/// All style groups, in display order.
-pub const GROUPS: &[GroupInfo] = &[
-    GroupInfo {
-        name: "General",
-        fields: General::FIELDS,
-    },
-    GroupInfo {
-        name: "Library",
-        fields: Library::FIELDS,
-    },
-    GroupInfo {
-        name: "Sidebar",
-        fields: Sidebar::FIELDS,
-    },
-    GroupInfo {
-        name: "Now playing",
-        fields: NowPlaying::FIELDS,
-    },
-    GroupInfo {
-        name: "Panels",
-        fields: Panels::FIELDS,
-    },
-];
-
-/// Style configuration with HSV colors for various UI elements, grouped by
-/// concept (general, library, sidebar, now-playing, panels).
-///
-/// The nested groups serialize as `[general]`, `[library]`, etc. A legacy flat
-/// layout (`background_hsv`, `text_hsv`, ... at the top level) is accepted on
-/// parse; the next save writes the grouped form.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct Style {
-    /// General app-wide colours.
-    pub general: General,
-    /// Library list colours.
-    pub library: Library,
-    /// Sidebar component colours.
-    pub sidebar: Sidebar,
-    /// Now-playing/scrub bar colours.
-    pub now_playing: NowPlaying,
-    /// Other panel colours.
-    pub panels: Panels,
-}
-
-impl Style {
-    /// Number of HSV color fields across all groups.
-    pub const FIELD_COUNT: usize = General::FIELD_COUNT
-        + Library::FIELD_COUNT
-        + Sidebar::FIELD_COUNT
-        + NowPlaying::FIELD_COUNT
-        + Panels::FIELD_COUNT;
-
-    /// Returns a reference to the HSV field at the given global index (across
-    /// all groups, in [`GROUPS`] order).
-    pub fn field(&self, index: usize) -> &Hsv {
-        let mut i = index;
-        if i < General::FIELD_COUNT {
-            return general_field(&self.general, i);
-        }
-        i -= General::FIELD_COUNT;
-        if i < Library::FIELD_COUNT {
-            return library_field(&self.library, i);
-        }
-        i -= Library::FIELD_COUNT;
-        if i < Sidebar::FIELD_COUNT {
-            return sidebar_field(&self.sidebar, i);
-        }
-        i -= Sidebar::FIELD_COUNT;
-        if i < NowPlaying::FIELD_COUNT {
-            return now_playing_field(&self.now_playing, i);
-        }
-        i -= NowPlaying::FIELD_COUNT;
-        if i < Panels::FIELD_COUNT {
-            return panels_field(&self.panels, i);
-        }
-        panic!("style field index out of bounds: {index}");
-    }
-
-    /// Returns a mutable reference to the HSV field at the given global index.
-    pub fn field_mut(&mut self, index: usize) -> &mut Hsv {
-        let mut i = index;
-        if i < General::FIELD_COUNT {
-            return general_field_mut(&mut self.general, i);
-        }
-        i -= General::FIELD_COUNT;
-        if i < Library::FIELD_COUNT {
-            return library_field_mut(&mut self.library, i);
-        }
-        i -= Library::FIELD_COUNT;
-        if i < Sidebar::FIELD_COUNT {
-            return sidebar_field_mut(&mut self.sidebar, i);
-        }
-        i -= Sidebar::FIELD_COUNT;
-        if i < NowPlaying::FIELD_COUNT {
-            return now_playing_field_mut(&mut self.now_playing, i);
-        }
-        i -= NowPlaying::FIELD_COUNT;
-        if i < Panels::FIELD_COUNT {
-            return panels_field_mut(&mut self.panels, i);
-        }
-        panic!("style field index out of bounds: {index}");
-    }
-
-    /// Returns the default value for the HSV field at the given global index.
-    pub fn default_field(index: usize) -> Hsv {
-        let mut i = index;
-        if i < General::FIELD_COUNT {
-            return General::FIELDS[i].default;
-        }
-        i -= General::FIELD_COUNT;
-        if i < Library::FIELD_COUNT {
-            return Library::FIELDS[i].default;
-        }
-        i -= Library::FIELD_COUNT;
-        if i < Sidebar::FIELD_COUNT {
-            return Sidebar::FIELDS[i].default;
-        }
-        i -= Sidebar::FIELD_COUNT;
-        if i < NowPlaying::FIELD_COUNT {
-            return NowPlaying::FIELDS[i].default;
-        }
-        i -= NowPlaying::FIELD_COUNT;
-        if i < Panels::FIELD_COUNT {
-            return Panels::FIELDS[i].default;
-        }
-        panic!("style field index out of bounds: {index}");
-    }
-
-    /// The global index of the first field of the `group_index`-th group in
-    /// [`GROUPS`] (0-based).
-    pub fn group_start(group_index: usize) -> usize {
-        match group_index {
-            0 => 0,
-            1 => General::FIELD_COUNT,
-            2 => General::FIELD_COUNT + Library::FIELD_COUNT,
-            3 => General::FIELD_COUNT + Library::FIELD_COUNT + Sidebar::FIELD_COUNT,
-            4 => {
-                General::FIELD_COUNT
-                    + Library::FIELD_COUNT
-                    + Sidebar::FIELD_COUNT
-                    + NowPlaying::FIELD_COUNT
-            }
-            _ => panic!("style group index out of bounds: {group_index}"),
-        }
-    }
-}
-
-/// Generates per-group `field_by_index`/`field_by_index_mut` helpers.
-fn general_field(group: &General, index: usize) -> &Hsv {
-    match index {
-        0 => &group.background,
-        1 => &group.text,
-        _ => panic!("style field index out of bounds for General({index})"),
-    }
-}
-fn general_field_mut(group: &mut General, index: usize) -> &mut Hsv {
-    match index {
-        0 => &mut group.background,
-        1 => &mut group.text,
-        _ => panic!("style field index out of bounds for General({index})"),
-    }
-}
-
-fn library_field(group: &Library, index: usize) -> &Hsv {
-    match index {
-        0 => &group.album,
-        1 => &group.album_length,
-        2 => &group.album_year,
-        3 => &group.track_number,
-        4 => &group.track_length,
-        5 => &group.track_name,
-        6 => &group.track_name_hovered,
-        7 => &group.track_name_playing,
-        8 => &group.track_duration,
-        9 => &group.border,
-        _ => panic!("style field index out of bounds for Library({index})"),
-    }
-}
-fn library_field_mut(group: &mut Library, index: usize) -> &mut Hsv {
-    match index {
-        0 => &mut group.album,
-        1 => &mut group.album_length,
-        2 => &mut group.album_year,
-        3 => &mut group.track_number,
-        4 => &mut group.track_length,
-        5 => &mut group.track_name,
-        6 => &mut group.track_name_hovered,
-        7 => &mut group.track_name_playing,
-        8 => &mut group.track_duration,
-        9 => &mut group.border,
-        _ => panic!("style field index out of bounds for Library({index})"),
-    }
-}
-
-fn sidebar_field(group: &Sidebar, index: usize) -> &Hsv {
-    match index {
-        0 => &group.lyrics_text,
-        1 => &group.lyrics_timestamp,
-        2 => &group.similar_text,
-        3 => &group.lyrics_border,
-        4 => &group.similar_border,
-        _ => panic!("style field index out of bounds for Sidebar({index})"),
-    }
-}
-fn sidebar_field_mut(group: &mut Sidebar, index: usize) -> &mut Hsv {
-    match index {
-        0 => &mut group.lyrics_text,
-        1 => &mut group.lyrics_timestamp,
-        2 => &mut group.similar_text,
-        3 => &mut group.lyrics_border,
-        4 => &mut group.similar_border,
-        _ => panic!("style field index out of bounds for Sidebar({index})"),
-    }
-}
-
-fn now_playing_field(group: &NowPlaying, index: usize) -> &Hsv {
-    match index {
-        0 => &group.text,
-        1 => &group.track_name,
-        2 => &group.track_name_playing,
-        3 => &group.duration,
-        4 => &group.border,
-        _ => panic!("style field index out of bounds for NowPlaying({index})"),
-    }
-}
-fn now_playing_field_mut(group: &mut NowPlaying, index: usize) -> &mut Hsv {
-    match index {
-        0 => &mut group.text,
-        1 => &mut group.track_name,
-        2 => &mut group.track_name_playing,
-        3 => &mut group.duration,
-        4 => &mut group.border,
-        _ => panic!("style field index out of bounds for NowPlaying({index})"),
-    }
-}
-
-fn panels_field(group: &Panels, index: usize) -> &Hsv {
-    match index {
-        0 => &group.border,
-        1 => &group.search_highlight,
-        _ => panic!("style field index out of bounds for Panels({index})"),
-    }
-}
-fn panels_field_mut(group: &mut Panels, index: usize) -> &mut Hsv {
-    match index {
-        0 => &mut group.border,
-        1 => &mut group.search_highlight,
-        _ => panic!("style field index out of bounds for Panels({index})"),
-    }
-}
-
-/// Accepts both the legacy flat layout and the nested grouped layout on parse.
-impl<'de> Deserialize<'de> for Style {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize, Default)]
-        struct Flat {
-            background_hsv: Option<Hsv>,
-            text_hsv: Option<Hsv>,
-            album_hsv: Option<Hsv>,
-            album_length_hsv: Option<Hsv>,
-            album_year_hsv: Option<Hsv>,
-            track_number_hsv: Option<Hsv>,
-            track_length_hsv: Option<Hsv>,
-            track_name_hsv: Option<Hsv>,
-            track_name_hovered_hsv: Option<Hsv>,
-            track_name_playing_hsv: Option<Hsv>,
-            track_duration_hsv: Option<Hsv>,
-            general: Option<General>,
-            library: Option<Library>,
-            sidebar: Option<Sidebar>,
-            now_playing: Option<NowPlaying>,
-            panels: Option<Panels>,
-        }
-
-        let flat = Flat::deserialize(deserializer)?;
-        let default = Style::default();
-
-        let general = flat.general.unwrap_or_else(|| General {
-            background: flat.background_hsv.unwrap_or(default.general.background),
-            text: flat.text_hsv.unwrap_or(default.general.text),
-        });
-        let library = flat.library.unwrap_or_else(|| Library {
-            album: flat.album_hsv.unwrap_or(default.library.album),
-            album_length: flat
-                .album_length_hsv
-                .unwrap_or(default.library.album_length),
-            album_year: flat.album_year_hsv.unwrap_or(default.library.album_year),
-            track_number: flat
-                .track_number_hsv
-                .unwrap_or(default.library.track_number),
-            track_length: flat
-                .track_length_hsv
-                .unwrap_or(default.library.track_length),
-            track_name: flat.track_name_hsv.unwrap_or(default.library.track_name),
-            track_name_hovered: flat
-                .track_name_hovered_hsv
-                .unwrap_or(default.library.track_name_hovered),
-            track_name_playing: flat
-                .track_name_playing_hsv
-                .unwrap_or(default.library.track_name_playing),
-            track_duration: flat
-                .track_duration_hsv
-                .unwrap_or(default.library.track_duration),
-            border: default.library.border,
-        });
-        let sidebar = flat.sidebar.unwrap_or(default.sidebar);
-        let now_playing = flat.now_playing.unwrap_or(default.now_playing);
-        let panels = flat.panels.unwrap_or(default.panels);
-
-        Ok(Style {
-            general,
-            library,
-            sidebar,
-            now_playing,
-            panels,
-        })
-    }
-}
-
-/// Serializes the nested grouped layout.
-impl Serialize for Style {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("Style", 5)?;
-        s.serialize_field("general", &self.general)?;
-        s.serialize_field("library", &self.library)?;
-        s.serialize_field("sidebar", &self.sidebar)?;
-        s.serialize_field("now_playing", &self.now_playing)?;
-        s.serialize_field("panels", &self.panels)?;
-        s.end()
+        search_highlight = "Search highlight", [0.55, 0.70, 1.0];
     }
 }
 
@@ -587,5 +313,72 @@ impl HeartState {
 
     pub fn filled(&self) -> bool {
         matches!(self, Self::Active)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The metadata accessors must point at the field they describe: mutating
+    /// through `get_mut` has to be visible through `get`, and the recorded
+    /// default has to match the one `Default` produces.
+    #[test]
+    fn field_metadata_matches_struct() {
+        let mut style = Style::default();
+        for (i, field) in GROUPS.iter().flat_map(|g| g.fields).enumerate() {
+            assert!(field.is_default(&style), "{} is not default", field.label);
+
+            let sentinel = [i as f32 / 1000.0, 0.123, 0.456];
+            *field.get_mut(&mut style) = sentinel;
+            assert_eq!(field.get(&style), sentinel);
+        }
+
+        // Every accessor addressed a distinct field, so nothing was clobbered.
+        for (i, field) in GROUPS.iter().flat_map(|g| g.fields).enumerate() {
+            assert_eq!(field.get(&style), [i as f32 / 1000.0, 0.123, 0.456]);
+            field.reset(&mut style);
+        }
+        assert_eq!(style, Style::default());
+    }
+
+    #[test]
+    fn labels_are_unique_within_a_group() {
+        for group in GROUPS {
+            for (i, field) in group.fields.iter().enumerate() {
+                assert!(
+                    !group.fields[..i].iter().any(|f| f.label == field.label),
+                    "duplicate label {:?} in {}",
+                    field.label,
+                    group.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn partial_tables_fall_back_to_defaults_per_field() {
+        let style: Style = toml::from_str(
+            r#"
+            [library]
+            album = [0.1, 0.2, 0.3]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(style.library.album, [0.1, 0.2, 0.3]);
+        assert_eq!(
+            style.library.track_name,
+            Style::default().library.track_name
+        );
+        assert_eq!(style.general, General::default());
+    }
+
+    #[test]
+    fn roundtrips_through_toml() {
+        let mut style = Style::default();
+        style.panels.border = [0.9, 0.8, 0.7];
+        let text = toml::to_string(&style).unwrap();
+        assert_eq!(toml::from_str::<Style>(&text).unwrap(), style);
     }
 }

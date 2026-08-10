@@ -100,8 +100,7 @@ enum SettingsRow {
         default: fn() -> Vec<SidebarComponent>,
     },
     HsvField {
-        label: &'static str,
-        index: usize,
+        field: &'static shared_style::FieldInfo,
     },
 }
 
@@ -349,17 +348,13 @@ fn build_rows() -> Vec<SettingsRow> {
         SettingsRow::SectionSpacer,
     ];
 
-    // HSV color fields are generated dynamically from the style groups,
-    // rendered with a group header per concept.
+    // The colour rows come straight from the style metadata, with a header per
+    // group.
     rows.push(SettingsRow::SectionSpacer);
-    for (group_idx, group) in shared_style::GROUPS.iter().enumerate() {
+    for group in shared_style::GROUPS {
         rows.push(SettingsRow::SectionHeader(group.name));
-        for (field_idx, _) in group.fields.iter().enumerate() {
-            let global_index = shared_style::Style::group_start(group_idx) + field_idx;
-            rows.push(SettingsRow::HsvField {
-                label: group.fields[field_idx].label,
-                index: global_index,
-            });
+        for field in group.fields {
+            rows.push(SettingsRow::HsvField { field });
         }
     }
 
@@ -820,10 +815,10 @@ fn render_row(
                 Text::from(Line::from(spans))
             }
         }
-        SettingsRow::HsvField { label, index } => {
-            let hsv = *config.style.field(*index);
-            let default_hsv = shared_style::Style::default_field(*index);
-            let is_default = hsv == default_hsv;
+        SettingsRow::HsvField { field } => {
+            let label = field.label;
+            let hsv = field.get(&config.style);
+            let is_default = field.is_default(&config.style);
 
             // Convert HSV to an RGB swatch for preview.
             let swatch_color = super::style_color(hsv);
@@ -834,12 +829,10 @@ fn render_row(
             )];
             spans.push(Span::raw(" "));
 
-            let label_str = human_readable_label(label);
-
             if is_selected && state.editing {
                 // Show editable H/S/V with the active component highlighted.
                 spans.push(Span::styled(
-                    format!("{label_str}: "),
+                    format!("{label}: "),
                     Style::default().fg(highlight),
                 ));
                 let components = [
@@ -865,10 +858,7 @@ fn render_row(
                 }
             } else {
                 spans.push(Span::styled(
-                    format!(
-                        "{label_str}: H:{:.2} S:{:.2} V:{:.2}",
-                        hsv[0], hsv[1], hsv[2]
-                    ),
+                    format!("{label}: H:{:.2} S:{:.2} V:{:.2}", hsv[0], hsv[1], hsv[2]),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
                 ));
             }
@@ -1053,8 +1043,8 @@ pub fn handle_key(
             }
             Action::MoveUp => {
                 let row = &state.rows[state.selected_index];
-                if let SettingsRow::HsvField { index, .. } = row {
-                    let hsv = config.style.field_mut(*index);
+                if let SettingsRow::HsvField { field } = row {
+                    let hsv = field.get_mut(&mut config.style);
                     let comp_idx = match state.hsv_component {
                         HsvComponent::H => 0,
                         HsvComponent::S => 1,
@@ -1080,8 +1070,8 @@ pub fn handle_key(
             }
             Action::MoveDown => {
                 let row = &state.rows[state.selected_index];
-                if let SettingsRow::HsvField { index, .. } = row {
-                    let hsv = config.style.field_mut(*index);
+                if let SettingsRow::HsvField { field } = row {
+                    let hsv = field.get_mut(&mut config.style);
                     let comp_idx = match state.hsv_component {
                         HsvComponent::H => 0,
                         HsvComponent::S => 1,
@@ -1107,8 +1097,8 @@ pub fn handle_key(
             }
             Action::PageUp => {
                 let row = &state.rows[state.selected_index];
-                if let SettingsRow::HsvField { index, .. } = row {
-                    let hsv = config.style.field_mut(*index);
+                if let SettingsRow::HsvField { field } = row {
+                    let hsv = field.get_mut(&mut config.style);
                     let comp_idx = match state.hsv_component {
                         HsvComponent::H => 0,
                         HsvComponent::S => 1,
@@ -1120,8 +1110,8 @@ pub fn handle_key(
             }
             Action::PageDown => {
                 let row = &state.rows[state.selected_index];
-                if let SettingsRow::HsvField { index, .. } = row {
-                    let hsv = config.style.field_mut(*index);
+                if let SettingsRow::HsvField { field } = row {
+                    let hsv = field.get_mut(&mut config.style);
                     let comp_idx = match state.hsv_component {
                         HsvComponent::H => 0,
                         HsvComponent::S => 1,
@@ -1293,8 +1283,8 @@ pub fn handle_key(
                 SettingsRow::ComponentList { default, set, .. } => {
                     set(config, default());
                 }
-                SettingsRow::HsvField { index, .. } => {
-                    *config.style.field_mut(*index) = shared_style::Style::default_field(*index);
+                SettingsRow::HsvField { field } => {
+                    field.reset(&mut config.style);
                 }
                 SettingsRow::SectionSpacer | SettingsRow::SectionHeader(_) => {}
             }
@@ -1412,21 +1402,6 @@ pub fn scroll_selection(state: &mut SettingsState, delta: i32) {
     for _ in 0..steps {
         move_selection(state, direction);
     }
-}
-
-/// Converts a snake_case identifier to a human-readable label.
-fn human_readable_label(name: &str) -> String {
-    let mut result = String::with_capacity(name.len());
-    for (i, c) in name.chars().enumerate() {
-        if i == 0 {
-            result.push(c.to_ascii_uppercase());
-        } else if c == '_' {
-            result.push(' ');
-        } else {
-            result.push(c);
-        }
-    }
-    result
 }
 
 #[cfg(test)]
