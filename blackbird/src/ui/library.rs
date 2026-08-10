@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Position, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 use ratatui_image::{
     protocol::Protocol,
@@ -28,7 +28,7 @@ use crate::{
     ui::album_art_overlay::AlbumArtOverlay,
 };
 
-use super::{StyleExt, string_to_color};
+use super::{ToColor, string_to_color};
 
 /// Context for rendering a single `LibraryEntry` into a `ListItem`.
 ///
@@ -922,9 +922,9 @@ fn draw_connection_error(
     error: &str,
     area: Rect,
 ) {
-    let accent = style.track_name_playing_color();
-    let dim = style.track_duration_color();
-    let text_color = style.text_color();
+    let accent = style.library.track_name_playing().to_color();
+    let dim = style.library.track_duration().to_color();
+    let text_color = style.general.text().to_color();
 
     let config_path = crate::config::Config::path();
     let config_path_str = config_path.display().to_string();
@@ -964,19 +964,32 @@ fn draw_connection_error(
     frame.render_widget(paragraph, area);
 }
 
+/// Draws the library wrapped in a "Library" frame (used when the sidebar is
+/// present, so the library matches the framed sidebar panels). `outer` is the
+/// full area the frame covers; the content draws into its inner rect.
+pub fn draw_in_frame(frame: &mut Frame, app: &mut App, outer: Rect, border_color: Color) {
+    let block = Block::default()
+        .title(" Library ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(outer);
+    frame.render_widget(block, outer);
+    draw(frame, app, inner);
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts later.
     let background_color = super::effective_bg(&app.config);
-    let text_color = app.config.style.text_color();
-    let album_color = app.config.style.album_color();
-    let album_year_color = app.config.style.album_year_color();
-    let album_length_color = app.config.style.album_length_color();
-    let track_number_color = app.config.style.track_number_color();
-    let track_name_color = app.config.style.track_name_color();
-    let track_name_playing_color = app.config.style.track_name_playing_color();
-    let track_length_color = app.config.style.track_length_color();
-    let track_duration_color = app.config.style.track_duration_color();
-    let track_name_hovered_color = app.config.style.track_name_hovered_color();
+    let text_color = app.config.style.general.text().to_color();
+    let album_color = app.config.style.library.album().to_color();
+    let album_year_color = app.config.style.library.album_year().to_color();
+    let album_length_color = app.config.style.library.album_length().to_color();
+    let track_number_color = app.config.style.library.track_number().to_color();
+    let track_name_color = app.config.style.library.track_name().to_color();
+    let track_name_playing_color = app.config.style.library.track_name_playing().to_color();
+    let track_length_color = app.config.style.library.track_length().to_color();
+    let track_duration_color = app.config.style.library.track_duration().to_color();
+    let track_name_hovered_color = app.config.style.library.track_name_hovered().to_color();
 
     let has_loaded = app.logic.has_loaded_all_tracks();
 
@@ -1698,6 +1711,7 @@ pub fn handle_key(app: &mut App, action: Action) {
         }
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),
+        Action::ToggleSidebar => app.toggle_sidebar(),
         Action::Logs => app.toggle_logs(),
         Action::Queue => app.toggle_queue(),
         Action::Settings => app.toggle_settings(),

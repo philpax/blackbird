@@ -1,30 +1,18 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, LazyLock},
-};
-
 use blackbird_client_shared::{
-    config::{AlbumArtStyle, Layout, Playback},
+    config::{AlbumArtStyle, Layout, Playback, SidebarComponent},
     style as shared_style,
 };
-use blackbird_core::blackbird_state::{AlbumId, CoverArtId, TrackId};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout as RatatuiLayout, Rect},
     style::{Modifier, Style},
-    text::{Line, Span},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
-use crate::{
-    cover_art::{ArtColorGrid, ArtColors, compute_art_grid, compute_quadrant_colors},
-    keys::Action,
-};
+use crate::keys::Action;
 
-use super::{
-    StyleExt,
-    library::{EntryRenderContext, LibraryEntry, assemble_flat_library, render_library_entry},
-};
+use super::ToColor;
 
 /// Actions returned to the caller so `app.rs` can apply side effects.
 pub enum SettingsAction {
@@ -103,6 +91,14 @@ enum SettingsRow {
         default: fn() -> usize,
         variants: &'static [&'static str],
     },
+    /// An ordered multi-component list with add/remove/reorder editing.
+    ComponentList {
+        label: &'static str,
+        section: Section,
+        get: fn(&crate::config::Config) -> Vec<SidebarComponent>,
+        set: fn(&mut crate::config::Config, Vec<SidebarComponent>),
+        default: fn() -> Vec<SidebarComponent>,
+    },
     HsvField {
         label: &'static str,
         index: usize,
@@ -114,6 +110,7 @@ enum Section {
     Server,
     Layout,
     Playback,
+    Sidebar,
     Colors,
     General,
 }
@@ -123,6 +120,11 @@ pub struct SettingsState {
     pub editing: bool,
     pub edit_buffer: String,
     pub hsv_component: HsvComponent,
+    /// The in-row selection for the sidebar component list while editing.
+    pub component_list_sel: usize,
+    /// Whether the in-row list item is "armed" (selected for manipulation):
+    /// while armed, MoveUp/Down slide it and DeleteChar removes it.
+    pub component_list_armed: bool,
     rows: Vec<SettingsRow>,
     pub scroll_offset: usize,
     /// The inner area of the settings list from the last draw, used for mouse
@@ -150,6 +152,8 @@ impl SettingsState {
             editing: false,
             edit_buffer: String::new(),
             hsv_component: HsvComponent::H,
+            component_list_sel: 0,
+            component_list_armed: false,
             rows,
             scroll_offset: 0,
             last_inner_area: None,
@@ -172,7 +176,23 @@ impl SettingsState {
         self.editing = false;
         self.edit_buffer.clear();
         self.hsv_component = HsvComponent::H;
+        self.component_list_sel = 0;
+        self.component_list_armed = false;
         self.scroll_offset = 0;
+    }
+
+    /// The editing substate of the panel, used to pick the help bar bindings.
+    pub fn edit_mode(&self) -> crate::keys::SettingsEditMode {
+        if !self.editing {
+            return crate::keys::SettingsEditMode::Navigating;
+        }
+        match &self.rows[self.selected_index] {
+            SettingsRow::HsvField { .. } => crate::keys::SettingsEditMode::HsvEdit,
+            SettingsRow::ComponentList { .. } => crate::keys::SettingsEditMode::ComponentList {
+                armed: self.component_list_armed,
+            },
+            _ => crate::keys::SettingsEditMode::TextEdit,
+        }
     }
 }
 
@@ -214,30 +234,6 @@ fn build_rows() -> Vec<SettingsRow> {
         // Layout section.
         SettingsRow::SectionSpacer,
         SettingsRow::SectionHeader("Layout"),
-        SettingsRow::EnumFieldDyn {
-            label: "Lyrics display",
-            section: Section::Layout,
-            get: |c| {
-                use blackbird_client_shared::config::LyricsDisplay;
-                LyricsDisplay::ALL
-                    .iter()
-                    .position(|v| *v == c.layout.base.lyrics_display)
-                    .unwrap_or(0)
-            },
-            set: |c, idx| {
-                use blackbird_client_shared::config::LyricsDisplay;
-                c.layout.base.lyrics_display =
-                    LyricsDisplay::ALL.get(idx).copied().unwrap_or_default();
-            },
-            default: || {
-                use blackbird_client_shared::config::LyricsDisplay;
-                LyricsDisplay::ALL
-                    .iter()
-                    .position(|v| *v == LyricsDisplay::default())
-                    .unwrap_or(0)
-            },
-            variants: &["off", "inline", "left", "right"],
-        },
         SettingsRow::EnumField {
             label: "Album art style",
             section: Section::Layout,
@@ -261,6 +257,83 @@ fn build_rows() -> Vec<SettingsRow> {
             set: |c, v| c.layout.use_terminal_background = v,
             default: || crate::config::Layout::default().use_terminal_background,
         },
+        SettingsRow::BoolField {
+            label: "Inline lyrics overlay",
+            section: Section::Layout,
+            get: |c| c.layout.show_inline_lyrics,
+            set: |c, v| c.layout.show_inline_lyrics = v,
+            default: || crate::config::Layout::default().show_inline_lyrics,
+        },
+        SettingsRow::F32Field {
+            label: "Scroll multiplier",
+            section: Section::Layout,
+            get: |c| c.layout.base.scroll_multiplier,
+            set: |c, v| c.layout.base.scroll_multiplier = v,
+            default: || Layout::default().scroll_multiplier,
+            min: 1.0,
+            max: 200.0,
+        },
+        // Sidebar section.
+        SettingsRow::SectionSpacer,
+        SettingsRow::SectionHeader("Sidebar"),
+        SettingsRow::BoolField {
+            label: "Sidebar enabled",
+            section: Section::Sidebar,
+            get: |c| c.layout.base.sidebar.enabled,
+            set: |c, v| c.layout.base.sidebar.enabled = v,
+            default: || blackbird_client_shared::config::SidebarSettings::default().enabled,
+        },
+        SettingsRow::EnumFieldDyn {
+            label: "Sidebar position",
+            section: Section::Sidebar,
+            get: |c| {
+                use blackbird_client_shared::config::{
+                    SidebarPosition, effective_sidebar_position,
+                };
+                let pos = effective_sidebar_position(c.layout.base.sidebar.position);
+                SidebarPosition::ALL
+                    .iter()
+                    .position(|p| *p == pos)
+                    .unwrap_or(0)
+            },
+            set: |c, idx| {
+                use blackbird_client_shared::config::SidebarPosition;
+                c.layout.base.sidebar.position =
+                    SidebarPosition::ALL.get(idx).copied().unwrap_or_default();
+            },
+            default: || {
+                use blackbird_client_shared::config::{
+                    SidebarPosition, effective_sidebar_position,
+                };
+                let pos = effective_sidebar_position(SidebarPosition::default());
+                SidebarPosition::ALL
+                    .iter()
+                    .position(|p| *p == pos)
+                    .unwrap_or(0)
+            },
+            variants: &["left", "right"],
+        },
+        SettingsRow::ComponentList {
+            label: "Sidebar components",
+            section: Section::Sidebar,
+            get: |c| c.layout.base.sidebar.components.clone(),
+            set: |c, v| {
+                c.layout.base.sidebar.components = v;
+                c.layout.base.sidebar.rebalance_heights();
+            },
+            default: || blackbird_client_shared::config::SidebarSettings::default().components,
+        },
+        SettingsRow::UsizeField {
+            label: "Similar songs count",
+            section: Section::Sidebar,
+            get: |c| c.layout.base.sidebar.similar_songs_count,
+            set: |c, v| c.layout.base.sidebar.similar_songs_count = v,
+            default: || {
+                blackbird_client_shared::config::SidebarSettings::default().similar_songs_count
+            },
+            min: 1,
+            max: 100,
+        },
         // Playback section.
         SettingsRow::SectionSpacer,
         SettingsRow::SectionHeader("Playback"),
@@ -280,30 +353,24 @@ fn build_rows() -> Vec<SettingsRow> {
             min: -12.0,
             max: 12.0,
         },
-        // Colors section.
+        // Colors section (grouped by concept).
         SettingsRow::SectionSpacer,
-        SettingsRow::SectionHeader("Colors"),
     ];
 
-    // HSV color fields are generated dynamically from the style macro.
-    for i in 0..shared_style::Style::FIELD_COUNT {
-        let (_, human_label) = shared_style::Style::FIELD_NAMES[i];
-        rows.push(SettingsRow::HsvField {
-            label: human_label,
-            index: i,
-        });
+    // HSV color fields are generated dynamically from the style groups,
+    // rendered with a group header per concept.
+    for (group_idx, group) in shared_style::GROUPS.iter().enumerate() {
+        rows.push(SettingsRow::SectionHeader(group.name));
+        for (field_idx, _) in group.fields.iter().enumerate() {
+            let global_index = shared_style::Style::group_start(group_idx) + field_idx;
+            rows.push(SettingsRow::HsvField {
+                label: group.fields[field_idx].label,
+                index: global_index,
+            });
+        }
     }
 
     rows.extend([
-        SettingsRow::F32Field {
-            label: "Scroll multiplier",
-            section: Section::General,
-            get: |c| c.layout.base.scroll_multiplier,
-            set: |c, v| c.layout.base.scroll_multiplier = v,
-            default: || Layout::default().scroll_multiplier,
-            min: 1.0,
-            max: 200.0,
-        },
         // General section.
         SettingsRow::SectionSpacer,
         SettingsRow::SectionHeader("General"),
@@ -342,6 +409,80 @@ fn move_selection(state: &mut SettingsState, delta: i32) {
     }
 }
 
+/// Swaps the component at `sel` with the one above it (only valid when the
+/// user is editing the component list row). Returns the new selection index.
+fn move_component_up(
+    config: &mut crate::config::Config,
+    get: fn(&crate::config::Config) -> Vec<SidebarComponent>,
+    set: fn(&mut crate::config::Config, Vec<SidebarComponent>),
+    sel: usize,
+) -> usize {
+    let mut components = get(config);
+    if sel == 0 || sel >= components.len() {
+        return sel;
+    }
+    components.swap(sel, sel - 1);
+    set(config, components);
+    sel - 1
+}
+
+/// Swaps the component at `sel` with the one below it. Returns the new
+/// selection index.
+fn move_component_down(
+    config: &mut crate::config::Config,
+    get: fn(&crate::config::Config) -> Vec<SidebarComponent>,
+    set: fn(&mut crate::config::Config, Vec<SidebarComponent>),
+    sel: usize,
+) -> usize {
+    let mut components = get(config);
+    if components.len() < 2 || sel >= components.len() - 1 {
+        return sel;
+    }
+    components.swap(sel, sel + 1);
+    set(config, components);
+    sel + 1
+}
+
+/// Adds the first component not currently in the list (or cycles through
+/// absent ones). Returns the new selection index.
+fn add_component(
+    config: &mut crate::config::Config,
+    get: fn(&crate::config::Config) -> Vec<SidebarComponent>,
+    set: fn(&mut crate::config::Config, Vec<SidebarComponent>),
+) -> usize {
+    let mut components = get(config);
+    for c in SidebarComponent::ALL {
+        if !components.contains(c) {
+            components.push(*c);
+            let new_len = components.len();
+            set(config, components);
+            // Rebalance heights after the component-list change.
+            config.layout.base.sidebar.rebalance_heights();
+            return new_len - 1;
+        }
+    }
+    // All components present.
+    components.len().saturating_sub(1)
+}
+
+/// Removes the component at `sel`. Returns the new selection index (clamped).
+fn remove_component(
+    config: &mut crate::config::Config,
+    get: fn(&crate::config::Config) -> Vec<SidebarComponent>,
+    set: fn(&mut crate::config::Config, Vec<SidebarComponent>),
+    sel: usize,
+) -> usize {
+    let mut components = get(config);
+    if components.is_empty() || sel >= components.len() {
+        return sel;
+    }
+    components.remove(sel);
+    let new_len = components.len();
+    set(config, components);
+    config.layout.base.sidebar.rebalance_heights();
+    sel.min(new_len.saturating_sub(1))
+}
+
 /// Selects the row at `idx` if it is selectable. If it falls on a non-selectable
 /// row, searches downward then upward for the nearest selectable row.
 fn select_nearest(state: &mut SettingsState, idx: usize) {
@@ -369,21 +510,28 @@ fn select_nearest(state: &mut SettingsState, idx: usize) {
     }
 }
 
+/// Draws the settings list into the left slice of `area` and returns the right
+/// slice (which the caller renders the real library into).
 pub fn draw(
     frame: &mut Frame,
     state: &mut SettingsState,
-    style: &shared_style::Style,
     config: &crate::config::Config,
     area: Rect,
-) {
-    // Split into settings list (left) and library preview (right).
+) -> Rect {
+    // Settings is a left sidebar; the real library renders to its right so
+    // style/art/spacing changes preview live against the actual library. The
+    // settings width is configurable (draggable via the border).
+    let settings_w = config
+        .layout
+        .settings_sidebar_width
+        .clamp(20, area.width.saturating_sub(20));
     let chunks = RatatuiLayout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .constraints([Constraint::Length(settings_w), Constraint::Min(1)])
         .split(area);
 
-    draw_settings_list(frame, state, style, config, chunks[0]);
-    draw_library_preview(frame, style, config, chunks[1]);
+    draw_settings_list(frame, state, &config.style, config, chunks[0]);
+    chunks[1]
 }
 
 fn draw_settings_list(
@@ -396,7 +544,7 @@ fn draw_settings_list(
     let block = Block::default()
         .title(" Settings ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.album_color()));
+        .border_style(Style::default().fg(style.panels.border().to_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -410,8 +558,8 @@ fn draw_settings_list(
 
     for (idx, row) in state.rows.iter().enumerate() {
         let is_selected = idx == state.selected_index;
-        let line = render_row(row, config, style, is_selected, state);
-        items.push(ListItem::new(line));
+        let text = render_row(row, config, style, is_selected, state);
+        items.push(ListItem::new(text));
     }
 
     let list = List::new(items);
@@ -434,19 +582,19 @@ fn render_row(
     style: &shared_style::Style,
     is_selected: bool,
     state: &SettingsState,
-) -> Line<'static> {
-    let highlight = style.track_name_playing_color();
-    let text_fg = style.text_color();
-    let dim_fg = style.track_duration_color();
+) -> Text<'static> {
+    let highlight = style.library.track_name_playing().to_color();
+    let text_fg = style.general.text().to_color();
+    let dim_fg = style.library.track_duration().to_color();
 
     match row {
-        SettingsRow::SectionSpacer => Line::from(""),
-        SettingsRow::SectionHeader(label) => Line::from(Span::styled(
+        SettingsRow::SectionSpacer => Text::from(Line::from("")),
+        SettingsRow::SectionHeader(label) => Text::from(Line::from(Span::styled(
             format!("── {label} ──"),
             Style::default()
-                .fg(style.album_color())
+                .fg(style.library.album().to_color())
                 .add_modifier(Modifier::BOLD),
-        )),
+        ))),
         SettingsRow::BoolField {
             label,
             get,
@@ -455,7 +603,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let check = if value { "[x]" } else { "[ ]" };
             let mut spans = vec![
                 Span::styled(
@@ -470,7 +618,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::StringField {
             label,
@@ -481,7 +629,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else if *password {
@@ -513,7 +661,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::UsizeField {
             label,
@@ -523,7 +671,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
@@ -546,7 +694,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::F32Field {
             label,
@@ -556,7 +704,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = (value - default()).abs() < f32::EPSILON;
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
@@ -579,7 +727,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::U64Field {
             label,
@@ -589,7 +737,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
@@ -612,7 +760,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::EnumField {
             label,
@@ -622,7 +770,7 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let mut spans = vec![
                 Span::styled(
                     indicator.to_string(),
@@ -636,7 +784,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
         SettingsRow::EnumFieldDyn {
             label,
@@ -649,7 +797,7 @@ fn render_row(
             let default_idx = default();
             let is_default = value_idx == default_idx;
             let value_str = variants.get(value_idx).copied().unwrap_or("?");
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
             let mut spans = vec![
                 Span::styled(
                     indicator.to_string(),
@@ -663,16 +811,83 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
+        }
+        SettingsRow::ComponentList {
+            label,
+            get,
+            default,
+            ..
+        } => {
+            let components = get(config);
+            let is_default = components == default();
+            if is_selected && state.editing {
+                // Vertical list: a header line, one line per component with the
+                // in-row selection highlighted, and an add hint.
+                let mut lines = vec![Line::from(vec![Span::styled(
+                    format!("{label}:"),
+                    Style::default().fg(if is_selected { highlight } else { text_fg }),
+                )])];
+                for (i, c) in components.iter().enumerate() {
+                    let name = match c {
+                        SidebarComponent::Lyrics => "lyrics",
+                        SidebarComponent::SimilarSongs => "similar songs",
+                    };
+                    let is_sel = i == state.component_list_sel;
+                    let marker = if is_sel && state.component_list_armed {
+                        ">>"
+                    } else if is_sel {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    lines.push(Line::from(vec![Span::styled(
+                        format!("  {marker} {name}"),
+                        Style::default()
+                            .fg(if is_sel { highlight } else { text_fg })
+                            .add_modifier(if is_sel {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
+                    )]));
+                }
+                if !is_default {
+                    lines[0]
+                        .spans
+                        .push(Span::styled(" *", Style::default().fg(dim_fg)));
+                }
+                Text::from(lines)
+            } else {
+                let mut spans = vec![Span::styled(
+                    format!("{label}:"),
+                    Style::default().fg(if is_selected { highlight } else { text_fg }),
+                )];
+                let names: Vec<&str> = components
+                    .iter()
+                    .map(|c| match c {
+                        SidebarComponent::Lyrics => "lyrics",
+                        SidebarComponent::SimilarSongs => "similar songs",
+                    })
+                    .collect();
+                spans.push(Span::styled(
+                    format!(" {}", names.join(", ")),
+                    Style::default().fg(if is_selected { highlight } else { text_fg }),
+                ));
+                if !is_default {
+                    spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
+                }
+                Text::from(Line::from(spans))
+            }
         }
         SettingsRow::HsvField { label, index } => {
             let hsv = *config.style.field(*index);
             let default_hsv = shared_style::Style::default_field(*index);
             let is_default = hsv == default_hsv;
-            let indicator = if is_selected { "> " } else { "  " };
+            let indicator = "";
 
             // Convert HSV to an RGB swatch for preview.
-            let swatch_color = super::hsv_to_color(hsv);
+            let swatch_color = super::style_color(hsv);
 
             let mut spans = vec![Span::styled(
                 indicator.to_string(),
@@ -728,7 +943,7 @@ fn render_row(
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
-            Line::from(spans)
+            Text::from(Line::from(spans))
         }
     }
 }
@@ -746,6 +961,16 @@ pub fn handle_key(
     if state.editing {
         match action {
             Action::Back => {
+                // If an item in the component list is armed, Esc disarms it
+                // first; a second Esc cancels editing.
+                if matches!(
+                    &state.rows[state.selected_index],
+                    SettingsRow::ComponentList { .. }
+                ) && state.component_list_armed
+                {
+                    state.component_list_armed = false;
+                    return (None, false);
+                }
                 // Cancel editing.
                 state.editing = false;
                 state.edit_buffer.clear();
@@ -806,6 +1031,13 @@ pub fn handle_key(
                     SettingsRow::HsvField { .. } => {
                         // HSV editing confirms on Enter — values are already applied live.
                     }
+                    SettingsRow::ComponentList { .. } => {
+                        // Enter arms/disarms the in-row item: while armed,
+                        // MoveUp/Down slide it and Backspace removes it. Unlike
+                        // the other rows, Enter does NOT exit editing here.
+                        state.component_list_armed = !state.component_list_armed;
+                        return (None, false);
+                    }
                     _ => {}
                 }
                 state.editing = false;
@@ -814,8 +1046,18 @@ pub fn handle_key(
             }
             Action::Char(c) => {
                 let row = &state.rows[state.selected_index];
-                if matches!(row, SettingsRow::HsvField { .. }) {
-                    // In HSV edit mode, ignore character input.
+                if matches!(row, SettingsRow::HsvField { .. })
+                    || matches!(row, SettingsRow::ComponentList { .. })
+                {
+                    // In HSV edit mode and the component-list row, ignore
+                    // character input (the list is edited with MoveUp/Down,
+                    // Backspace to remove; adding uses 'a').
+                    if let SettingsRow::ComponentList { get, set, .. } = row
+                        && c == 'a'
+                    {
+                        state.component_list_sel = add_component(config, *get, *set);
+                        state.component_list_armed = true;
+                    }
                 } else {
                     state.edit_buffer.push(c);
                 }
@@ -837,7 +1079,16 @@ pub fn handle_key(
                 return (None, false);
             }
             Action::DeleteChar => {
-                state.edit_buffer.pop();
+                let row = &state.rows[state.selected_index];
+                if let SettingsRow::ComponentList { get, set, .. } = row {
+                    if state.component_list_armed {
+                        state.component_list_sel =
+                            remove_component(config, *get, *set, state.component_list_sel);
+                        state.component_list_armed = false;
+                    }
+                } else {
+                    state.edit_buffer.pop();
+                }
                 return (None, false);
             }
             Action::MoveLeft => {
@@ -872,6 +1123,20 @@ pub fn handle_key(
                         HsvComponent::V => 2,
                     };
                     hsv[comp_idx] = (hsv[comp_idx] + 0.01).min(1.0);
+                } else if let SettingsRow::ComponentList { get, set, .. } = row {
+                    if state.component_list_armed {
+                        // Slide the armed item up.
+                        state.component_list_sel =
+                            move_component_up(config, *get, *set, state.component_list_sel);
+                    } else {
+                        // Navigate up within the list.
+                        let len = get(config).len();
+                        if state.component_list_sel > 0 {
+                            state.component_list_sel -= 1;
+                        } else if len > 0 {
+                            state.component_list_sel = len - 1;
+                        }
+                    }
                 }
                 return (None, false);
             }
@@ -885,6 +1150,20 @@ pub fn handle_key(
                         HsvComponent::V => 2,
                     };
                     hsv[comp_idx] = (hsv[comp_idx] - 0.01).max(0.0);
+                } else if let SettingsRow::ComponentList { get, set, .. } = row {
+                    if state.component_list_armed {
+                        // Slide the armed item down.
+                        state.component_list_sel =
+                            move_component_down(config, *get, *set, state.component_list_sel);
+                    } else {
+                        // Navigate down within the list.
+                        let len = get(config).len();
+                        if len > 0 && state.component_list_sel + 1 < len {
+                            state.component_list_sel += 1;
+                        } else if len > 0 {
+                            state.component_list_sel = 0;
+                        }
+                    }
                 }
                 return (None, false);
             }
@@ -981,6 +1260,11 @@ pub fn handle_key(
                         server_changed = true;
                     }
                 }
+                SettingsRow::ComponentList { .. } => {
+                    state.editing = true;
+                    state.edit_buffer.clear();
+                    state.component_list_sel = 0;
+                }
                 SettingsRow::HsvField { .. } => {
                     state.editing = true;
                     state.hsv_component = HsvComponent::H;
@@ -1068,6 +1352,17 @@ pub fn handle_key(
                         server_changed = true;
                     }
                 }
+                SettingsRow::ComponentList {
+                    default,
+                    set,
+                    section,
+                    ..
+                } => {
+                    set(config, default());
+                    if *section == Section::Server {
+                        server_changed = true;
+                    }
+                }
                 SettingsRow::HsvField { index, .. } => {
                     *config.style.field_mut(*index) = shared_style::Style::default_field(*index);
                 }
@@ -1085,7 +1380,8 @@ pub fn handle_key(
                 | SettingsRow::F32Field { section, .. }
                 | SettingsRow::U64Field { section, .. }
                 | SettingsRow::EnumField { section, .. }
-                | SettingsRow::EnumFieldDyn { section, .. } => Some(*section),
+                | SettingsRow::EnumFieldDyn { section, .. }
+                | SettingsRow::ComponentList { section, .. } => Some(*section),
                 SettingsRow::HsvField { .. } => Some(Section::Colors),
             };
             if let Some(section) = section {
@@ -1099,6 +1395,10 @@ pub fn handle_key(
                     }
                     Section::Playback => {
                         config.playback = Playback::default();
+                    }
+                    Section::Sidebar => {
+                        config.layout.base.sidebar =
+                            blackbird_client_shared::config::SidebarSettings::default();
                     }
                     Section::Colors => {
                         config.style = shared_style::Style::default();
@@ -1165,234 +1465,6 @@ pub fn scroll_selection(state: &mut SettingsState, delta: i32) {
     }
 }
 
-/// Embedded placeholder image bytes for the preview art.
-const PLACEHOLDER_IMAGE: &[u8] = include_bytes!("../../assets/no-album-art.png");
-
-/// Sentinel cover art ID used by preview entries to look up placeholder art.
-const PREVIEW_ART_ID: &str = "__preview_placeholder__";
-
-/// Builds fake `LibraryEntry` values for the settings preview, using bird-themed
-/// placeholder data. The entries include album gaps matching the configured spacing.
-fn build_preview_entries(
-    album_spacing: usize,
-    album_art_style: AlbumArtStyle,
-) -> Vec<LibraryEntry> {
-    struct Album {
-        artist: &'static str,
-        album: &'static str,
-        year: i32,
-        duration: u32,
-        starred: bool,
-        tracks: &'static [Track],
-    }
-    struct Track {
-        num: u32,
-        title: &'static str,
-        duration: u32,
-    }
-
-    const ALBUMS: &[Album] = &[
-        Album {
-            artist: "The Blackbirds",
-            album: "Songs from the Nest",
-            year: 2024,
-            duration: 2527,
-            starred: true,
-            tracks: &[
-                Track {
-                    num: 1,
-                    title: "Dawn Chorus",
-                    duration: 263,
-                },
-                Track {
-                    num: 2,
-                    title: "Feather & Sky",
-                    duration: 311,
-                },
-                Track {
-                    num: 3,
-                    title: "Wingspan",
-                    duration: 362,
-                },
-                Track {
-                    num: 4,
-                    title: "Midnight Roost",
-                    duration: 225,
-                },
-            ],
-        },
-        Album {
-            artist: "Corvus & the Starlings",
-            album: "Terminal Velocity",
-            year: 2023,
-            duration: 2331,
-            starred: false,
-            tracks: &[
-                Track {
-                    num: 1,
-                    title: "Tailwind",
-                    duration: 347,
-                },
-                Track {
-                    num: 2,
-                    title: "Hollow Bones",
-                    duration: 258,
-                },
-                Track {
-                    num: 3,
-                    title: "Murmuration",
-                    duration: 453,
-                },
-            ],
-        },
-    ];
-
-    let art_id = CoverArtId(PREVIEW_ART_ID.into());
-
-    let groups = ALBUMS.iter().enumerate().map(|(album_idx, album)| {
-        let header = LibraryEntry::GroupHeader {
-            artist: album.artist.to_string(),
-            album: album.album.to_string(),
-            year: Some(album.year),
-            created: None,
-            duration: album.duration,
-            starred: album.starred,
-            album_id: AlbumId(format!("preview-album-{album_idx}").into()),
-            cover_art_id: Some(art_id.clone()),
-        };
-
-        let tracks: Vec<_> = album
-            .tracks
-            .iter()
-            .enumerate()
-            .map(|(track_idx, track)| LibraryEntry::Track {
-                id: TrackId(format!("preview-track-{album_idx}-{track_idx}")),
-                title: track.title.to_string(),
-                artist: None,
-                album_artist: album.artist.to_string(),
-                track_number: Some(track.num),
-                disc_number: None,
-                duration: Some(track.duration),
-                starred: false,
-                play_count: None,
-                cover_art_id: Some(art_id.clone()),
-                track_index_in_group: track_idx,
-            })
-            .collect();
-
-        (header, tracks)
-    });
-
-    assemble_flat_library(groups, album_art_style, album_spacing)
-}
-
-/// Draws a mini preview of the library using fake data to show the effect of
-/// the current color/spacing configuration.
-fn draw_library_preview(
-    frame: &mut Frame,
-    style: &shared_style::Style,
-    config: &crate::config::Config,
-    area: Rect,
-) {
-    let block = Block::default()
-        .title(" Preview ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.album_color()));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    if inner.height == 0 || inner.width == 0 {
-        return;
-    }
-
-    let album_art_style = config.layout.base.album_art_style;
-    let entries = build_preview_entries(config.layout.base.album_spacing, album_art_style);
-
-    // Build art lookup maps with the placeholder image.
-    let art_id = CoverArtId(PREVIEW_ART_ID.into());
-
-    static PLACEHOLDER_QUADRANT: LazyLock<ArtColors> =
-        LazyLock::new(|| compute_quadrant_colors(PLACEHOLDER_IMAGE));
-
-    let art_colors: HashMap<CoverArtId, ArtColors> = {
-        let mut m = HashMap::new();
-        m.insert(art_id.clone(), *PLACEHOLDER_QUADRANT);
-        m
-    };
-
-    let large_art = super::layout::ArtColumn::large();
-    let large_art_pixel_rows = large_art.rows as usize * 2;
-
-    let large_art_grids: HashMap<CoverArtId, Arc<ArtColorGrid>> = {
-        let mut m = HashMap::new();
-        if album_art_style == AlbumArtStyle::BelowAlbum {
-            m.insert(
-                art_id,
-                Arc::new(compute_art_grid(
-                    PLACEHOLDER_IMAGE,
-                    large_art.cols as usize,
-                    large_art_pixel_rows,
-                )),
-            );
-        }
-        m
-    };
-
-    // Find the playing and selected entry indices.
-    let playing_track_id = entries.iter().find_map(|e| {
-        if let LibraryEntry::Track { id, .. } = e {
-            // The first album's first track is playing.
-            Some(id.clone())
-        } else {
-            None
-        }
-    });
-    // Select the third track overall.
-    let selected_index = entries
-        .iter()
-        .enumerate()
-        .filter(|(_, e)| matches!(e, LibraryEntry::Track { .. }))
-        .nth(2)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
-
-    let render_ctx = EntryRenderContext {
-        album_art_style,
-        list_width: inner.width as usize,
-        large_art,
-        background_color: super::effective_bg(config),
-        album_color: style.album_color(),
-        album_year_color: style.album_year_color(),
-        album_length_color: style.album_length_color(),
-        track_number_color: style.track_number_color(),
-        track_name_color: style.track_name_color(),
-        track_name_playing_color: style.track_name_playing_color(),
-        track_name_hovered_color: style.track_name_hovered_color(),
-        track_length_color: style.track_length_color(),
-        track_duration_color: style.track_duration_color(),
-        playing_track_id: playing_track_id.as_ref(),
-        selected_index,
-        underline_index: None,
-        hovered_heart_index: None,
-        hovered_entry_index: None,
-        art_colors: &art_colors,
-        large_art_grids: &large_art_grids,
-        has_image_protocol: false,
-    };
-
-    let items: Vec<ListItem> = entries
-        .iter()
-        .enumerate()
-        .map(|(i, entry)| ListItem::new(render_library_entry(entry, i, &render_ctx)))
-        .collect();
-
-    let list = List::new(items).style(Style::default().bg(super::effective_bg(config)));
-    let mut list_state = ListState::default();
-    *list_state.offset_mut() = 0;
-    frame.render_stateful_widget(list, inner, &mut list_state);
-}
-
 /// Converts a snake_case identifier to a human-readable label.
 fn human_readable_label(name: &str) -> String {
     let mut result = String::with_capacity(name.len());
@@ -1413,89 +1485,139 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lyrics_display_row_cycles_through_all_variants() {
+    fn test_settings_component_order_row() {
         let mut state = SettingsState::new();
         let mut config = crate::config::Config::default();
 
-        // Find the "Lyrics display" row.
+        // Find the "Sidebar components" row.
         let row_idx = state
             .rows
             .iter()
-            .position(|r| matches!(r, SettingsRow::EnumFieldDyn { label, .. } if *label == "Lyrics display"))
-            .expect("Lyrics display row should exist");
+            .position(|r| {
+                matches!(r, SettingsRow::ComponentList { label, .. } if *label == "Sidebar components")
+            })
+            .expect("Sidebar components row should exist");
         state.selected_index = row_idx;
 
-        // Default is "inline" (index 1). Cycling forward goes:
-        // inline → left → right → off → inline → ...
-        let expected_sequence = ["inline", "left", "right", "off"];
-
-        for (i, expected_variant) in expected_sequence.iter().enumerate() {
-            // Before cycling, the current value should match expected_sequence[i].
-            let line = render_row(
-                &state.rows[row_idx],
-                &config,
-                &shared_style::Style::default(),
-                true,
-                &state,
-            );
-            let line_str = line
-                .spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<String>();
-            assert!(
-                line_str.contains(expected_variant),
-                "step {i}: expected rendered text to contain '{expected_variant}', got: {line_str}"
-            );
-
-            // Cycle to the next variant.
-            let _ = handle_key(&mut state, &mut config, Action::Select);
-        }
-
-        // After cycling through all 4 variants, we should be back at "inline".
-        let line = render_row(
-            &state.rows[row_idx],
-            &config,
-            &shared_style::Style::default(),
-            true,
-            &state,
+        // Default order is [Lyrics, SimilarSongs].
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
         );
-        let line_str = line
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<String>();
-        assert!(
-            line_str.contains("inline"),
-            "should have cycled back to 'inline'"
+
+        // Enter editing mode.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.editing);
+        assert_eq!(state.component_list_sel, 0);
+        assert!(!state.component_list_armed);
+
+        // Navigate down (not armed → moves selection, no reorder).
+        let _ = handle_key(&mut state, &mut config, Action::MoveDown);
+        assert_eq!(state.component_list_sel, 1);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
         );
+
+        // Enter arms the item; armed MoveDown slides the selected item down.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.component_list_armed);
+        // (Selection is at 1 from the navigation above; navigate to the top
+        // while armed slides: move up once swaps 1↔0.)
+        let _ = handle_key(&mut state, &mut config, Action::MoveUp);
+        assert_eq!(state.component_list_sel, 0);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::SimilarSongs, SidebarComponent::Lyrics]
+        );
+        // Armed MoveDown slides lyrics back below similar songs.
+        let _ = handle_key(&mut state, &mut config, Action::MoveDown);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+        );
+        assert_eq!(state.component_list_sel, 1);
+
+        // Add: with both present, 'a' is a no-op (all components present).
+        let list_len = config.layout.base.sidebar.components.len();
+        let _ = handle_key(&mut state, &mut config, Action::Char('a'));
+        assert_eq!(config.layout.base.sidebar.components.len(), list_len);
+
+        // Disarm, re-navigate to similar songs, arm, then delete it.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(!state.component_list_armed);
+        // (sel is 1; navigate up then down to land on sel 1 without sliding.)
+        let _ = handle_key(&mut state, &mut config, Action::MoveUp);
+        assert_eq!(state.component_list_sel, 0);
+        let _ = handle_key(&mut state, &mut config, Action::MoveDown);
+        assert_eq!(state.component_list_sel, 1);
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.component_list_armed);
+        let _ = handle_key(&mut state, &mut config, Action::DeleteChar);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics]
+        );
+        assert_eq!(state.component_list_sel, 0);
+        assert!(!state.component_list_armed);
+
+        // Add 'a' again: re-adds the absent similar songs (heights rebalanced).
+        let _ = handle_key(&mut state, &mut config, Action::Char('a'));
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+        );
+        assert_eq!(config.layout.base.sidebar.heights.len(), 2);
+        // Adding arms the new item; Esc disarms it first...
+        assert!(state.component_list_armed);
+        let _ = handle_key(&mut state, &mut config, Action::Back);
+        assert!(!state.component_list_armed);
+        assert!(state.editing);
+        // ...and a second Esc exits editing.
+        let _ = handle_key(&mut state, &mut config, Action::Back);
+        assert!(!state.editing);
     }
 
     #[test]
-    fn lyrics_display_row_resets_to_default() {
+    fn sidebar_enabled_row_toggles_config() {
         let mut state = SettingsState::new();
         let mut config = crate::config::Config::default();
 
         let row_idx = state
             .rows
             .iter()
-            .position(|r| matches!(r, SettingsRow::EnumFieldDyn { label, .. } if *label == "Lyrics display"))
-            .expect("Lyrics display row should exist");
+            .position(|r| matches!(r, SettingsRow::BoolField { label, .. } if *label == "Sidebar enabled"))
+            .expect("Sidebar enabled row should exist");
         state.selected_index = row_idx;
 
-        // Cycle to a non-default value.
+        assert!(config.layout.base.sidebar.enabled);
         let _ = handle_key(&mut state, &mut config, Action::Select);
-        let _ = handle_key(&mut state, &mut config, Action::Select);
-        assert_ne!(
-            config.layout.base.lyrics_display,
-            blackbird_client_shared::config::LyricsDisplay::default()
-        );
+        assert!(!config.layout.base.sidebar.enabled);
+    }
 
-        // Reset the field.
-        let _ = handle_key(&mut state, &mut config, Action::ResetField);
-        assert_eq!(
-            config.layout.base.lyrics_display,
-            blackbird_client_shared::config::LyricsDisplay::default()
-        );
+    #[test]
+    fn similar_songs_count_row_edits() {
+        let mut state = SettingsState::new();
+        let mut config = crate::config::Config::default();
+
+        let row_idx = state
+            .rows
+            .iter()
+            .position(|r| matches!(r, SettingsRow::UsizeField { label, .. } if *label == "Similar songs count"))
+            .expect("Similar songs count row should exist");
+        state.selected_index = row_idx;
+
+        assert_eq!(config.layout.base.sidebar.similar_songs_count, 20);
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.editing);
+        // The buffer starts as "20"; clear it then type "50".
+        for _ in 0..2 {
+            let _ = handle_key(&mut state, &mut config, Action::DeleteChar);
+        }
+        for c in "50".chars() {
+            let _ = handle_key(&mut state, &mut config, Action::Char(c));
+        }
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert_eq!(config.layout.base.sidebar.similar_songs_count, 50);
     }
 }

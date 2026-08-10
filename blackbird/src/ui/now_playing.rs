@@ -14,14 +14,14 @@ use crate::{
     ui::album_art_overlay::AlbumArtOverlay,
 };
 
-use super::{StyleExt, string_to_color};
+use super::{ToColor, string_to_color};
 
 pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     // Extract style colors upfront to avoid borrow conflicts.
-    let text_color = app.config.style.text_color();
-    let album_color = app.config.style.album_color();
-    let track_name_playing_color = app.config.style.track_name_playing_color();
-    let track_duration_color = app.config.style.track_duration_color();
+    let text_color = app.config.style.general.text().to_color();
+    let album_color = app.config.style.library.album().to_color();
+    let track_name_playing_color = app.config.style.library.track_name_playing().to_color();
+    let track_duration_color = app.config.style.library.track_duration().to_color();
 
     let details = app.logic.get_track_display_details();
 
@@ -103,7 +103,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
     if let Some(play_count) = tdd.play_count {
         track_spans.push(Span::styled(
             format!(" {play_count}"),
-            Style::default().fg(app.config.style.track_number_color()),
+            Style::default().fg(app.config.style.library.track_number().to_color()),
         ));
     }
 
@@ -143,7 +143,7 @@ fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![Line::from(Span::styled(
         " blackbird",
         Style::default()
-            .fg(style.track_name_playing_color())
+            .fg(style.library.track_name_playing().to_color())
             .add_modifier(Modifier::BOLD),
     ))];
 
@@ -151,12 +151,12 @@ fn draw_idle(frame: &mut Frame, app: &App, area: Rect) {
     if has_loaded {
         lines.push(Line::from(Span::styled(
             format!(" {track_count} tracks loaded"),
-            Style::default().fg(style.track_duration_color()),
+            Style::default().fg(style.library.track_duration().to_color()),
         )));
     } else if track_count > 0 {
         lines.push(Line::from(Span::styled(
             format!(" {track_count} tracks loaded, scanning..."),
-            Style::default().fg(style.track_duration_color()),
+            Style::default().fg(style.library.track_duration().to_color()),
         )));
     }
     let paragraph = Paragraph::new(lines);
@@ -223,29 +223,38 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
 
     let play_icon = if is_playing { "\u{25B6}" } else { "\u{23F8}" };
     let play_color = if is_playing {
-        style.track_name_playing_color()
+        style.library.track_name_playing().to_color()
     } else {
-        style.track_name_hovered_color()
+        style.library.track_name_hovered().to_color()
     };
 
     // Transport row:  |<  []  >|
     let transport = Line::from(vec![
-        Span::styled("\u{23EE}", Style::default().fg(style.text_color())),
+        Span::styled(
+            "\u{23EE}",
+            Style::default().fg(style.general.text().to_color()),
+        ),
         Span::raw("  "),
         Span::styled(
             play_icon,
             Style::default().fg(play_color).add_modifier(Modifier::BOLD),
         ),
         Span::raw("  "),
-        Span::styled("\u{23F9}", Style::default().fg(style.text_color())),
+        Span::styled(
+            "\u{23F9}",
+            Style::default().fg(style.general.text().to_color()),
+        ),
         Span::raw("  "),
-        Span::styled("\u{23ED}", Style::default().fg(style.text_color())),
+        Span::styled(
+            "\u{23ED}",
+            Style::default().fg(style.general.text().to_color()),
+        ),
     ]);
 
     // Mode line
     let mode_line = Line::from(vec![Span::styled(
         format!("[{mode}]"),
-        Style::default().fg(style.track_duration_color()),
+        Style::default().fg(style.library.track_duration().to_color()),
     )]);
 
     let lines = vec![transport, mode_line];
@@ -397,7 +406,7 @@ pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
 
     let block = Block::bordered().style(
         Style::default()
-            .fg(style.text_color())
+            .fg(style.general.text().to_color())
             .bg(super::effective_bg(&app.config)),
     );
     let inner = block.inner(rect);
@@ -423,11 +432,11 @@ pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
         });
 
         let fg = if is_current {
-            style.track_name_playing_color()
+            style.library.track_name_playing().to_color()
         } else if hovered {
-            style.text_color()
+            style.general.text().to_color()
         } else {
-            style.track_duration_color()
+            style.library.track_duration().to_color()
         };
 
         frame.render_widget(

@@ -59,9 +59,20 @@ pub struct Layout {
     /// Controls how album art is rendered (graphics protocol vs. half-blocks).
     #[serde(default)]
     pub album_art_protocol: AlbumArtProtocol,
-    /// Width of the lyrics sidebar in terminal columns, when visible.
-    #[serde(default = "default_lyrics_sidebar_width")]
-    pub lyrics_sidebar_width: u16,
+    /// Width of the sidebar in terminal columns, when visible. (Formerly
+    /// `lyrics_sidebar_width`; the old key still parses via `alias`.)
+    #[serde(default = "default_sidebar_width", alias = "lyrics_sidebar_width")]
+    pub sidebar_width: u16,
+    /// Width of the settings sidebar (the settings list) in columns.
+    #[serde(default = "default_settings_sidebar_width")]
+    pub settings_sidebar_width: u16,
+    /// Whether the inline lyrics overlay shows at the bottom of the content
+    /// area. Independent of the sidebar: `lyrics_display` decides sidebar
+    /// position, and this flag additionally shows the overlay whenever synced
+    /// lyrics are available. Kept for backwards compatibility with the retired
+    /// GUI's `show_inline_lyrics` key.
+    #[serde(default)]
+    pub show_inline_lyrics: bool,
     /// Shared layout settings.
     #[serde(flatten)]
     pub base: blackbird_client_shared::config::Layout,
@@ -74,15 +85,21 @@ impl Default for Layout {
         Self {
             use_terminal_background: false,
             album_art_protocol: AlbumArtProtocol::default(),
-            lyrics_sidebar_width: default_lyrics_sidebar_width(),
+            sidebar_width: default_sidebar_width(),
+            settings_sidebar_width: default_settings_sidebar_width(),
+            show_inline_lyrics: false,
             base: blackbird_client_shared::config::Layout::default(),
             extra: toml::Table::new(),
         }
     }
 }
 
-fn default_lyrics_sidebar_width() -> u16 {
+fn default_sidebar_width() -> u16 {
     30
+}
+
+fn default_settings_sidebar_width() -> u16 {
+    40
 }
 
 impl blackbird_shared::config::ConfigFile for Config {}
@@ -144,9 +161,11 @@ use_terminal_background = false
 some_gui_only_field = 42
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
+        // `lyrics_display` (from the retired GUI) is now an unknown field and
+        // must be preserved in the catch-all rather than erroring.
         assert_eq!(
-            config.layout.base.lyrics_display,
-            blackbird_client_shared::config::LyricsDisplay::Right
+            config.layout.extra.get("lyrics_display"),
+            Some(&toml::Value::String("right".to_string()))
         );
         assert!(!config.layout.use_terminal_background);
         // The unknown field should be preserved in the catch-all.
@@ -185,21 +204,61 @@ album_art_protocol = "image"
     }
 
     #[test]
-    fn config_roundtrip_lyrics_sidebar_width() {
+    fn config_roundtrip_sidebar_width() {
         let mut config = Config::default();
-        config.layout.lyrics_sidebar_width = 42;
+        config.layout.sidebar_width = 42;
         let toml_str = toml::to_string(&config).unwrap();
-        assert!(toml_str.contains("lyrics_sidebar_width = 42"));
+        assert!(toml_str.contains("sidebar_width = 42"));
         let parsed: Config = toml::from_str(&toml_str).unwrap();
         assert_eq!(config, parsed);
     }
 
     #[test]
-    fn config_lyrics_sidebar_width_defaults_to_30() {
+    fn config_sidebar_width_defaults_to_30() {
         let toml_str = r#"
 [layout]
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.layout.lyrics_sidebar_width, 30);
+        assert_eq!(config.layout.sidebar_width, 30);
+    }
+
+    #[test]
+    fn config_parses_legacy_lyrics_sidebar_width() {
+        // Old configs use `lyrics_sidebar_width`; it should alias into the
+        // renamed `sidebar_width` field.
+        let toml_str = r#"
+[layout]
+lyrics_sidebar_width = 42
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.sidebar_width, 42);
+    }
+
+    #[test]
+    fn config_parses_legacy_show_inline_lyrics() {
+        // The retired GUI's `show_inline_lyrics` flag lives in `[layout]`; it
+        // should parse into the explicit field (not the catch-all) so the TUI
+        // honours it.
+        let toml_str = r#"
+[layout]
+lyrics_display = "right"
+show_inline_lyrics = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        // `lyrics_display` is obsolete and preserved as an unknown field.
+        assert_eq!(
+            config.layout.extra.get("lyrics_display"),
+            Some(&toml::Value::String("right".to_string()))
+        );
+        assert!(config.layout.show_inline_lyrics);
+        // And it roundtrips through the field, not the catch-all.
+        let re_serialized = toml::to_string(&config).unwrap();
+        assert!(re_serialized.contains("show_inline_lyrics = true"));
+    }
+
+    #[test]
+    fn config_defaults_show_inline_lyrics_off() {
+        let config = Config::default();
+        assert!(!config.layout.show_inline_lyrics);
     }
 }

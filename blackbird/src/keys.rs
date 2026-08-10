@@ -8,10 +8,30 @@ use smol_str::{SmolStr, ToSmolStr};
 /// For pairs, the description is provided explicitly so that shared
 /// suffixes/prefixes can be factored out (e.g. "next/prev group"
 /// instead of "next group/prev group").
+///
+/// `Custom` overrides the description for a single action; it is used when
+/// the same key means something different in a substate (e.g. Enter confirms
+/// an edit in the settings panel rather than playing a track).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelpEntry {
     Single(Action),
     Pair(Action, Action, &'static str),
+    Custom(Action, &'static str),
+}
+
+/// The editing substate of the settings panel. The help bar shows different
+/// bindings depending on what is being edited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsEditMode {
+    /// Not editing any row; the panel-level bindings apply.
+    Navigating,
+    /// Editing a text or numeric field (String/Usize/F32/U64).
+    TextEdit,
+    /// Adjusting the HSV components of a color field.
+    HsvEdit,
+    /// Rearranging/adding/removing entries in the sidebar component list.
+    /// `armed` is true when an item is selected for manipulation.
+    ComponentList { armed: bool },
 }
 
 /// Centrally defined key actions for the TUI.
@@ -28,6 +48,7 @@ pub enum Action {
     ToggleSortOrder(Direction),
     Search,
     Lyrics,
+    ToggleSidebar,
     Logs,
     Queue,
     VolumeMode,
@@ -71,6 +92,7 @@ pub const KEY_TOGGLE_SORT_FWD: KeyCode = KeyCode::Char('o');
 pub const KEY_TOGGLE_SORT_BWD: KeyCode = KeyCode::Char('O');
 pub const KEY_SEARCH: KeyCode = KeyCode::Char('/');
 pub const KEY_LYRICS: KeyCode = KeyCode::Char('l');
+pub const KEY_TOGGLE_SIDEBAR: KeyCode = KeyCode::Char('t');
 pub const KEY_LOGS: KeyCode = KeyCode::Char('L');
 pub const KEY_QUEUE: KeyCode = KeyCode::Char('u');
 pub const KEY_VOLUME: KeyCode = KeyCode::Char('v');
@@ -120,6 +142,7 @@ impl Action {
             }
             Action::Search => (key_label(KEY_SEARCH), "search".into()),
             Action::Lyrics => (key_label(KEY_LYRICS), "lyrics".into()),
+            Action::ToggleSidebar => (key_label(KEY_TOGGLE_SIDEBAR), "sidebar".into()),
             Action::Logs => (key_label(KEY_LOGS), "logs".into()),
             Action::Queue => (key_label(KEY_QUEUE), "queue".into()),
             Action::VolumeMode => (key_label(KEY_VOLUME), "vol".into()),
@@ -149,6 +172,10 @@ impl Action {
             Action::MoveRight => (key_label(KEY_RIGHT), "right".into()),
             Action::ResetField => (key_label(KeyCode::Char('d')), "reset field".into()),
             Action::ResetSection => (key_label(KeyCode::Char('D')), "reset section".into()),
+            // Char keys are only rendered through `HelpEntry::Custom`, which
+            // supplies its own description (the default label is the key).
+            Action::Char(c) => (key_label(KeyCode::Char(*c)), c.to_string().into()),
+            Action::DeleteChar => (key_label(KEY_DELETE_CHAR), "delete".into()),
             _ => return None,
         };
         Some((key_str, desc))
@@ -185,6 +212,7 @@ pub fn library_action(key: &KeyEvent) -> Option<Action> {
         KEY_TOGGLE_SORT_BWD => Some(Action::ToggleSortOrder(Direction::Backward)),
         KEY_SEARCH => Some(Action::Search),
         KEY_LYRICS => Some(Action::Lyrics),
+        KEY_TOGGLE_SIDEBAR => Some(Action::ToggleSidebar),
         KEY_LOGS => Some(Action::Logs),
         KEY_QUEUE => Some(Action::Queue),
         KEY_VOLUME => Some(Action::VolumeMode),
@@ -252,6 +280,7 @@ pub fn search_action(key: &KeyEvent) -> Option<Action> {
 pub fn lyrics_action(key: &KeyEvent) -> Option<Action> {
     match key.code {
         KEY_BACK | KEY_LYRICS | KEY_QUIT => Some(Action::Back),
+        KEY_TOGGLE_SIDEBAR => Some(Action::ToggleSidebar),
         KEY_UP => Some(Action::MoveUp),
         KEY_DOWN => Some(Action::MoveDown),
         KEY_PAGE_UP => Some(Action::PageUp),
@@ -352,6 +381,7 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::GotoPlaying),
     HelpEntry::Single(Action::Search),
     HelpEntry::Single(Action::Lyrics),
+    HelpEntry::Single(Action::ToggleSidebar),
     HelpEntry::Single(Action::Queue),
     HelpEntry::Single(Action::VolumeMode),
     HelpEntry::Single(Action::Select),
@@ -360,15 +390,68 @@ pub const LIBRARY_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Settings),
 ];
 
-/// Ordered list of entries to show in the settings help bar.
+/// Ordered list of entries to show in the settings help bar while navigating
+/// (no row is being edited).
 pub const SETTINGS_HELP: &[HelpEntry] = &[
-    HelpEntry::Pair(Action::Quit, Action::Back, "close"),
+    HelpEntry::Custom(Action::Back, "close"),
     HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "nav/adjust"),
     HelpEntry::Pair(Action::MoveLeft, Action::MoveRight, "hsv comp"),
-    HelpEntry::Single(Action::Select),
+    HelpEntry::Custom(Action::Select, "select"),
     HelpEntry::Single(Action::ResetField),
     HelpEntry::Single(Action::ResetSection),
 ];
+
+/// Ordered list of entries to show in the settings help bar while editing a
+/// text or numeric field.
+pub const SETTINGS_HELP_EDITING: &[HelpEntry] = &[
+    HelpEntry::Custom(Action::Back, "cancel"),
+    HelpEntry::Single(Action::Select),
+    HelpEntry::Single(Action::DeleteChar),
+];
+
+/// Ordered list of entries to show in the settings help bar while adjusting
+/// the HSV components of a color field.
+pub const SETTINGS_HELP_HSV: &[HelpEntry] = &[
+    HelpEntry::Custom(Action::Back, "cancel"),
+    HelpEntry::Custom(Action::Select, "done"),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "value"),
+    HelpEntry::Pair(Action::MoveLeft, Action::MoveRight, "hsv comp"),
+    HelpEntry::Pair(Action::PageUp, Action::PageDown, "jump"),
+];
+
+/// Ordered list of entries to show in the settings help bar while editing the
+/// sidebar component list, navigating (no item is armed).
+pub const SETTINGS_HELP_COMPONENT_LIST: &[HelpEntry] = &[
+    HelpEntry::Custom(Action::Back, "cancel"),
+    HelpEntry::Custom(Action::Select, "select"),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "nav"),
+    HelpEntry::Custom(Action::Char('a'), "add"),
+];
+
+/// Ordered list of entries to show in the settings help bar while editing the
+/// sidebar component list with an item armed (selected for manipulation).
+pub const SETTINGS_HELP_COMPONENT_LIST_ARMED: &[HelpEntry] = &[
+    HelpEntry::Custom(Action::Back, "deselect"),
+    HelpEntry::Custom(Action::Select, "done"),
+    HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "move"),
+    HelpEntry::Custom(Action::DeleteChar, "remove"),
+];
+
+/// Returns the help entries for the settings panel given its editing substate.
+pub fn settings_help(mode: SettingsEditMode) -> &'static [HelpEntry] {
+    match mode {
+        SettingsEditMode::Navigating => SETTINGS_HELP,
+        SettingsEditMode::TextEdit => SETTINGS_HELP_EDITING,
+        SettingsEditMode::HsvEdit => SETTINGS_HELP_HSV,
+        SettingsEditMode::ComponentList { armed } => {
+            if armed {
+                SETTINGS_HELP_COMPONENT_LIST_ARMED
+            } else {
+                SETTINGS_HELP_COMPONENT_LIST
+            }
+        }
+    }
+}
 
 /// Ordered list of entries to show in the search help bar.
 pub const SEARCH_HELP: &[HelpEntry] = &[
@@ -378,9 +461,10 @@ pub const SEARCH_HELP: &[HelpEntry] = &[
     HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
 ];
 
-/// Ordered list of entries to show in the lyrics help bar.
+/// Ordered list of entries to show in the lyrics/sidebar help bar.
 pub const LYRICS_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Back),
+    HelpEntry::Single(Action::ToggleSidebar),
     HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
     HelpEntry::Single(Action::Select),
     HelpEntry::Pair(Action::SeekBackward, Action::SeekForward, "seek-/+"),
@@ -405,3 +489,77 @@ pub const LOGS_HELP: &[HelpEntry] = &[
     HelpEntry::Single(Action::Back),
     HelpEntry::Pair(Action::MoveUp, Action::MoveDown, "up/down"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No two distinct char-key actions may share a single Char key, since
+    /// binding collisions are resolved only by call-site scoping. Char keys
+    /// that are intentionally *shared* across contexts (e.g. the confirmation
+    /// keys) are asserted here. The intentional overlaps:
+    /// - `n`: Next (transport) / ConfirmNo (quit confirmation)
+    /// - `q`: Quit (transport) / Back-in-context (settings/search: "q" maps to
+    ///   Back via KEY_QUIT fallthrough; scoped by panel)
+    #[test]
+    fn no_distinct_char_actions_share_a_key() {
+        let char_keys = [
+            KEY_QUIT,            // 'q' — Quit, also Back in editing contexts
+            KEY_PLAY_PAUSE,      // ' '
+            KEY_STOP,            // 's'
+            KEY_NEXT,            // 'n' — also ConfirmNo
+            KEY_PREVIOUS,        // 'p'
+            KEY_NEXT_GROUP,      // 'N'
+            KEY_PREVIOUS_GROUP,  // 'P'
+            KEY_CYCLE_MODE_FWD,  // 'm'
+            KEY_CYCLE_MODE_BWD,  // 'M'
+            KEY_TOGGLE_SORT_FWD, // 'o'
+            KEY_TOGGLE_SORT_BWD, // 'O'
+            KEY_SEARCH,          // '/'
+            KEY_LYRICS,          // 'l'
+            KEY_TOGGLE_SIDEBAR,  // 't'
+            KEY_LOGS,            // 'L'
+            KEY_QUEUE,           // 'u'
+            KEY_VOLUME,          // 'v'
+            KEY_GOTO_PLAYING,    // 'g'
+            KEY_SEEK_BACK,       // '<'
+            KEY_SEEK_BACK_ALT,   // ','
+            KEY_SEEK_FWD,        // '>'
+            KEY_SEEK_FWD_ALT,    // '.'
+            KEY_STAR,            // '*'
+            KEY_SETTINGS,        // 'i'
+            KEY_CONFIRM_YES,     // 'y'
+            KEY_CONFIRM_NO,      // 'n' — shared with Next
+        ];
+        let mut seen = std::collections::HashMap::new();
+        // Intentional shared characters and their explanations.
+        let intentional: std::collections::HashMap<char, &str> =
+            [('n', "Next/ConfirmNo"), ('q', "Quit/Back-in-editing")]
+                .into_iter()
+                .collect();
+        for key in char_keys {
+            if let KeyCode::Char(c) = key {
+                let action_label = match c {
+                    'l' => "Lyrics",
+                    't' => "ToggleSidebar",
+                    'L' => "Logs",
+                    'u' => "Queue",
+                    'v' => "VolumeMode",
+                    'g' => "GotoPlaying",
+                    '*' => "Star",
+                    'i' => "Settings",
+                    'y' => "ConfirmYes",
+                    'n' => "Next/ConfirmNo",
+                    _ => "other",
+                };
+                let prev = seen.insert(c, action_label);
+                if let Some(prev_label) = prev {
+                    assert!(
+                        intentional.contains_key(&c),
+                        "key '{c}' is bound to both '{prev_label:?}' and '{action_label}' without an intentional-overlap entry"
+                    );
+                }
+            }
+        }
+    }
+}

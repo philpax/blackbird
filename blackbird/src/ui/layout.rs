@@ -1,6 +1,6 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect, Size};
 
-use blackbird_client_shared::config::LyricsDisplay;
+use blackbird_client_shared::config::SidebarPosition;
 
 // ── Main vertical layout ────────────────────────────────────────────────────
 
@@ -50,6 +50,18 @@ pub fn inline_lyrics_overlay(content: Rect) -> Option<Rect> {
     ))
 }
 
+/// Splits `content` vertically into `(main, inline_lyrics)`. When inline
+/// lyrics are shown they render as a panel at the bottom that cuts into the
+/// main content's height (not an overlay). Returns `None` for the lyrics area
+/// when the content is too small.
+pub fn split_inline_lyrics(content: Rect) -> (Rect, Option<Rect>) {
+    let Some(lyrics) = inline_lyrics_overlay(content) else {
+        return (content, None);
+    };
+    let main = Rect::new(content.x, content.y, content.width, lyrics.y - content.y);
+    (main, Some(lyrics))
+}
+
 // ── Lyrics sidebar horizontal layout ───────────────────────────────────────
 
 /// Minimum width of the lyrics sidebar in terminal columns.
@@ -70,24 +82,17 @@ pub struct ContentLayout {
     pub lyrics_border: Option<Rect>,
 }
 
-/// Splits the content area into a main region and an optional lyrics sidebar.
+/// Splits the content area into a main region and an optional sidebar.
 ///
 /// For `Left`/`Right`, carves out the sidebar and a 1-column separator border.
-/// For `Off`/`Inline`, returns the full content rect as `main` with no sidebar.
 /// The sidebar width is clamped to `[LYRICS_SIDEBAR_MIN_WIDTH, content.width / 2]`.
 pub fn split_content_with_sidebar(
     content: Rect,
-    lyrics_display: LyricsDisplay,
+    position: SidebarPosition,
     sidebar_width: u16,
 ) -> ContentLayout {
-    if !lyrics_display.is_sidebar() {
-        return ContentLayout {
-            main: content,
-            lyrics_sidebar: None,
-            lyrics_border: None,
-        };
-    }
-
+    // Position is always Left/Right (existence is `sidebar.enabled`, handled
+    // by the caller), so the sidebar is always carved out here.
     // Clamp the sidebar width to valid bounds.
     let max_width = (content.width / 2).max(LYRICS_SIDEBAR_MIN_WIDTH);
     let sidebar_w = sidebar_width
@@ -106,8 +111,8 @@ pub fn split_content_with_sidebar(
         };
     }
 
-    match lyrics_display {
-        LyricsDisplay::Left => {
+    match position {
+        SidebarPosition::Left => {
             let sidebar = Rect::new(content.x, content.y, sidebar_w, content.height);
             let border = Rect::new(
                 content.x + sidebar_w,
@@ -127,7 +132,8 @@ pub fn split_content_with_sidebar(
                 lyrics_border: Some(border),
             }
         }
-        LyricsDisplay::Right => {
+        // Left/Right are the only positions.
+        SidebarPosition::Right => {
             let main_width = content.width - total_sidebar;
             let main = Rect::new(content.x, content.y, main_width, content.height);
             let border = Rect::new(
@@ -147,10 +153,6 @@ pub fn split_content_with_sidebar(
                 lyrics_sidebar: Some(sidebar),
                 lyrics_border: Some(border),
             }
-        }
-        // Off and Inline are handled by the early return above.
-        LyricsDisplay::Off | LyricsDisplay::Inline => {
-            unreachable!("is_sidebar() returned false for {:?}", lyrics_display)
         }
     }
 }
@@ -465,27 +467,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_off_returns_full_content() {
-        let content = Rect::new(0, 0, 80, 24);
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Off, 30);
-        assert_eq!(layout.main, content);
-        assert!(layout.lyrics_sidebar.is_none());
-        assert!(layout.lyrics_border.is_none());
-    }
-
-    #[test]
-    fn split_inline_returns_full_content() {
-        let content = Rect::new(0, 0, 80, 24);
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Inline, 30);
-        assert_eq!(layout.main, content);
-        assert!(layout.lyrics_sidebar.is_none());
-        assert!(layout.lyrics_border.is_none());
-    }
-
-    #[test]
     fn split_right_carves_sidebar_from_right() {
         let content = Rect::new(0, 0, 80, 24);
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Right, 30);
+        let layout = split_content_with_sidebar(content, SidebarPosition::Right, 30);
         let sidebar = layout.lyrics_sidebar.expect("sidebar should exist");
         let border = layout.lyrics_border.expect("border should exist");
         // Sidebar is on the right: total = sidebar(30) + border(1) = 31.
@@ -505,7 +489,7 @@ mod tests {
     #[test]
     fn split_left_carves_sidebar_from_left() {
         let content = Rect::new(0, 0, 80, 24);
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Left, 20);
+        let layout = split_content_with_sidebar(content, SidebarPosition::Left, 20);
         let sidebar = layout.lyrics_sidebar.expect("sidebar should exist");
         let border = layout.lyrics_border.expect("border should exist");
         // Sidebar is on the left: x = 0, width = 20.
@@ -523,11 +507,11 @@ mod tests {
     fn split_clamps_sidebar_width() {
         let content = Rect::new(0, 0, 80, 24);
         // Request way more than half — should clamp to content.width / 2 = 40.
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Right, 100);
+        let layout = split_content_with_sidebar(content, SidebarPosition::Right, 100);
         let sidebar = layout.lyrics_sidebar.expect("sidebar should exist");
         assert_eq!(sidebar.width, 40);
         // Request below minimum — should clamp to 10.
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Right, 3);
+        let layout = split_content_with_sidebar(content, SidebarPosition::Right, 3);
         let sidebar = layout.lyrics_sidebar.expect("sidebar should exist");
         assert_eq!(sidebar.width, LYRICS_SIDEBAR_MIN_WIDTH);
     }
@@ -535,7 +519,7 @@ mod tests {
     #[test]
     fn split_skips_sidebar_when_too_narrow() {
         let content = Rect::new(0, 0, 10, 24);
-        let layout = split_content_with_sidebar(content, LyricsDisplay::Right, 30);
+        let layout = split_content_with_sidebar(content, SidebarPosition::Right, 30);
         // Not enough room for sidebar + border + at least 1 column of main.
         assert!(layout.lyrics_sidebar.is_none());
         assert!(layout.lyrics_border.is_none());

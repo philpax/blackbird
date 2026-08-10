@@ -11,7 +11,7 @@ use ratatui_image::Image;
 
 use crate::app::App;
 
-use super::StyleExt;
+use super::ToColor;
 
 /// State for the album art overlay popup.
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub fn draw(frame: &mut Frame, app: &mut App, size: Rect) {
     let title_text = format!(" {} ", overlay.title);
 
     let background_color = super::effective_bg(&app.config);
-    let text_color = app.config.style.text_color();
+    let text_color = app.config.style.general.text().to_color();
 
     let aspect_ratio = app.cover_art_cache.get_aspect_ratio(Some(&cover_art_id));
     let overlay_rect = super::layout::overlay_rect(size, aspect_ratio);

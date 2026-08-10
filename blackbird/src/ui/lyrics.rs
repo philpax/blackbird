@@ -13,7 +13,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::keys::Action;
 
-use super::StyleExt;
+use super::ToColor;
 
 pub enum LyricsAction {
     ToggleLyrics,
@@ -59,28 +59,26 @@ impl LyricsViewState {
     }
 }
 
-/// Draws the full-panel lyrics view. Always shows the selection indicator.
-pub fn draw(
-    frame: &mut Frame,
-    lyrics: &mut LyricsViewState,
-    style: &shared_style::Style,
-    playing_position: Option<Duration>,
-    area: Rect,
-) {
-    draw_lyrics_content(frame, lyrics, style, playing_position, area, true);
-}
-
-/// Draws the lyrics sidebar into the given area. Shows the selection indicator
-/// only when focused.
-pub fn draw_sidebar(
+/// Draws the lyrics component into its full sub-area (including its own
+/// border). Used by the sidebar and panel renderers.
+pub fn draw_lyrics_component(
     frame: &mut Frame,
     lyrics: &mut LyricsViewState,
     style: &shared_style::Style,
     playing_position: Option<Duration>,
     area: Rect,
     is_focused: bool,
+    mouse: Option<(u16, u16)>,
 ) {
-    draw_lyrics_content(frame, lyrics, style, playing_position, area, is_focused);
+    draw_lyrics_content(
+        frame,
+        lyrics,
+        style,
+        playing_position,
+        area,
+        is_focused,
+        mouse,
+    );
 }
 
 /// Unified rendering pipeline for both the full-panel and sidebar lyrics views.
@@ -97,11 +95,12 @@ fn draw_lyrics_content(
     playing_position: Option<Duration>,
     area: Rect,
     is_focused: bool,
+    mouse: Option<(u16, u16)>,
 ) {
     let block = Block::default()
         .title(" Lyrics ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.album_color()));
+        .border_style(Style::default().fg(style.sidebar.lyrics_border().to_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -112,21 +111,21 @@ fn draw_lyrics_content(
 
     if lyrics.shared.loading {
         let loading = Paragraph::new("Loading lyrics...")
-            .style(Style::default().fg(style.track_duration_color()));
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(loading, inner);
         return;
     }
 
     let Some(lyrics_data) = &lyrics.shared.data else {
         let msg = Paragraph::new("No lyrics available for this track.")
-            .style(Style::default().fg(style.track_duration_color()));
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(msg, inner);
         return;
     };
 
     if lyrics_data.line.is_empty() {
         let msg = Paragraph::new("No lyrics available for this track.")
-            .style(Style::default().fg(style.track_duration_color()));
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(msg, inner);
         return;
     }
@@ -139,14 +138,42 @@ fn draw_lyrics_content(
     // lines that reach the full inner width.
     let max_width = (inner.width as usize).saturating_sub(1);
 
-    let (wrapped_lines, back_mapping) = build_wrapped_lyrics(
+    let (mut wrapped_lines, back_mapping) = build_wrapped_lyrics(
         lyrics_data,
         current_line_idx,
         max_width,
         style,
         lyrics.selected_index,
         is_focused,
+        None,
     );
+
+    // Determine which lyric line the mouse is hovering over, for the hover
+    // underline. The mouse row maps to a rendered row (scroll offset + row in
+    // the inner area), then back-maps to a logical line. The hovered line's
+    // rendered rows are then re-styled with the underline modifier.
+    let hovered_line = mouse.and_then(|(mx, my)| {
+        if mx < inner.x || mx >= inner.x + inner.width {
+            return None;
+        }
+        if my < inner.y || my >= inner.y + inner.height {
+            return None;
+        }
+        let rendered_row = lyrics.scroller.line + (my - inner.y) as usize;
+        back_mapping.get(rendered_row).copied()
+    });
+    if let Some(hovered_line) = hovered_line {
+        for (row, &line_idx) in back_mapping.iter().enumerate() {
+            if line_idx == hovered_line
+                && lyrics.selected_index != Some(hovered_line)
+                && let Some(line) = wrapped_lines.get_mut(row)
+            {
+                for span in &mut line.spans {
+                    span.style = span.style.add_modifier(Modifier::UNDERLINED);
+                }
+            }
+        }
+    }
 
     let total_rows = wrapped_lines.len();
 
@@ -187,8 +214,8 @@ fn draw_lyrics_content(
             frame,
             inner,
             total_rows,
-            style.track_duration_color(),
-            style.track_name_playing_color(),
+            style.library.track_duration().to_color(),
+            style.library.track_name_playing().to_color(),
         );
     }
 }
@@ -289,6 +316,7 @@ pub fn handle_mouse_click(
         // rows — it only affects the text width available for wrapping, and
         // we always reserve the 2-char indicator space.
         true,
+        None,
     );
 
     if let Some(line_index) = sidebar_click_to_line_index(y, inner, scroll_offset, &back_mapping) {
@@ -456,11 +484,12 @@ pub fn build_wrapped_lyrics(
     style: &shared_style::Style,
     selected_index: Option<usize>,
     show_selection_indicator: bool,
+    hovered_line: Option<usize>,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
-    let text_color = style.text_color();
-    let track_duration_color = style.track_duration_color();
-    let track_name_playing_color = style.track_name_playing_color();
-    let track_name_hovered_color = style.track_name_hovered_color();
+    let text_color = style.general.text().to_color();
+    let track_duration_color = style.library.track_duration().to_color();
+    let track_name_playing_color = style.library.track_name_playing().to_color();
+    let track_name_hovered_color = style.library.track_name_hovered().to_color();
 
     let mut lines = Vec::new();
     let mut back_mapping = Vec::new();
@@ -469,6 +498,9 @@ pub fn build_wrapped_lyrics(
         let is_current = lyrics_data.synced && idx == current_line_idx;
         let is_past = lyrics_data.synced && idx < current_line_idx;
         let is_selected = selected_index == Some(idx);
+        // Hover underline (like the library and similar-songs lists), except
+        // when the row is keyboard-selected.
+        let is_hovered = hovered_line == Some(idx) && !is_selected;
 
         let line_color = if is_selected {
             track_name_hovered_color
@@ -480,10 +512,18 @@ pub fn build_wrapped_lyrics(
             Color::Rgb(180, 180, 180)
         };
 
-        let text_style = if is_selected || is_current {
-            Style::default().fg(line_color).add_modifier(Modifier::BOLD)
+        let underline = if is_hovered {
+            Modifier::UNDERLINED
         } else {
-            Style::default().fg(line_color)
+            Modifier::empty()
+        };
+        let text_style = if is_selected || is_current {
+            Style::default()
+                .fg(line_color)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(underline)
+        } else {
+            Style::default().fg(line_color).add_modifier(underline)
         };
 
         let display_text = if lyric_line.value.trim().is_empty() {
@@ -598,14 +638,6 @@ pub fn line_index_to_duration(
     let line = lyrics_data.line.get(line_index)?;
     let start_ms = line.start?;
     Some(Duration::from_millis(start_ms as u64))
-}
-
-/// Pure function: returns the `LyricsDisplay` to switch to when the inline
-/// overlay is clicked. Clicking the inline overlay switches to sidebar mode
-/// (Right).
-pub fn inline_overlay_click_switches_to_sidebar() -> blackbird_client_shared::config::LyricsDisplay
-{
-    blackbird_client_shared::config::LyricsDisplay::Right
 }
 
 /// Pure function: computes the new sidebar width from a drag position.
@@ -788,15 +820,6 @@ mod tests {
     }
 
     #[test]
-    fn inline_click_switches_to_right() {
-        use blackbird_client_shared::config::LyricsDisplay;
-        assert_eq!(
-            inline_overlay_click_switches_to_sidebar(),
-            LyricsDisplay::Right
-        );
-    }
-
-    #[test]
     fn compute_width_from_drag_right_sidebar() {
         // Right sidebar: width = right_edge - mouse_x.
         // right_edge = 80, mouse_x = 50 → width = 30.
@@ -824,7 +847,7 @@ mod tests {
     fn selection_indicator_appears_on_selected_line_when_shown() {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true, None);
         // Line 0 should start with "  " (not selected).
         // Line 1 should start with "> " (selected).
         let line0_str = line_to_string(&lines[0]);
@@ -843,7 +866,7 @@ mod tests {
     fn selection_indicator_absent_when_not_shown() {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), false);
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), false, None);
         // No ">" indicator should be present on any line.
         for (i, line) in lines.iter().enumerate() {
             let s = line_to_string(line);
@@ -858,8 +881,8 @@ mod tests {
     fn selected_line_uses_hovered_color() {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
-        let hovered_color = style.track_name_hovered_color();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
+        let hovered_color = style.library.track_name_hovered().to_color();
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true, None);
         // Line 1 is selected; its text span should use the hovered color.
         // The line has 3 spans: indicator, timestamp, text.
         let line1 = &lines[1];
@@ -877,10 +900,11 @@ mod tests {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
         // Full panel: is_focused=true
-        let (full_lines, full_back) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
+        let (full_lines, full_back) =
+            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true, None);
         // Sidebar: is_focused=true
         let (sidebar_lines, sidebar_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
+            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true, None);
         // Back-mappings should be identical.
         assert_eq!(full_back, sidebar_back);
         // Lines should have the same count.
@@ -900,9 +924,9 @@ mod tests {
         let style = make_style();
         // Use a width where 2 extra/less chars could cause a different wrap.
         let (focused_lines, focused_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), true);
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), true, None);
         let (unfocused_lines, unfocused_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), false);
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), false, None);
         // Same number of wrapped rows → no reflow.
         assert_eq!(
             focused_lines.len(),

@@ -54,6 +54,8 @@ fn main() -> anyhow::Result<()> {
 
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
+    let (similar_songs_loaded_tx, similar_songs_loaded_rx) =
+        std::sync::mpsc::channel::<bc::SimilarSongsData>();
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
     let (track_updated_tx, track_updated_rx) = std::sync::mpsc::channel::<()>();
 
@@ -70,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         last_playback: config.last_playback.as_track_and_position(),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
+        similar_songs_loaded_tx,
         library_populated_tx,
         track_updated_tx,
     });
@@ -114,6 +117,7 @@ fn main() -> anyhow::Result<()> {
         playback_rx,
         cover_art_cache,
         lyrics_loaded_rx,
+        similar_songs_loaded_rx,
         library_populated_rx,
         track_updated_rx,
         log_buffer,
@@ -356,7 +360,7 @@ fn run_app(
 
             // Apply coalesced scroll as a single operation.
             if scroll_delta != 0 {
-                apply_scroll(app, scroll_delta);
+                apply_scroll(app, scroll_delta, size);
             }
         }
 
@@ -479,13 +483,17 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
             }
         }
         FocusedPanel::Lyrics => {
-            if let Some(action) = keys::lyrics_action(key)
-                && let Some(la) = ui::lyrics::handle_key(&mut app.lyrics, &app.logic, action)
-            {
-                match la {
-                    ui::lyrics::LyricsAction::ToggleLyrics => app.toggle_lyrics(),
-                    ui::lyrics::LyricsAction::Quit => app.should_quit = true,
-                    ui::lyrics::LyricsAction::SeekRelative(secs) => app.seek_relative(secs),
+            if let Some(action) = keys::lyrics_action(key) {
+                if action == keys::Action::ToggleSidebar {
+                    app.toggle_sidebar();
+                } else if let Some(sa) = ui::sidebar::handle_key(app, action) {
+                    match sa {
+                        ui::sidebar::SidebarKeyAction::TogglePanel => app.toggle_lyrics(),
+                        ui::sidebar::SidebarKeyAction::Quit => app.should_quit = true,
+                        ui::sidebar::SidebarKeyAction::SeekRelative(secs) => {
+                            app.seek_relative(secs)
+                        }
+                    }
                 }
             }
         }
@@ -511,27 +519,33 @@ fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
         }
         FocusedPanel::Settings => {
             if let Some(action) = keys::settings_action(key, app.settings.editing) {
-                let (settings_action, server_changed) =
-                    ui::settings::handle_key(&mut app.settings, &mut app.config, action);
-                if server_changed {
-                    app.config.save();
-                    app.logic.reload_library(
-                        app.config.server.base_url.clone(),
-                        app.config.server.username.clone(),
-                        app.config.server.password.clone(),
-                        app.config.server.transcode,
-                    );
-                }
-                // Config changes are applied in-memory for live preview;
-                // disk save is deferred to settings exit or app exit.
-                if let Some(sa) = settings_action {
-                    match sa {
-                        ui::settings::SettingsAction::ToggleSettings => {
-                            app.config.save();
-                            app.toggle_settings();
-                        }
-                    }
-                }
+                apply_settings_action(app, action);
+            }
+        }
+    }
+}
+
+/// Applies a settings action with its side effects. Shared by the keyboard
+/// dispatch and the help bar click handler so both paths behave identically.
+fn apply_settings_action(app: &mut App, action: keys::Action) {
+    let (settings_action, server_changed) =
+        ui::settings::handle_key(&mut app.settings, &mut app.config, action);
+    if server_changed {
+        app.config.save();
+        app.logic.reload_library(
+            app.config.server.base_url.clone(),
+            app.config.server.username.clone(),
+            app.config.server.password.clone(),
+            app.config.server.transcode,
+        );
+    }
+    // Config changes are applied in-memory for live preview;
+    // disk save is deferred to settings exit or app exit.
+    if let Some(sa) = settings_action {
+        match sa {
+            ui::settings::SettingsAction::ToggleSettings => {
+                app.config.save();
+                app.toggle_settings();
             }
         }
     }
@@ -548,16 +562,18 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     let x = mouse.column;
     let y = mouse.row;
 
-    // Compute the content layout (including optional lyrics sidebar) matching
+    // Compute the content layout (including optional sidebar) matching
     // ui::draw, so mouse hit-testing uses the same rects.
     let is_loading = !app.logic.has_loaded_all_tracks();
-    let lyrics_display = app.config.layout.base.lyrics_display;
-    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
+    let sidebar_position = blackbird_client_shared::config::effective_sidebar_position(
+        app.config.layout.base.sidebar.position,
+    );
+    let show_sidebar = app.config.layout.base.sidebar.enabled && !is_loading;
     let content_layout = if show_sidebar {
         ui::layout::split_content_with_sidebar(
             main.content,
-            lyrics_display,
-            app.config.layout.lyrics_sidebar_width,
+            sidebar_position,
+            app.config.layout.sidebar_width,
         )
     } else {
         ui::layout::ContentLayout {
@@ -568,14 +584,33 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     };
     let library_area = content_layout.main;
 
-    // Check whether the cursor is over the inline lyrics overlay so we can
-    // block interactions that would otherwise reach the library underneath.
-    // The inline overlay is only shown when lyrics_display is Inline.
-    let over_inline_lyrics = lyrics_display
-        == blackbird_client_shared::config::LyricsDisplay::Inline
-        && app.lyrics.shared.has_synced_lyrics()
-        && ui::layout::inline_lyrics_overlay(content_layout.main)
-            .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+    // When a sidebar is shown, the library is framed with a 1-cell border;
+    // mouse hit-testing for the library must use the inner content rect.
+    let library_area = if show_sidebar && app.focused_panel != FocusedPanel::Lyrics {
+        Rect::new(
+            library_area.x + 1,
+            library_area.y + 1,
+            library_area.width.saturating_sub(2),
+            library_area.height.saturating_sub(2),
+        )
+    } else {
+        library_area
+    };
+
+    // Inline lyrics cut into the library's height as a bottom panel, matching
+    // ui::draw. The library area shrinks; the lyrics panel area is reserved.
+    let inline_lyrics_shown = app.inline_lyrics_mode && app.lyrics.shared.has_synced_lyrics();
+    let (library_area, inline_lyrics_rect) =
+        if inline_lyrics_shown && app.focused_panel != FocusedPanel::Lyrics {
+            ui::layout::split_inline_lyrics(library_area)
+        } else {
+            (library_area, None)
+        };
+
+    // Check whether the cursor is over the inline lyrics panel so we can
+    // block interactions that would otherwise reach the library above.
+    let over_inline_lyrics = inline_lyrics_rect
+        .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
 
     // Check whether the cursor is over the lyrics sidebar.
     let over_lyrics_sidebar = content_layout
@@ -589,7 +624,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     let over_lyrics_border = content_layout.lyrics_border.is_some_and(|r| {
         let tol = ui::layout::LYRICS_SIDEBAR_DRAG_TOLERANCE;
         let is_right_sidebar =
-            lyrics_display == blackbird_client_shared::config::LyricsDisplay::Right;
+            sidebar_position == blackbird_client_shared::config::SidebarPosition::Right;
         // Right sidebar: border is to the left of the sidebar, so tolerance
         // extends right (into the sidebar, away from the library scrollbar).
         // Left sidebar: border is to the right of the sidebar, so tolerance
@@ -604,13 +639,11 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
 
     match mouse.kind {
         MouseEventKind::Moved => {
-            // Suppress hover position when cursor is over the overlay or sidebar
-            // so library rows underneath don't get underlined.
-            if over_inline_lyrics || over_lyrics_sidebar || over_lyrics_border {
-                app.mouse_position = None;
-            } else {
-                app.mouse_position = Some((x, y));
-            }
+            // The cursor position drives hover underlines in every panel. The
+            // individual panels compute whether the cursor is over *their*
+            // area, so keep the raw position; a cursor over the sidebar still
+            // needs it for the sidebar's own hover underline.
+            app.mouse_position = Some((x, y));
         }
         MouseEventKind::Down(MouseButton::Left) => {
             app.mouse_position = Some((x, y));
@@ -680,7 +713,16 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 return;
             }
 
-            // --- Lyrics sidebar content (click to focus + seek) ---
+            // --- Settings sidebar border (start drag-to-resize) ---
+            if app.focused_panel == FocusedPanel::Settings {
+                let border_x = content_layout.main.x + app.config.layout.settings_sidebar_width;
+                if x >= border_x && x <= border_x + 1 {
+                    app.settings_sidebar_dragging = true;
+                    return;
+                }
+            }
+
+            // --- Sidebar content (click to focus + dispatch to component) ---
             if over_lyrics_sidebar && let Some(sidebar_rect) = content_layout.lyrics_sidebar {
                 // Focus the sidebar if not already focused, mirroring
                 // toggle_lyrics for the sidebar case (no reset_view —
@@ -688,15 +730,18 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 if app.focused_panel != FocusedPanel::Lyrics {
                     app.focus_lyrics_panel(false);
                 }
-                handle_sidebar_click(app, sidebar_rect, x, y);
+                // If the click is on a component boundary, start a drag to
+                // resize the two adjacent components' proportions.
+                if let Some(boundary) = ui::sidebar::boundary_at_y(app, sidebar_rect, y) {
+                    app.sidebar_component_drag = Some(boundary);
+                } else {
+                    handle_sidebar_click(app, sidebar_rect, x, y);
+                }
                 return;
             }
 
-            // --- Inline lyrics overlay (click → switch to sidebar mode) ---
+            // --- Inline lyrics overlay (display-only; blocks clicks) ---
             if over_inline_lyrics {
-                app.config.layout.base.lyrics_display =
-                    ui::lyrics::inline_overlay_click_switches_to_sidebar();
-                app.config.save();
                 return;
             }
 
@@ -719,14 +764,10 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 } else if app.focused_panel == FocusedPanel::Search {
                     app.search.handle_mouse_click(library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Lyrics {
-                    ui::lyrics::handle_mouse_click(
-                        &mut app.lyrics,
-                        &app.logic,
-                        &app.config.style,
-                        library_area,
-                        x,
-                        y,
-                    );
+                    // Full-panel case (no sidebar visible): the components are
+                    // rendered in this area, so clicks route through the
+                    // sidebar dispatcher with the content rect.
+                    ui::sidebar::handle_mouse_click(app, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Queue {
                     ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
                 } else if app.focused_panel == FocusedPanel::Settings {
@@ -774,7 +815,20 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 app.lyrics_sidebar_dragging = false;
                 app.config.save();
             }
+            // Save config if a sidebar component boundary was being dragged.
+            if app.sidebar_component_drag.take().is_some() {
+                app.config.save();
+            }
+            // Save config if the settings sidebar border was being dragged.
+            if app.settings_sidebar_dragging {
+                app.settings_sidebar_dragging = false;
+                app.config.save();
+            }
             ui::library::handle_mouse_up(app);
+            // Resolve a pending similar-songs click (sidebar or panel).
+            if let Some(track_id) = app.similar_songs.handle_mouse_up() {
+                app.logic.request_play_track(&track_id);
+            }
             if app.focused_panel == FocusedPanel::Search
                 && let Some(sa) = app.search.handle_mouse_up(&app.logic)
             {
@@ -802,7 +856,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             if app.lyrics_sidebar_dragging {
                 if let Some(sidebar_rect) = content_layout.lyrics_sidebar {
                     let is_left =
-                        lyrics_display == blackbird_client_shared::config::LyricsDisplay::Left;
+                        sidebar_position == blackbird_client_shared::config::SidebarPosition::Left;
                     // For a left sidebar, the outer edge is sidebar_rect.x.
                     // For a right sidebar, the outer edge is sidebar_rect.x + sidebar_rect.width - 1.
                     let sidebar_outer_x = if is_left {
@@ -819,8 +873,26 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                         ui::layout::LYRICS_SIDEBAR_MIN_WIDTH,
                         max_width,
                     );
-                    app.config.layout.lyrics_sidebar_width = new_width;
+                    app.config.layout.sidebar_width = new_width;
                 }
+                return;
+            }
+
+            // Continue a sidebar component-boundary drag (adjust the heights
+            // of the two adjacent components).
+            if let Some(boundary) = app.sidebar_component_drag {
+                if let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                    ui::sidebar::adjust_component_heights(app, sidebar_rect, boundary, y);
+                }
+                return;
+            }
+
+            // Continue the settings sidebar border drag.
+            if app.settings_sidebar_dragging {
+                let min = 20;
+                let max = main.content.width.saturating_sub(20).max(min);
+                let width = (x - content_layout.main.x).clamp(min, max);
+                app.config.layout.settings_sidebar_width = width;
                 return;
             }
 
@@ -828,6 +900,13 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 ui::library::handle_mouse_drag(app, library_area, x, y);
             } else if app.focused_panel == FocusedPanel::Search {
                 app.search.handle_mouse_drag(library_area, x, y);
+            } else if app.focused_panel == FocusedPanel::Lyrics {
+                // Route content drags in the sidebar (or full panel) to the
+                // focused similar-songs component, if that's what's under the
+                // cursor. The lyrics component handles its own drag-less
+                // scroll; the similar-songs component supports content drags.
+                let sidebar_area = content_layout.lyrics_sidebar.unwrap_or(library_area);
+                ui::sidebar::handle_mouse_drag(app, sidebar_area, x, y);
             }
         }
         // ScrollUp and ScrollDown are handled by the coalesced scroll path
@@ -836,18 +915,9 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     }
 }
 
-/// Handle a click in the lyrics sidebar — seek to the clicked line's timestamp.
-/// Delegates to the unified `handle_mouse_click` which uses the back-mapping
-/// approach shared by both views.
+/// Handle a click in the sidebar — dispatch to the clicked component.
 fn handle_sidebar_click(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
-    ui::lyrics::handle_mouse_click(
-        &mut app.lyrics,
-        &app.logic,
-        &app.config.style,
-        sidebar_area,
-        x,
-        y,
-    );
+    ui::sidebar::handle_mouse_click(app, sidebar_area, x, y);
 }
 
 fn handle_help_bar_click(app: &mut App, x: u16) {
@@ -860,15 +930,7 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
     };
 
     match action {
-        Action::Quit => {
-            // In settings, "q" closes the panel rather than triggering quit.
-            if app.focused_panel == FocusedPanel::Settings {
-                app.config.save();
-                app.toggle_settings();
-            } else {
-                app.quit_confirming = true;
-            }
-        }
+        Action::Quit => app.quit_confirming = true,
         Action::PlayPause => app.logic.toggle_current(),
         Action::Next => app.logic.next(),
         Action::Previous => app.logic.previous(),
@@ -877,6 +939,7 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
         Action::Stop => app.logic.stop_current(),
         Action::Search => app.toggle_search(),
         Action::Lyrics => app.toggle_lyrics(),
+        Action::ToggleSidebar => app.toggle_sidebar(),
         Action::Queue => app.toggle_queue(),
         Action::Logs => app.toggle_logs(),
         Action::VolumeMode => app.volume_editing = !app.volume_editing,
@@ -915,6 +978,22 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
             app.library.scroll_to_track = scroll_target;
         }
         Action::Settings => app.toggle_settings(),
+        // In the settings panel, the help bar entries are the same actions the
+        // keyboard dispatches; run them through the shared handler so clicks
+        // and keys behave identically. `Char` is used for the component-list
+        // "add" binding ('a').
+        Action::Select
+        | Action::Back
+        | Action::MoveLeft
+        | Action::MoveRight
+        | Action::ResetField
+        | Action::ResetSection
+        | Action::DeleteChar
+        | Action::Char(_)
+            if app.focused_panel == FocusedPanel::Settings =>
+        {
+            apply_settings_action(app, action);
+        }
         Action::Select if app.focused_panel == FocusedPanel::Library => {
             ui::library::handle_key(app, Action::Select);
         }
@@ -925,38 +1004,97 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
     }
 }
 
-/// Applies a coalesced scroll delta to the currently focused panel.
-fn apply_scroll(app: &mut App, scroll_delta: i32) {
+/// Applies a coalesced scroll delta. If the mouse cursor is over a scrollable
+/// region (library, sidebar component, search, queue, logs, settings), scrolls
+/// that region; otherwise falls back to the currently focused panel.
+fn apply_scroll(app: &mut App, scroll_delta: i32, size: Rect) {
     let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
     let direction = scroll_delta.signum();
 
-    let lyrics_display = app.config.layout.base.lyrics_display;
+    let sidebar_position = blackbird_client_shared::config::effective_sidebar_position(
+        app.config.layout.base.sidebar.position,
+    );
     let is_loading = !app.logic.has_loaded_all_tracks();
-    let sidebar_visible = lyrics_display.is_sidebar() && !is_loading;
+    let sidebar_visible = app.config.layout.base.sidebar.enabled && !is_loading;
 
+    // Resolve the cursor position to a scrollable region. When a sidebar is
+    // present, the library content is framed, so the content rect inset by 1.
+    let main = ui::layout::split_main(size);
+    let content_layout = if sidebar_visible {
+        ui::layout::split_content_with_sidebar(
+            main.content,
+            sidebar_position,
+            app.config.layout.sidebar_width,
+        )
+    } else {
+        ui::layout::ContentLayout {
+            main: main.content,
+            lyrics_sidebar: None,
+            lyrics_border: None,
+        }
+    };
+    let content_area = if sidebar_visible {
+        Rect::new(
+            content_layout.main.x + 1,
+            content_layout.main.y + 1,
+            content_layout.main.width.saturating_sub(2),
+            content_layout.main.height.saturating_sub(2),
+        )
+    } else {
+        content_layout.main
+    };
+    // Inline lyrics shrink the library region's height (matching ui::draw).
+    let inline_lyrics_shown = app.inline_lyrics_mode && app.lyrics.shared.has_synced_lyrics();
+    let content_area = if inline_lyrics_shown {
+        let (main, _) = ui::layout::split_inline_lyrics(content_area);
+        main
+    } else {
+        content_area
+    };
+    let region = ui::panel::scroll_region_at(
+        app.mouse_position,
+        content_area,
+        content_layout.lyrics_sidebar,
+        app,
+    );
+
+    // Cursor over the sidebar: scroll the component under the cursor, not the
+    // keyboard-focused component.
+    if let ui::panel::ScrollRegion::Sidebar { component } = region {
+        app.sidebar.focused_component = component;
+        ui::sidebar::handle_scroll(app, direction, steps);
+        return;
+    }
+
+    // Cursor over the library: scroll the library (or the full-panel
+    // components when the Lyrics panel is active with no sidebar).
+    if region == ui::panel::ScrollRegion::Library {
+        if app.focused_panel == FocusedPanel::Lyrics && !sidebar_visible {
+            ui::sidebar::handle_scroll(app, direction, steps);
+        } else {
+            ui::library::handle_scroll(app, direction, steps);
+        }
+        return;
+    }
+
+    // Otherwise (cursor not over a region, or over the now-playing/scrub/help
+    // bars) fall back to the focused panel.
     match app.focused_panel {
         FocusedPanel::Library => {
             ui::library::handle_scroll(app, direction, steps);
         }
+        FocusedPanel::Lyrics if !sidebar_visible && !app.sidebar.is_empty() => {
+            // Full-panel case (no sidebar visible): scroll the focused
+            // component via the sidebar dispatcher.
+            ui::sidebar::handle_scroll(app, direction, steps);
+        }
         FocusedPanel::Lyrics if sidebar_visible => {
-            // When the sidebar is focused, scroll the shared Scroller rather
-            // than moving the selection cursor. Guard against stale
-            // total_rows (0 before the first draw renders lyrics) to avoid
-            // silently swallowing the scroll and setting user_scrolled in
-            // a stuck state.
-            if app.lyrics.total_rows > 0 {
-                app.lyrics.user_scrolled = true;
-                app.lyrics
-                    .scroller
-                    .apply_wheel(direction, steps, app.lyrics.total_rows);
-            }
+            // When the sidebar is focused, scroll the focused component via
+            // the sidebar dispatcher.
+            ui::sidebar::handle_scroll(app, direction, steps);
         }
         FocusedPanel::Lyrics => {
-            ui::lyrics::move_selection(
-                &mut app.lyrics,
-                app.logic.get_playing_position(),
-                direction * steps as i32,
-            );
+            // Empty component list — nothing to scroll.
         }
         FocusedPanel::Queue => {
             ui::queue::scroll_selection(&mut app.queue, &app.logic, direction * steps as i32);

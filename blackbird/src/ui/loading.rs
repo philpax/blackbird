@@ -12,7 +12,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::StyleExt;
+use super::ToColor;
 
 /// Bird glyph: modifier letter voiceless (U+02EC), a soft bird-like silhouette.
 const BIRD: char = '\u{02EC}';
@@ -57,8 +57,8 @@ pub fn draw(
         return;
     }
 
-    let accent = style.track_name_playing_color();
-    let dim = style.track_duration_color();
+    let accent = style.library.track_name_playing().to_color();
+    let dim = style.library.track_duration().to_color();
 
     // Vertical centering: place the block in the middle of the area.
     let top_y = area.y + (area.height.saturating_sub(TOTAL_HEIGHT)) / 2;
@@ -150,7 +150,7 @@ fn draw_minimal(
     tick_count: u64,
     area: Rect,
 ) {
-    let dim = style.track_duration_color();
+    let dim = style.library.track_duration().to_color();
     let text = loading_status_text(track_count, tick_count);
     let paragraph = Paragraph::new(text).style(Style::default().fg(dim));
     frame.render_widget(paragraph, area);
