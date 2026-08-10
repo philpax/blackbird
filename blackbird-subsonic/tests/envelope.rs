@@ -1,18 +1,11 @@
 //! Regression tests for response parsing against servers that add extra
 //! envelope fields (Navidrome adds `type`, `serverVersion`, `openSubsonic`).
 
+mod common;
 mod mock_server;
 
+use common::block_on;
 use mock_server::MockServer;
-
-/// Runs an async client future to completion on a current-thread runtime.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
-}
 
 /// `ping` must succeed even when the `subsonic-response` envelope carries
 /// extra top-level fields (Navidrome-style), because `ping` uses the unit type

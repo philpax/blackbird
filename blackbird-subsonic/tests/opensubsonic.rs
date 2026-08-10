@@ -2,19 +2,12 @@
 //! the [`mock_server`] harness.
 #![cfg(feature = "opensubsonic")]
 
+mod common;
 mod mock_server;
 
 use blackbird_subsonic::{ClientError, OpenSubsonicExtension};
+use common::block_on;
 use mock_server::MockServer;
-
-/// Runs an async client future to completion on a current-thread runtime.
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap()
-        .block_on(future)
-}
 
 /// Parses `getOpenSubsonicExtensions` responses into the extension list.
 #[test]
