@@ -319,7 +319,6 @@ fn build_rows() -> Vec<SettingsRow> {
             get: |c| c.layout.base.sidebar.components.clone(),
             set: |c, v| {
                 c.layout.base.sidebar.components = v;
-                c.layout.base.sidebar.rebalance_heights();
             },
             default: || blackbird_client_shared::config::SidebarSettings::default().components,
         },
@@ -359,6 +358,7 @@ fn build_rows() -> Vec<SettingsRow> {
 
     // HSV color fields are generated dynamically from the style groups,
     // rendered with a group header per concept.
+    rows.push(SettingsRow::SectionSpacer);
     for (group_idx, group) in shared_style::GROUPS.iter().enumerate() {
         rows.push(SettingsRow::SectionHeader(group.name));
         for (field_idx, _) in group.fields.iter().enumerate() {
@@ -371,9 +371,9 @@ fn build_rows() -> Vec<SettingsRow> {
     }
 
     rows.extend([
-        // General section.
+        // App section.
         SettingsRow::SectionSpacer,
-        SettingsRow::SectionHeader("General"),
+        SettingsRow::SectionHeader("App"),
         SettingsRow::U64Field {
             label: "Tick rate (ms)",
             section: Section::General,
@@ -510,6 +510,15 @@ fn select_nearest(state: &mut SettingsState, idx: usize) {
     }
 }
 
+/// The width of the settings sidebar for a given terminal width and configured
+/// value. Clamps the configured width into `[20, max(20, area_width - 2)]` so
+/// the panel never collapses below 20 columns and always leaves room for the
+/// library on the right, even on very narrow terminals.
+fn settings_width(area_width: u16, configured: u16) -> u16 {
+    let max = area_width.saturating_sub(2);
+    configured.clamp(20, max.max(20))
+}
+
 /// Draws the settings list into the left slice of `area` and returns the right
 /// slice (which the caller renders the real library into).
 pub fn draw(
@@ -521,10 +530,7 @@ pub fn draw(
     // Settings is a left sidebar; the real library renders to its right so
     // style/art/spacing changes preview live against the actual library. The
     // settings width is configurable (draggable via the border).
-    let settings_w = config
-        .layout
-        .settings_sidebar_width
-        .clamp(20, area.width.saturating_sub(20));
+    let settings_w = settings_width(area.width, config.layout.settings_sidebar_width);
     let chunks = RatatuiLayout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(settings_w), Constraint::Min(1)])
@@ -603,18 +609,11 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = "";
             let check = if value { "[x]" } else { "[ ]" };
-            let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-                Span::styled(
-                    format!("{check} {label}"),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("{check} {label}"),
+                Style::default().fg(if is_selected { highlight } else { text_fg }),
+            )];
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
@@ -629,7 +628,6 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else if *password {
@@ -638,10 +636,6 @@ fn render_row(
                 value
             };
             let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
                 Span::styled(
                     format!("{label}: "),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
@@ -671,17 +665,12 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
                 value.to_string()
             };
             let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
                 Span::styled(
                     format!("{label}: "),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
@@ -704,17 +693,12 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = (value - default()).abs() < f32::EPSILON;
-            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
                 format!("{value:.1}")
             };
             let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
                 Span::styled(
                     format!("{label}: "),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
@@ -737,17 +721,12 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = "";
             let display_value = if is_selected && state.editing {
                 state.edit_buffer.clone()
             } else {
                 value.to_string()
             };
             let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
                 Span::styled(
                     format!("{label}: "),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
@@ -770,17 +749,10 @@ fn render_row(
         } => {
             let value = get(config);
             let is_default = value == default();
-            let indicator = "";
-            let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-                Span::styled(
-                    format!("{label}: {}", value.as_str()),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("{label}: {}", value.as_str()),
+                Style::default().fg(if is_selected { highlight } else { text_fg }),
+            )];
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
@@ -797,17 +769,10 @@ fn render_row(
             let default_idx = default();
             let is_default = value_idx == default_idx;
             let value_str = variants.get(value_idx).copied().unwrap_or("?");
-            let indicator = "";
-            let mut spans = vec![
-                Span::styled(
-                    indicator.to_string(),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-                Span::styled(
-                    format!("{label}: {value_str}"),
-                    Style::default().fg(if is_selected { highlight } else { text_fg }),
-                ),
-            ];
+            let mut spans = vec![Span::styled(
+                format!("{label}: {value_str}"),
+                Style::default().fg(if is_selected { highlight } else { text_fg }),
+            )];
             if !is_default {
                 spans.push(Span::styled(" *", Style::default().fg(dim_fg)));
             }
@@ -823,7 +788,7 @@ fn render_row(
             let is_default = components == default();
             if is_selected && state.editing {
                 // Vertical list: a header line, one line per component with the
-                // in-row selection highlighted, and an add hint.
+                // in-row selection highlighted.
                 let mut lines = vec![Line::from(vec![Span::styled(
                     format!("{label}:"),
                     Style::default().fg(if is_selected { highlight } else { text_fg }),
@@ -884,21 +849,14 @@ fn render_row(
             let hsv = *config.style.field(*index);
             let default_hsv = shared_style::Style::default_field(*index);
             let is_default = hsv == default_hsv;
-            let indicator = "";
 
             // Convert HSV to an RGB swatch for preview.
             let swatch_color = super::style_color(hsv);
 
             let mut spans = vec![Span::styled(
-                indicator.to_string(),
-                Style::default().fg(if is_selected { highlight } else { text_fg }),
-            )];
-
-            // Color swatch.
-            spans.push(Span::styled(
                 "\u{2588}\u{2588}",
                 Style::default().fg(swatch_color),
-            ));
+            )];
             spans.push(Span::raw(" "));
 
             let label_str = human_readable_label(label);
@@ -1032,10 +990,15 @@ pub fn handle_key(
                         // HSV editing confirms on Enter — values are already applied live.
                     }
                     SettingsRow::ComponentList { .. } => {
-                        // Enter arms/disarms the in-row item: while armed,
-                        // MoveUp/Down slide it and Backspace removes it. Unlike
-                        // the other rows, Enter does NOT exit editing here.
-                        state.component_list_armed = !state.component_list_armed;
+                        // Enter confirms the list edit while armed, or arms an
+                        // item while navigating.
+                        if state.component_list_armed {
+                            state.editing = false;
+                            state.edit_buffer.clear();
+                            state.component_list_armed = false;
+                            return (None, false);
+                        }
+                        state.component_list_armed = true;
                         return (None, false);
                     }
                     _ => {}
@@ -1352,16 +1315,8 @@ pub fn handle_key(
                         server_changed = true;
                     }
                 }
-                SettingsRow::ComponentList {
-                    default,
-                    set,
-                    section,
-                    ..
-                } => {
+                SettingsRow::ComponentList { default, set, .. } => {
                     set(config, default());
-                    if *section == Section::Server {
-                        server_changed = true;
-                    }
                 }
                 SettingsRow::HsvField { index, .. } => {
                     *config.style.field_mut(*index) = shared_style::Style::default_field(*index);
@@ -1442,6 +1397,24 @@ pub fn handle_mouse_click(
         return false;
     }
 
+    // While editing the multi-line component-list row, clicks that land on the
+    // row's in-row item lines (below its header) must not be mis-mapped to
+    // subsequent rows: the naive per-line mapping counts each item line as a
+    // row. Only the header line of the expanded row is a click target. Clicks
+    // on other rows still proceed normally (and cancel the edit as usual).
+    if state.editing
+        && matches!(
+            &state.rows[state.selected_index],
+            SettingsRow::ComponentList { .. }
+        )
+        && clicked_index == state.selected_index
+    {
+        let header_line = state.selected_index.saturating_sub(state.scroll_offset);
+        if row_in_list != header_line {
+            return false;
+        }
+    }
+
     // If we're already editing, clicking a different row cancels the edit.
     if state.editing && clicked_index != state.selected_index {
         state.editing = false;
@@ -1483,6 +1456,23 @@ fn human_readable_label(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_width_stays_within_area() {
+        // The panel must never exceed the area and must stay >= 20 wide.
+        // width 20: max(20, 18)=20, so even a huge configured value clamps to 20.
+        assert_eq!(settings_width(20, 100), 20);
+        assert_eq!(settings_width(20, 20), 20);
+        // width 39: max(20, 37)=37, so 40 configured clamps to 37.
+        assert_eq!(settings_width(39, 40), 37);
+        assert_eq!(settings_width(39, 20), 20);
+        // width 40: max(20, 38)=38, 40 configured clamps to 38.
+        assert_eq!(settings_width(40, 40), 38);
+        // width 100: room for the full configured width.
+        assert_eq!(settings_width(100, 40), 40);
+        // Tiny width (e.g. 10): max(20, 8)=20, configured clamps up to 20.
+        assert_eq!(settings_width(10, 5), 20);
+    }
 
     #[test]
     fn test_settings_component_order_row() {
@@ -1543,12 +1533,24 @@ mod tests {
         let _ = handle_key(&mut state, &mut config, Action::Char('a'));
         assert_eq!(config.layout.base.sidebar.components.len(), list_len);
 
-        // Disarm, re-navigate to similar songs, arm, then delete it.
+        // Esc disarms the armed item (armed Select now confirms and exits).
+        let _ = handle_key(&mut state, &mut config, Action::Back);
+        assert!(!state.component_list_armed);
+        assert!(state.editing);
+        // Re-arm to verify armed Select confirms and exits editing.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.component_list_armed);
         let _ = handle_key(&mut state, &mut config, Action::Select);
         assert!(!state.component_list_armed);
-        // (sel is 1; navigate up then down to land on sel 1 without sliding.)
-        let _ = handle_key(&mut state, &mut config, Action::MoveUp);
-        assert_eq!(state.component_list_sel, 0);
+        assert!(!state.editing);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+        );
+
+        // Re-enter editing and delete similar songs.
+        let _ = handle_key(&mut state, &mut config, Action::Select);
+        assert!(state.editing);
         let _ = handle_key(&mut state, &mut config, Action::MoveDown);
         assert_eq!(state.component_list_sel, 1);
         let _ = handle_key(&mut state, &mut config, Action::Select);

@@ -152,6 +152,10 @@ impl Action {
             Action::GotoPlaying => (key_label(KEY_GOTO_PLAYING), "goto".into()),
             Action::Select => (key_label(KEY_SELECT), "play".into()),
             Action::GotoSelected => ("shift+enter".into(), "goto".into()),
+            Action::PageUp => (key_label(KEY_PAGE_UP), "pgup".into()),
+            Action::PageDown => (key_label(KEY_PAGE_DOWN), "pgdn".into()),
+            Action::MoveUp => (key_label(KEY_UP), "up".into()),
+            Action::MoveDown => (key_label(KEY_DOWN), "down".into()),
             Action::Back => (key_label(KEY_BACK), "close".into()),
             Action::CyclePlaybackMode(Direction::Forward) => {
                 let mode = logic.get_playback_mode().as_str();
@@ -405,7 +409,7 @@ pub const SETTINGS_HELP: &[HelpEntry] = &[
 /// text or numeric field.
 pub const SETTINGS_HELP_EDITING: &[HelpEntry] = &[
     HelpEntry::Custom(Action::Back, "cancel"),
-    HelpEntry::Single(Action::Select),
+    HelpEntry::Custom(Action::Select, "confirm"),
     HelpEntry::Single(Action::DeleteChar),
 ];
 
@@ -493,6 +497,79 @@ pub const LOGS_HELP: &[HelpEntry] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a minimal `Logic` for help-label resolution tests. The mpsc
+    /// senders are dummy (dropped immediately); `help_label` only reads
+    /// playback state from the internal `AppState`.
+    fn test_logic() -> bc::Logic {
+        let (cover_art_loaded_tx, _) = std::sync::mpsc::channel::<bc::CoverArt>();
+        let (lyrics_loaded_tx, _) = std::sync::mpsc::channel::<bc::LyricsData>();
+        let (similar_songs_loaded_tx, _) = std::sync::mpsc::channel::<bc::SimilarSongsData>();
+        let (library_populated_tx, _) = std::sync::mpsc::channel::<()>();
+        let (track_updated_tx, _) = std::sync::mpsc::channel::<()>();
+        bc::Logic::new(bc::LogicArgs {
+            base_url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            transcode: false,
+            volume: 0.0,
+            apply_replaygain: false,
+            replaygain_preamp_db: 0.0,
+            sort_order: bc::SortOrder::default(),
+            playback_mode: bc::PlaybackMode::default(),
+            last_playback: None,
+            cover_art_loaded_tx,
+            lyrics_loaded_tx,
+            similar_songs_loaded_tx,
+            library_populated_tx,
+            track_updated_tx,
+        })
+    }
+
+    /// Every entry in every `SETTINGS_HELP*` list must resolve to a label via
+    /// `help_label`; a `None` here would render a dangling help entry (this
+    /// would have caught the `Single(Select)` → `Custom(Select, "confirm")`
+    /// regression and missing `PageUp`/`PageDown` arms).
+    #[test]
+    fn settings_help_labels_resolve() {
+        let logic = test_logic();
+        let lists: &[&[HelpEntry]] = &[
+            SETTINGS_HELP,
+            SETTINGS_HELP_EDITING,
+            SETTINGS_HELP_HSV,
+            SETTINGS_HELP_COMPONENT_LIST,
+            SETTINGS_HELP_COMPONENT_LIST_ARMED,
+        ];
+        for (list_idx, list) in lists.iter().enumerate() {
+            for entry in *list {
+                let resolved = match entry {
+                    HelpEntry::Single(a) => a.help_label(&logic),
+                    HelpEntry::Custom(a, _) => a.help_label(&logic),
+                    HelpEntry::Pair(a, b, _) => {
+                        a.help_label(&logic).or_else(|| b.help_label(&logic))
+                    }
+                };
+                assert!(
+                    resolved.is_some(),
+                    "help entry {entry:?} in settings list #{list_idx} does not resolve to a label"
+                );
+            }
+        }
+        // Spot-check the labels that changed in the fix.
+        let logic = test_logic();
+        assert_eq!(
+            Action::Select.help_label(&logic),
+            Some((key_label(KEY_SELECT), "play".into()))
+        );
+        assert_eq!(
+            Action::PageUp.help_label(&logic),
+            Some((key_label(KEY_PAGE_UP), "pgup".into()))
+        );
+        assert_eq!(
+            Action::PageDown.help_label(&logic),
+            Some((key_label(KEY_PAGE_DOWN), "pgdn".into()))
+        );
+    }
 
     /// No two distinct char-key actions may share a single Char key, since
     /// binding collisions are resolved only by call-site scoping. Char keys
