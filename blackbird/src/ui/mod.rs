@@ -115,9 +115,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     // area renders the library (the default view). The full panel only
     // appears when FocusedPanel::Lyrics is active and there is no sidebar
     // visible.
-    let sidebar_position = blackbird_client_shared::config::effective_sidebar_position(
-        app.config.layout.base.sidebar.position,
-    );
+    let sidebar_position = app.config.layout.base.sidebar.position;
     let show_sidebar = app.config.layout.base.sidebar.enabled && !is_loading;
     let content_layout = if show_sidebar {
         layout::split_content_with_sidebar(

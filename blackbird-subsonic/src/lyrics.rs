@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[allow(unused_imports)]
 use crate::{Client, ClientResult};
 
 /// A single line of lyrics with timing information.

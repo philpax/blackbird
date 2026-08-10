@@ -1,7 +1,5 @@
-#[allow(unused_imports)]
 use serde::Deserialize;
 
-#[allow(unused_imports)]
 use crate::{Child, Client, ClientResult};
 
 /// Similar-songs functionality.
@@ -99,7 +97,6 @@ impl Client {
 }
 
 /// Builds the shared `id`/`count` parameter list for the similar-songs endpoints.
-#[allow(dead_code)]
 fn similar_songs_parameters(id: &str, count: Option<usize>) -> Vec<(&str, String)> {
     let mut parameters = vec![("id", id.to_string())];
     if let Some(count) = count {

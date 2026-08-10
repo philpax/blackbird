@@ -1,7 +1,5 @@
-#[allow(unused_imports)]
 use serde::{Deserialize, Serialize};
 
-#[allow(unused_imports)]
 use crate::{Client, ClientResult};
 
 /// A server-advertised OpenSubsonic extension, as returned by the

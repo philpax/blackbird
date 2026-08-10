@@ -82,8 +82,6 @@ pub fn hsv_to_rgb(hsv: Hsv) -> Rgb {
 
 /// Metadata for one HSV style field within a group.
 pub struct FieldInfo {
-    /// The field name (serde key within the group).
-    pub name: &'static str,
     /// A human-readable label for settings UI.
     pub label: &'static str,
     /// The default HSV value.
@@ -125,7 +123,7 @@ macro_rules! group {
         impl $group {
             /// The fields in this group, in display order.
             pub const FIELDS: &'static [FieldInfo] = &[
-                $(FieldInfo { name: stringify!($field), label: stringify!($field), default: [$($default),+] },)*
+                $(FieldInfo { label: stringify!($field), default: [$($default),+] },)*
             ];
             /// The number of fields in this group.
             pub const FIELD_COUNT: usize = 0 $(+ { let _ = stringify!($field); 1 })*;

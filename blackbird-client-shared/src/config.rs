@@ -138,11 +138,6 @@ pub struct SidebarSettings {
     pub heights: Vec<f32>,
 }
 
-/// The effective sidebar position (the explicit position; no derivation).
-pub fn effective_sidebar_position(position: SidebarPosition) -> SidebarPosition {
-    position
-}
-
 impl Default for SidebarSettings {
     fn default() -> Self {
         Self {
@@ -391,18 +386,6 @@ similar_songs_count = 20
 "#;
         let settings: SidebarSettings = toml::from_str(toml_str).unwrap();
         assert_eq!(settings.heights, vec![0.5, 0.5]);
-    }
-
-    #[test]
-    fn effective_sidebar_position_is_authoritative() {
-        assert_eq!(
-            effective_sidebar_position(SidebarPosition::Left),
-            SidebarPosition::Left
-        );
-        assert_eq!(
-            effective_sidebar_position(SidebarPosition::Right),
-            SidebarPosition::Right
-        );
     }
 
     #[test]

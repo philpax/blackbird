@@ -752,20 +752,6 @@ impl Logic {
         });
     }
 
-    /// Reloads the OpenSubsonic extensions from the server.
-    ///
-    /// Non-fatal: a server that errors on `getOpenSubsonicExtensions` (or
-    /// returns an empty list) leaves the previous set (or empty) in place and
-    /// surfaces `AppStateError::OpenSubsonicExtensionsFetchFailed` without
-    /// failing any surrounding load.
-    pub fn request_open_subsonic_extensions(&self) {
-        let client = self.client.clone();
-        let state = self.state.clone();
-        self.tokio_thread.spawn(async move {
-            fetch_open_subsonic_extensions(&client, &state).await;
-        });
-    }
-
     /// Fetch similar songs for the given track, delivering the result on
     /// `similar_songs_loaded_tx`.
     ///
@@ -940,21 +926,6 @@ impl Logic {
 
     pub fn get_state(&self) -> Arc<RwLock<AppState>> {
         self.state.clone()
-    }
-
-    /// Returns the OpenSubsonic extensions advertised by the server (empty
-    /// when the server doesn't support `getOpenSubsonicExtensions`).
-    pub fn get_open_subsonic_extensions(&self) -> Vec<bs::OpenSubsonicExtension> {
-        self.read_state().open_subsonic_extensions.clone()
-    }
-
-    /// Returns `true` when the server advertises the `sonicSimilarity`
-    /// OpenSubsonic extension (`getSonicSimilarTracks`).
-    pub fn supports_sonic_similarity(&self) -> bool {
-        matches!(
-            similar_endpoint_for(&self.read_state().open_subsonic_extensions),
-            SimilarEndpoint::SonicSimilarTracks
-        )
     }
 
     pub fn set_playback_mode(&self, mode: PlaybackMode) {

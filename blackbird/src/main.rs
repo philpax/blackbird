@@ -565,9 +565,7 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
     // Compute the content layout (including optional sidebar) matching
     // ui::draw, so mouse hit-testing uses the same rects.
     let is_loading = !app.logic.has_loaded_all_tracks();
-    let sidebar_position = blackbird_client_shared::config::effective_sidebar_position(
-        app.config.layout.base.sidebar.position,
-    );
+    let sidebar_position = app.config.layout.base.sidebar.position;
     let show_sidebar = app.config.layout.base.sidebar.enabled && !is_loading;
     let content_layout = if show_sidebar {
         ui::layout::split_content_with_sidebar(
@@ -1011,9 +1009,7 @@ fn apply_scroll(app: &mut App, scroll_delta: i32, size: Rect) {
     let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
     let direction = scroll_delta.signum();
 
-    let sidebar_position = blackbird_client_shared::config::effective_sidebar_position(
-        app.config.layout.base.sidebar.position,
-    );
+    let sidebar_position = app.config.layout.base.sidebar.position;
     let is_loading = !app.logic.has_loaded_all_tracks();
     let sidebar_visible = app.config.layout.base.sidebar.enabled && !is_loading;
 

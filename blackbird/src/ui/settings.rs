@@ -1,5 +1,5 @@
 use blackbird_client_shared::{
-    config::{AlbumArtStyle, Layout, Playback, SidebarComponent},
+    config::{AlbumArtStyle, Layout, Playback, SidebarComponent, SidebarPosition},
     style as shared_style,
 };
 use ratatui::{
@@ -287,25 +287,18 @@ fn build_rows() -> Vec<SettingsRow> {
             label: "Sidebar position",
             section: Section::Sidebar,
             get: |c| {
-                use blackbird_client_shared::config::{
-                    SidebarPosition, effective_sidebar_position,
-                };
-                let pos = effective_sidebar_position(c.layout.base.sidebar.position);
+                let pos = c.layout.base.sidebar.position;
                 SidebarPosition::ALL
                     .iter()
                     .position(|p| *p == pos)
                     .unwrap_or(0)
             },
             set: |c, idx| {
-                use blackbird_client_shared::config::SidebarPosition;
                 c.layout.base.sidebar.position =
                     SidebarPosition::ALL.get(idx).copied().unwrap_or_default();
             },
             default: || {
-                use blackbird_client_shared::config::{
-                    SidebarPosition, effective_sidebar_position,
-                };
-                let pos = effective_sidebar_position(SidebarPosition::default());
+                let pos = SidebarPosition::default();
                 SidebarPosition::ALL
                     .iter()
                     .position(|p| *p == pos)
