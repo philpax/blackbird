@@ -1,4 +1,4 @@
-/// Configuration types shared between the egui and TUI clients.
+/// Configuration types shared between the blackbird clients.
 use std::time::Duration;
 
 use blackbird_core::{PlaybackMode, SortOrder, blackbird_state::TrackId};
@@ -128,7 +128,7 @@ fn default_album_spacing() -> usize {
     1
 }
 
-/// Shared configuration fields used by both the egui and TUI clients.
+/// Shared configuration fields used by the blackbird clients.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {

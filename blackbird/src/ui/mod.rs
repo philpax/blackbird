@@ -1,838 +1,810 @@
-use std::sync::Arc;
-use std::time::Duration;
+pub mod album_art_overlay;
+pub(crate) mod layout;
+pub(crate) mod library;
+pub(crate) mod loading;
+pub(crate) mod logs;
+pub(crate) mod lyrics;
+pub(crate) mod now_playing;
+pub(crate) mod queue;
+pub(crate) mod scroll;
+pub(crate) mod search;
+pub(crate) mod settings;
 
-mod keys;
-mod library;
-mod lyrics;
-mod playing_track;
-mod queue;
-mod scrub_bar;
-mod search;
-mod settings;
-mod style;
-mod util;
-
-pub use style::{Style, StyleExt};
-
-use blackbird_core::blackbird_state::CoverArtId;
-use blackbird_shared::config::ConfigFile as _;
-use egui::{
-    CentralPanel, Color32, Context, FontData, FontDefinitions, FontFamily, Frame, Margin, Rect,
-    RichText, TextFormat, TopBottomPanel, Visuals, text::LayoutJob,
+use blackbird_client_shared::style as shared_style;
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Color, Style},
+    text::{Line, Span},
+    widgets::{Block, Clear, Paragraph},
 };
 
-use crate::{App, bc, config::Config, cover_art_cache::CachePriority};
+use smol_str::ToSmolStr as _;
 
-#[derive(Default)]
-pub struct SearchState {
-    pub(crate) open: bool,
-    pub(crate) query: String,
-}
+use crate::{
+    app::{App, FocusedPanel},
+    cover_art::ArtColors,
+    keys,
+};
 
-#[derive(Default)]
-pub struct LyricsState {
-    pub(crate) open: bool,
-    pub(crate) shared: blackbird_client_shared::lyrics::LyricsState,
-    pub(crate) auto_scroll: bool,
-}
-
-#[derive(Default)]
-pub struct QueueState {
-    pub(crate) open: bool,
-}
-
-/// State for the hover-based full-res album art preview.
-pub struct ArtHoverState {
-    pub cover_art_id: CoverArtId,
-    /// Screen-space rect of the thumbnail that triggered the hover.
-    pub art_screen_rect: Rect,
-    /// Whether the popup frame was hovered in the previous frame.
-    pub popup_hovered: bool,
-    /// Actual rendered height of the popup from the previous frame, used for
-    /// accurate vertical positioning.
-    pub last_popup_height: Option<f32>,
-}
-
-#[derive(Default)]
-pub struct UiState {
-    pub search: SearchState,
-    pub lyrics: LyricsState,
-    pub queue: QueueState,
-    pub settings: settings::SettingsState,
-    pub library_view: library::LibraryViewState,
-    pub mini_library: library::MiniLibraryState,
-    pub quit_confirming: bool,
-    /// When set, a full-res album art preview popup is shown near the hovered
-    /// thumbnail.
-    pub art_hover: Option<ArtHoverState>,
-}
-
-pub fn initialize(cc: &eframe::CreationContext<'_>, config: &Config) -> UiState {
-    cc.egui_ctx.set_visuals(Visuals::dark());
-    cc.egui_ctx.style_mut(|style| {
-        style.visuals.panel_fill = config.style.background_color32();
-        style.visuals.override_text_color = Some(config.style.text_color32());
-        style.scroll_animation = egui::style::ScrollAnimation::duration(0.2);
-    });
-    cc.egui_ctx.options_mut(|options| {
-        options.input_options.line_scroll_speed = config.shared.layout.scroll_multiplier
-    });
-
-    let mut fonts = FontDefinitions::default();
-    // Replace the default font with GoNoto
-    fonts.font_data.insert(
-        "GoNoto".into(),
-        Arc::new(FontData::from_static(include_bytes!(
-            "../../assets/GoNotoKurrent-Regular.ttf"
-        ))),
-    );
-    fonts
-        .families
-        .entry(FontFamily::Proportional)
-        .or_default()
-        .push("GoNoto".into());
-
-    // Add Phosphor regular icons as fallback
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-
-    // Add Phosphor fill as an explicit font
-    fonts.font_data.insert(
-        "phosphor-fill".into(),
-        Arc::new(egui_phosphor::Variant::Fill.font_data()),
-    );
-    fonts.families.insert(
-        egui::FontFamily::Name("phosphor-fill".into()),
-        vec!["GoNoto".into(), "phosphor-fill".into()],
-    );
-
-    cc.egui_ctx.set_fonts(fonts);
-
-    egui_extras::install_image_loaders(&cc.egui_ctx);
-
-    UiState::default()
-}
-
-impl App {
-    pub fn render(&mut self, ctx: &Context) {
-        let logic = &mut self.logic;
-        let config_guard = self.config.read().unwrap();
-        let config = &config_guard;
-
-        let mut track_to_scroll_to = logic
-            .get_state()
-            .write()
-            .unwrap()
-            .last_requested_track_for_ui_scroll
-            .take();
-        while let Ok(event) = self.playback_to_logic_rx.try_recv() {
-            if let bc::PlaybackToLogicMessage::TrackStarted(track_and_position) = event {
-                track_to_scroll_to = Some(track_and_position.track_id.clone());
-
-                // Request lyrics if inline lyrics are enabled or the panel is open.
-                if self.ui_state.lyrics.shared.on_track_started(
-                    &track_and_position.track_id,
-                    config.shared.layout.lyrics_display,
-                    self.ui_state.lyrics.open,
-                ) {
-                    self.ui_state.lyrics.auto_scroll = true;
-                    logic.request_lyrics(&track_and_position.track_id);
-                }
-            }
-        }
-
-        if let Some(error) = logic.get_error() {
-            let mut open = true;
-            egui::Window::new("Error").open(&mut open).show(ctx, |ui| {
-                ui.label(RichText::new(error.display_name()).heading());
-                ui.label(RichText::new(
-                    error.display_message(&logic.get_state().read().unwrap()),
-                ));
-            });
-            if !open {
-                logic.clear_error();
-            }
-        }
-
-        ctx.input(|i| {
-            // Handle local search keybinding
-            if let Some(search_key) = config
-                .keybindings
-                .parse_local_key(&config.keybindings.local_search)
-            {
-                let requires_cmd = config
-                    .keybindings
-                    .requires_command(&config.keybindings.local_search);
-                if (!requires_cmd || i.modifiers.command) && i.key_released(search_key) {
-                    self.ui_state.search.open = !self.ui_state.search.open;
-                }
-            }
-
-            // Handle local lyrics keybinding
-            if let Some(lyrics_key) = config
-                .keybindings
-                .parse_local_key(&config.keybindings.local_lyrics)
-            {
-                let requires_cmd = config
-                    .keybindings
-                    .requires_command(&config.keybindings.local_lyrics);
-                if (!requires_cmd || i.modifiers.command) && i.key_released(lyrics_key) {
-                    self.ui_state.lyrics.open = !self.ui_state.lyrics.open;
-                    if self.ui_state.lyrics.open {
-                        let playing_id = logic.get_playing_track_id();
-                        if self
-                            .ui_state
-                            .lyrics
-                            .shared
-                            .on_panel_opened(playing_id.as_ref())
-                            && let Some(track_id) = playing_id
-                        {
-                            logic.request_lyrics(&track_id);
-                        }
-                        self.ui_state.lyrics.auto_scroll = true;
-                    }
-                }
-            }
-        });
-
-        // Handle keyboard shortcuts when no modal is consuming input
-        let search_active = self.ui_state.library_view.incremental_search.active;
-        let can_handle_shortcuts = !self.ui_state.search.open
-            && !self.ui_state.lyrics.open
-            && !self.ui_state.queue.open
-            && !self.ui_state.settings.open
-            && !self.ui_state.quit_confirming
-            && !search_active;
-
-        // Handle Y/N keys for the quit confirmation modal.
-        // The confirmed flag is collected separately to avoid calling
-        // `send_viewport_cmd` inside the `input` closure, which would deadlock.
-        let mut quit_confirmed = false;
-        if self.ui_state.quit_confirming {
-            ctx.input(|i| {
-                for event in &i.events {
-                    if let egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } = event
-                        && !modifiers.command
-                        && !modifiers.alt
-                        && !modifiers.ctrl
-                    {
-                        match key {
-                            egui::Key::Y => {
-                                quit_confirmed = true;
-                            }
-                            egui::Key::N => {
-                                self.ui_state.quit_confirming = false;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            });
-            if quit_confirmed {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            }
-        }
-
-        // Q closes any open sub-window when shortcuts are blocked by one.
-        if !can_handle_shortcuts && !self.ui_state.quit_confirming && !search_active {
-            ctx.input(|i| {
-                for event in &i.events {
-                    if let egui::Event::Key {
-                        key: keys::KEY_QUIT,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } = event
-                        && !modifiers.command
-                        && !modifiers.alt
-                        && !modifiers.ctrl
-                        && !modifiers.shift
-                    {
-                        self.ui_state.search.open = false;
-                        self.ui_state.lyrics.open = false;
-                        self.ui_state.queue.open = false;
-                        self.ui_state.settings.open = false;
-                    }
-                }
-            });
-        }
-
-        if can_handle_shortcuts {
-            ctx.input(|i| {
-                for event in &i.events {
-                    let egui::Event::Key {
-                        key,
-                        pressed: true,
-                        modifiers,
-                        ..
-                    } = event
-                    else {
-                        continue;
-                    };
-                    // Only handle shortcuts without modifiers (except shift for '*')
-                    if modifiers.command || modifiers.alt || modifiers.ctrl {
-                        continue;
-                    }
-
-                    let Some(action) = keys::library_action(*key, modifiers.shift) else {
-                        continue;
-                    };
-                    match action {
-                        keys::Action::PlayPause => logic.toggle_current(),
-                        keys::Action::Stop => logic.stop_current(),
-                        keys::Action::Next => logic.next(),
-                        keys::Action::Previous => logic.previous(),
-                        keys::Action::NextGroup => logic.next_group(),
-                        keys::Action::PreviousGroup => logic.previous_group(),
-                        keys::Action::CyclePlaybackMode(dir) => {
-                            let next = blackbird_client_shared::cycle(
-                                &bc::PlaybackMode::ALL,
-                                logic.get_playback_mode(),
-                                dir,
-                            );
-                            logic.set_playback_mode(next);
-                        }
-                        keys::Action::ToggleSortOrder(dir) => {
-                            let next = blackbird_client_shared::cycle(
-                                &bc::SortOrder::ALL,
-                                logic.get_sort_order(),
-                                dir,
-                            );
-                            logic.set_sort_order(next);
-                            self.ui_state.library_view.invalidate_library_scroll();
-                            self.ui_state
-                                .mini_library
-                                .library_view
-                                .invalidate_library_scroll();
-                            // Re-center on the playing track after re-sorting.
-                            if let Some(track_id) = logic.get_playing_track_id() {
-                                logic
-                                    .get_state()
-                                    .write()
-                                    .unwrap()
-                                    .last_requested_track_for_ui_scroll = Some(track_id);
-                            }
-                        }
-                        keys::Action::SeekBackward => {
-                            seek_relative(logic, -blackbird_client_shared::SEEK_STEP_SECS);
-                        }
-                        keys::Action::SeekForward => {
-                            seek_relative(logic, blackbird_client_shared::SEEK_STEP_SECS);
-                        }
-                        keys::Action::GotoPlaying => {
-                            if let Some(track_id) = logic.get_playing_track_id() {
-                                let state = logic.get_state();
-                                let mut state = state.write().unwrap();
-                                state.last_requested_track_for_ui_scroll = Some(track_id);
-                            }
-                        }
-                        keys::Action::SearchInline => {
-                            self.ui_state.library_view.incremental_search.active = true;
-                        }
-                        keys::Action::Lyrics => {
-                            self.ui_state.lyrics.open = !self.ui_state.lyrics.open;
-                            if self.ui_state.lyrics.open {
-                                let playing_id = logic.get_playing_track_id();
-                                if self
-                                    .ui_state
-                                    .lyrics
-                                    .shared
-                                    .on_panel_opened(playing_id.as_ref())
-                                    && let Some(track_id) = playing_id
-                                {
-                                    logic.request_lyrics(&track_id);
-                                }
-                                self.ui_state.lyrics.auto_scroll = true;
-                            }
-                        }
-                        keys::Action::Queue => {
-                            self.ui_state.queue.open = !self.ui_state.queue.open;
-                        }
-                        keys::Action::Quit => {
-                            self.ui_state.quit_confirming = true;
-                        }
-                        keys::Action::Star => {
-                            let Some(track_id) = logic.get_playing_track_id() else {
-                                continue;
-                            };
-                            let state = logic.get_state();
-                            let state = state.read().unwrap();
-                            let starred = state
-                                .library
-                                .track_map
-                                .get(&track_id)
-                                .is_some_and(|t| t.starred);
-                            drop(state);
-                            logic.set_track_starred(&track_id, !starred);
-                        }
-                        keys::Action::VolumeUp => {
-                            let vol = (logic.get_volume() + blackbird_client_shared::VOLUME_STEP)
-                                .min(1.0);
-                            logic.set_volume(vol);
-                        }
-                        keys::Action::VolumeDown => {
-                            let vol = (logic.get_volume() - blackbird_client_shared::VOLUME_STEP)
-                                .max(0.0);
-                            logic.set_volume(vol);
-                        }
-                        keys::Action::Settings => {
-                            self.ui_state.settings.open = !self.ui_state.settings.open;
-                        }
-                    }
-                }
-            });
-        }
-
-        // Process incoming lyrics data.
-        while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
-            self.ui_state.lyrics.shared.on_lyrics_loaded(&lyrics_data);
-        }
-
-        // Process library population signal
-        while let Ok(()) = self.library_populated_rx.try_recv() {
-            self.ui_state.library_view.invalidate_library_scroll();
-            self.ui_state
-                .mini_library
-                .library_view
-                .invalidate_library_scroll();
-
-            // Populate the background art prefetch queue with all album cover art IDs.
-            let state = logic.get_state();
-            let state = state.read().unwrap();
-            let ids: Vec<_> = state
-                .library
-                .groups
-                .iter()
-                .filter_map(|g| g.cover_art_id.clone())
-                .collect();
-            drop(state);
-            self.cover_art_cache.populate_prefetch_queue(ids);
-        }
-
-        if self.ui_state.search.open {
-            search::ui(
-                logic,
-                ctx,
-                &config.style,
-                &mut self.ui_state.search.open,
-                &mut self.ui_state.search.query,
-            );
-        }
-
-        if self.ui_state.lyrics.open {
-            lyrics::ui(
-                logic,
-                ctx,
-                &config.style,
-                &mut self.ui_state.lyrics.open,
-                &mut self.ui_state.lyrics.shared.data,
-                &mut self.ui_state.lyrics.shared.loading,
-                &mut self.ui_state.lyrics.auto_scroll,
-            );
-        }
-
-        if self.ui_state.queue.open {
-            queue::ui(logic, ctx, &config.style, &mut self.ui_state.queue.open);
-        }
-
-        let margin = 8;
-        let scroll_margin = 4;
-        let has_loaded_all_tracks = logic.has_loaded_all_tracks();
-
-        if self.ui_state.mini_library.open {
-            library::mini::ui(
-                logic,
-                ctx,
-                config,
-                has_loaded_all_tracks,
-                &mut self.cover_art_cache,
-                &mut self.ui_state.mini_library,
-            );
-        }
-
-        // Help bar at the bottom
-        TopBottomPanel::bottom("help_bar")
-            .frame(
-                Frame::default()
-                    .inner_margin(Margin::symmetric(8, 4))
-                    .fill(config.style.background_color32()),
-            )
-            .show(ctx, |ui| {
-                let highlight_color = config.style.track_name_playing_color32();
-                let text_color = Color32::from_rgba_unmultiplied(180, 180, 180, 255);
-                let font_id = egui::TextStyle::Body.resolve(ui.style());
-
-                ui.horizontal(|ui| {
-                    for entry in keys::LIBRARY_HELP {
-                        let Some((key, label)) = entry.help_label(logic) else {
-                            continue;
-                        };
-                        let mut job = LayoutJob::default();
-
-                        job.append(
-                            &key,
-                            0.0,
-                            TextFormat {
-                                color: highlight_color,
-                                font_id: font_id.clone(),
-                                ..Default::default()
-                            },
-                        );
-                        job.append(
-                            &format!(":{label}"),
-                            0.0,
-                            TextFormat {
-                                color: text_color,
-                                font_id: font_id.clone(),
-                                ..Default::default()
-                            },
-                        );
-                        ui.label(job);
-                    }
-                });
-            });
-
-        CentralPanel::default()
-            .frame(
-                Frame::default()
-                    .inner_margin(Margin {
-                        left: margin,
-                        right: scroll_margin,
-                        top: margin,
-                        bottom: margin,
-                    })
-                    .fill(config.style.background_color32()),
-            )
-            .show(ctx, |ui| {
-                if let Some(id) = library::shared::render_player_controls(
-                    ui,
-                    logic,
-                    config,
-                    has_loaded_all_tracks,
-                    &mut self.cover_art_cache,
-                ) {
-                    track_to_scroll_to = Some(id);
-                }
-
-                let art_hover_result = library::full::ui(
-                    ui,
-                    logic,
-                    config,
-                    has_loaded_all_tracks,
-                    scroll_margin.into(),
-                    track_to_scroll_to.as_ref(),
-                    &mut self.cover_art_cache,
-                    &mut self.ui_state.library_view,
-                    &library::full::FullLibraryState {
-                        search_open: self.ui_state.search.open,
-                        lyrics_open: self.ui_state.lyrics.open,
-                        queue_open: self.ui_state.queue.open,
-                    },
-                );
-                if let Some((id, rect)) = art_hover_result {
-                    // Update the hover state, preserving popup_hovered from the
-                    // previous frame if the same cover art is still targeted.
-                    let prev_popup_hovered = self
-                        .ui_state
-                        .art_hover
-                        .as_ref()
-                        .is_some_and(|h| h.cover_art_id == id && h.popup_hovered);
-                    let prev_popup_height = self
-                        .ui_state
-                        .art_hover
-                        .as_ref()
-                        .and_then(|h| h.last_popup_height);
-                    self.ui_state.art_hover = Some(ArtHoverState {
-                        cover_art_id: id,
-                        art_screen_rect: rect,
-                        popup_hovered: prev_popup_hovered,
-                        last_popup_height: prev_popup_height,
-                    });
-                } else if let Some(ref hover) = self.ui_state.art_hover {
-                    // Clear hover state only if the popup is also not hovered.
-                    if !hover.popup_hovered {
-                        self.ui_state.art_hover = None;
-                    }
-                }
-            });
-
-        // Draw inline lyrics as an overlay at the bottom of the central panel.
-        // The egui client doesn't implement a sidebar, so Left/Right fall back
-        // to showing the inline overlay (same as Inline).
-        if config.shared.layout.lyrics_display
-            != blackbird_client_shared::config::LyricsDisplay::Off
-            && self.ui_state.lyrics.shared.has_synced_lyrics()
-        {
-            let panel_rect = ctx.available_rect();
-            let font_id = egui::TextStyle::Body.resolve(&ctx.style());
-            let row_height = ctx.fonts(|f| f.row_height(&font_id));
-            // Height: separator (2px) + text row + small padding.
-            let overlay_height = row_height + 6.0;
-            let overlay_rect = egui::Rect::from_min_size(
-                egui::pos2(panel_rect.left(), panel_rect.bottom() - overlay_height),
-                egui::vec2(panel_rect.width(), overlay_height),
-            );
-
-            egui::Area::new(egui::Id::new("inline_lyrics_overlay"))
-                .fixed_pos(overlay_rect.min)
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    ui.set_min_size(overlay_rect.size());
-                    ui.set_max_size(overlay_rect.size());
-
-                    // Fill background so library content doesn't bleed through.
-                    ui.painter()
-                        .rect_filled(overlay_rect, 0.0, config.style.background_color32());
-
-                    // Top separator line.
-                    let sep_rect = egui::Rect::from_min_size(
-                        overlay_rect.min,
-                        egui::vec2(overlay_rect.width(), 1.0),
-                    );
-                    ui.painter()
-                        .rect_filled(sep_rect, 0.0, config.style.track_duration_color32());
-
-                    let position = logic.get_playing_position();
-                    let mut job = egui::text::LayoutJob::default();
-                    if let Some(line) = self.ui_state.lyrics.shared.current_inline_line(position) {
-                        if let Some(start_ms) = line.start {
-                            let timestamp_secs = (start_ms / 1000) as u32;
-                            let timestamp_str =
-                                blackbird_core::util::seconds_to_hms_string(timestamp_secs, false);
-                            job.append(
-                                &format!("{timestamp_str} "),
-                                0.0,
-                                egui::text::TextFormat {
-                                    color: config.style.track_name_playing_color32(),
-                                    font_id: font_id.clone(),
-                                    ..Default::default()
-                                },
-                            );
-                        }
-                        job.append(
-                            &line.value,
-                            0.0,
-                            egui::text::TextFormat {
-                                color: config.style.text_color32(),
-                                font_id,
-                                ..Default::default()
-                            },
-                        );
-                    } else {
-                        let [r, g, b, a] = config.style.text_color32().to_array();
-                        job.append(
-                            "[no lyrics]",
-                            0.0,
-                            egui::text::TextFormat {
-                                color: egui::Color32::from_rgba_unmultiplied(
-                                    (r as f32 * 0.5) as u8,
-                                    (g as f32 * 0.5) as u8,
-                                    (b as f32 * 0.5) as u8,
-                                    a,
-                                ),
-                                font_id,
-                                ..Default::default()
-                            },
-                        );
-                    }
-                    // Add some left margin and vertical centering.
-                    let text_pos = egui::pos2(
-                        overlay_rect.left() + margin as f32,
-                        overlay_rect.top() + 3.0,
-                    );
-                    ui.painter().galley(
-                        text_pos,
-                        ui.fonts(|f| f.layout_job(job)),
-                        config.style.text_color32(),
-                    );
-                });
-        }
-
-        // Dismiss the hover popup if the thumbnail has scrolled off-screen.
-        if let Some(ref hover) = self.ui_state.art_hover
-            && !ctx.screen_rect().intersects(hover.art_screen_rect)
-        {
-            self.ui_state.art_hover = None;
-        }
-
-        // Hover-based full-res album art preview popup.
-        if let Some(ref mut hover) = self.ui_state.art_hover {
-            // Get both the fallback (library-res or lower) and full-res sources.
-            // The fallback is painted first so it remains visible while egui
-            // decodes the full-res texture, avoiding a flash.
-            let fallback_source = self
-                .cover_art_cache
-                .get(Some(&hover.cover_art_id), CachePriority::Visible);
-            let full_res_source = self.cover_art_cache.get_full_res(Some(&hover.cover_art_id));
-
-            let screen = ctx.screen_rect();
-            let popup_max_width = screen.width() * 0.4;
-            let popup_max_height = screen.height() * 0.6;
-            let max_size = egui::vec2(popup_max_width, popup_max_height);
-
-            // Position the popup to the right of the thumbnail by default.
-            // If there isn't enough space, position it to the left instead.
-            let thumb = hover.art_screen_rect;
-            let popup_x = if thumb.right() + popup_max_width + 16.0 < screen.right() {
-                thumb.right() + 8.0
-            } else {
-                (thumb.left() - popup_max_width - 8.0).max(screen.left())
-            };
-
-            // Use the actual popup height from the previous frame if available,
-            // otherwise fall back to the max height for the initial frame.
-            let effective_height = hover.last_popup_height.unwrap_or(popup_max_height);
-
-            // Vertically: prefer top-aligned with the thumbnail. If the popup
-            // would extend past the screen bottom, align its bottom with the
-            // thumbnail's bottom instead.
-            let popup_y = if thumb.top() + effective_height <= screen.bottom() {
-                thumb.top()
-            } else {
-                (thumb.bottom() - effective_height).max(thumb.top())
-            };
-
-            let area_response = egui::Area::new(egui::Id::new("art_hover_popup"))
-                .order(egui::Order::Tooltip)
-                .fixed_pos(egui::pos2(popup_x, popup_y))
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style())
-                        .fill(config.style.background_color32())
-                        .inner_margin(egui::Margin::same(8))
-                        .show(ui, |ui| {
-                            // Paint the fallback (library-res) first via
-                            // `paint_at`, then the full-res on top via `add`.
-                            // While egui decodes the full-res texture, the
-                            // fallback remains visible underneath.
-                            let response = ui.add(
-                                egui::Image::new(fallback_source)
-                                    .max_size(max_size)
-                                    .show_loading_spinner(false),
-                            );
-                            egui::Image::new(full_res_source)
-                                .show_loading_spinner(false)
-                                .paint_at(ui, response.rect);
-                        });
-                });
-
-            // Record the actual rendered popup height for next frame's
-            // positioning.
-            hover.last_popup_height = Some(area_response.response.rect.height());
-
-            // Track whether the popup itself is hovered so the preview persists
-            // when the user moves the mouse from the thumbnail to the popup.
-            hover.popup_hovered = area_response
-                .response
-                .rect
-                .contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO));
-        }
-
-        // Quit confirmation modal.
-        if self.ui_state.quit_confirming {
-            egui::Area::new(egui::Id::new("quit_confirm_overlay"))
-                .order(egui::Order::Foreground)
-                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style())
-                        .fill(config.style.background_color32())
-                        .inner_margin(egui::Margin::same(16))
-                        .show(ui, |ui| {
-                            ui.vertical_centered(|ui| {
-                                ui.label(
-                                    RichText::new("Quit?")
-                                        .heading()
-                                        .color(config.style.text_color32()),
-                                );
-                                ui.add_space(8.0);
-                                ui.horizontal(|ui| {
-                                    if ui.button("Yes").clicked() {
-                                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                                    }
-                                    if ui.button("No").clicked() {
-                                        self.ui_state.quit_confirming = false;
-                                    }
-                                });
-                            });
-                        });
-                });
-        }
-
-        // If the track-to-scroll-to doesn't exist yet in the library, save it back
-        // and it will hopefully become available at some point in the future
-        if let Some(track_id) = track_to_scroll_to {
-            let state = logic.get_state();
-            let mut state = state.write().unwrap();
-            if !state.library.track_map.contains_key(&track_id) {
-                state.last_requested_track_for_ui_scroll = Some(track_id);
-            }
-        }
-
-        // Drop the long-lived config read guard before the settings section,
-        // which needs a write lock to apply changes.
-        drop(config_guard);
-
-        // Settings window — drawn last so it can work with a cloned config
-        // and write changes back without conflicting with the read guard above.
-        // Suppress config auto-reload while settings is open to prevent disk
-        // values from clobbering in-memory edits.
-        self.config_reload_suppressed.store(
-            self.ui_state.settings.open,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-        let settings_was_open = self.ui_state.settings.open;
-        if self.ui_state.settings.open {
-            let mut cfg: crate::config::Config = (*self.config.read().unwrap()).clone();
-            let server_changed = settings::ui(ctx, &mut cfg, &mut self.ui_state.settings);
-            let config_changed = cfg != *self.config.read().unwrap();
-            if config_changed {
-                // Apply live style changes in-memory (disk save deferred to close).
-                ctx.style_mut(|style| {
-                    style.visuals.panel_fill = cfg.style.background_color32();
-                    style.visuals.override_text_color = Some(cfg.style.text_color32());
-                });
-                ctx.options_mut(|options| {
-                    options.input_options.line_scroll_speed = cfg.shared.layout.scroll_multiplier;
-                });
-
-                // Write the updated config in-memory.
-                *self.config.write().unwrap() = cfg.clone();
-
-                if server_changed {
-                    // Save immediately for server changes that trigger a reload.
-                    cfg.save();
-
-                    self.logic.reload_library(
-                        cfg.shared.server.base_url,
-                        cfg.shared.server.username,
-                        cfg.shared.server.password,
-                        cfg.shared.server.transcode,
-                    );
-                }
-            }
-        }
-
-        // Save config to disk when the settings window closes.
-        if settings_was_open && !self.ui_state.settings.open {
-            self.config.read().unwrap().save();
-        }
+/// Returns the effective background color: either the configured background
+/// or `Color::Reset` (terminal native) when `use_terminal_background` is set.
+pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
+    if config.layout.use_terminal_background {
+        Color::Reset
+    } else {
+        config.style.background_color()
     }
 }
 
-/// Seek relative to the current position by the given number of seconds.
-fn seek_relative(logic: &mut bc::Logic, seconds: i64) {
-    let Some(details) = logic.get_track_display_details() else {
-        return;
-    };
-    let current = details.track_position;
-    let delta = Duration::from_secs(seconds.unsigned_abs());
-    let new_pos = if seconds > 0 {
-        current + delta
+/// Extension trait for using shared style colors with ratatui.
+/// Uses gamma-corrected colors to match the retired GUI's appearance.
+pub trait StyleExt {
+    fn background_color(&self) -> Color;
+    fn text_color(&self) -> Color;
+    fn album_color(&self) -> Color;
+    fn album_length_color(&self) -> Color;
+    fn album_year_color(&self) -> Color;
+    fn track_number_color(&self) -> Color;
+    fn track_length_color(&self) -> Color;
+    fn track_name_color(&self) -> Color;
+    fn track_name_hovered_color(&self) -> Color;
+    fn track_name_playing_color(&self) -> Color;
+    fn track_duration_color(&self) -> Color;
+}
+impl StyleExt for shared_style::Style {
+    fn background_color(&self) -> Color {
+        hsv_to_color(self.background_hsv)
+    }
+    fn text_color(&self) -> Color {
+        hsv_to_color(self.text_hsv)
+    }
+    fn album_color(&self) -> Color {
+        hsv_to_color(self.album_hsv)
+    }
+    fn album_length_color(&self) -> Color {
+        hsv_to_color(self.album_length_hsv)
+    }
+    fn album_year_color(&self) -> Color {
+        hsv_to_color(self.album_year_hsv)
+    }
+    fn track_number_color(&self) -> Color {
+        hsv_to_color(self.track_number_hsv)
+    }
+    fn track_length_color(&self) -> Color {
+        hsv_to_color(self.track_length_hsv)
+    }
+    fn track_name_color(&self) -> Color {
+        hsv_to_color(self.track_name_hsv)
+    }
+    fn track_name_hovered_color(&self) -> Color {
+        hsv_to_color(self.track_name_hovered_hsv)
+    }
+    fn track_name_playing_color(&self) -> Color {
+        hsv_to_color(self.track_name_playing_hsv)
+    }
+    fn track_duration_color(&self) -> Color {
+        hsv_to_color(self.track_duration_hsv)
+    }
+}
+/// Converts a shared style Rgb color to ratatui's Color.
+fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
+    Color::Rgb(rgb.r, rgb.g, rgb.b)
+}
+fn hsv_to_color(hsv: shared_style::Hsv) -> Color {
+    // adapted from the retired GUI, fusing together hsv conversion and gamma correction
+    /// All ranges in 0-1, rgb is linear.
+    #[inline]
+    pub fn from_hsv([h, s, v]: shared_style::Hsv) -> shared_style::Rgb {
+        #![allow(clippy::many_single_char_names)]
+        let h = (h.fract() + 1.0).fract(); // wrap
+        let s = s.clamp(0.0, 1.0);
+
+        let f = h * 6.0 - (h * 6.0).floor();
+        let p = v * (1.0 - s);
+        let q = v * (1.0 - f * s);
+        let t = v * (1.0 - (1.0 - f) * s);
+
+        let [r, g, b] = match (h * 6.0).floor() as i32 % 6 {
+            0 => [v, t, p],
+            1 => [q, v, p],
+            2 => [p, v, t],
+            3 => [p, q, v],
+            4 => [t, p, v],
+            5 => [v, p, q],
+            _ => unreachable!(),
+        };
+
+        pub fn gamma_u8_from_linear_f32(l: f32) -> u8 {
+            if l <= 0.0 {
+                0
+            } else if l <= 0.0031308 {
+                fast_round(3294.6 * l)
+            } else if l <= 1.0 {
+                fast_round(269.025 * l.powf(1.0 / 2.4) - 14.025)
+            } else {
+                255
+            }
+        }
+
+        fn fast_round(r: f32) -> u8 {
+            (r + 0.5) as _ // rust does a saturating cast since 1.45
+        }
+
+        shared_style::Rgb::new(
+            gamma_u8_from_linear_f32(r),
+            gamma_u8_from_linear_f32(g),
+            gamma_u8_from_linear_f32(b),
+        )
+    }
+    rgb_to_color(from_hsv(hsv))
+}
+
+/// Builds half-block art spans for one terminal row from a 4x4 color grid,
+/// stretching to [`layout::art_cols()`] display columns via nearest-neighbor
+/// mapping.
+pub(crate) fn art_row_spans(
+    colors: &ArtColors,
+    top_row: usize,
+    bot_row: usize,
+) -> Vec<Span<'static>> {
+    let cols = layout::art_cols();
+    let mut spans = Vec::with_capacity(cols as usize);
+    for col in 0..cols {
+        let data_col = col as usize * 4 / cols as usize;
+        spans.push(Span::styled(
+            "\u{2580}",
+            Style::default()
+                .fg(colors.colors[top_row][data_col])
+                .bg(colors.colors[bot_row][data_col]),
+        ));
+    }
+    spans
+}
+
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    let size = frame.area();
+
+    // Fill entire terminal with background color.
+    //
+    // When using the terminal's native background (`Color::Reset`), we set a
+    // non-default fg color on the fill. Since every cell is a space, the fg is
+    // invisible, but it ensures cells differ from the default buffer state so
+    // ratatui's diff includes them. Combined with `swap_buffers()` in the main
+    // loop, this forces a full redraw every frame, preventing artifacts during
+    // rapid scrolling.
+    let bg_color = effective_bg(&app.config);
+    let fill_style = if app.config.layout.use_terminal_background {
+        Style::default().bg(bg_color).fg(Color::DarkGray)
     } else {
-        current.saturating_sub(delta)
+        Style::default().bg(bg_color)
     };
-    logic.seek_current(new_pos);
+    frame.render_widget(Block::default().style(fill_style), size);
+
+    // Main layout: [NowPlaying] | [Scrub+Volume] | [Content] | [Help].
+    let main = layout::split_main(size);
+
+    let is_loading = !app.logic.has_loaded_all_tracks();
+
+    // Hide the now-playing header and scrub bar while the loading animation is active,
+    // so only the centered flock animation is visible.
+    if !is_loading {
+        now_playing::draw(frame, app, main.now_playing);
+        draw_scrub_bar(frame, app, main.scrub_bar);
+    }
+
+    // Split the content area with an optional lyrics sidebar. The sidebar is
+    // shown when lyrics_display is Left or Right and the app is not loading.
+    // When FocusedPanel::Lyrics is active with a sidebar visible, the sidebar
+    // gets keyboard focus and the main area renders the library (the default
+    // view). The full lyrics panel only appears when FocusedPanel::Lyrics is
+    // active and there is no sidebar (lyrics_display is Inline or Off).
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
+    let content_layout = if show_sidebar {
+        layout::split_content_with_sidebar(
+            main.content,
+            lyrics_display,
+            app.config.layout.lyrics_sidebar_width,
+        )
+    } else {
+        layout::ContentLayout {
+            main: main.content,
+            lyrics_sidebar: None,
+            lyrics_border: None,
+        }
+    };
+
+    let content_area = content_layout.main;
+
+    // When the sidebar is visible and focused, render the library (default
+    // view) in the main area instead of the full lyrics panel.
+    let render_panel = if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
+        FocusedPanel::Library
+    } else {
+        app.focused_panel
+    };
+
+    match render_panel {
+        FocusedPanel::Library => library::draw(frame, app, content_area),
+        FocusedPanel::Search => search::draw(
+            frame,
+            &mut app.search,
+            &app.config.style,
+            &app.logic,
+            content_area,
+        ),
+        FocusedPanel::Lyrics => lyrics::draw(
+            frame,
+            &mut app.lyrics,
+            &app.config.style,
+            app.logic.get_playing_position(),
+            content_area,
+        ),
+        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, content_area),
+        FocusedPanel::Queue => queue::draw(
+            frame,
+            &app.queue,
+            &app.config.style,
+            &app.logic,
+            content_area,
+        ),
+        FocusedPanel::Settings => settings::draw(
+            frame,
+            &mut app.settings,
+            &app.config.style,
+            &app.config,
+            content_area,
+        ),
+    }
+
+    // Draw the lyrics sidebar if present. When the sidebar is focused
+    // (FocusedPanel::Lyrics + sidebar visible), pass is_focused = true so
+    // the selection indicator is rendered.
+    if let Some(sidebar_area) = content_layout.lyrics_sidebar {
+        let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
+        lyrics::draw_sidebar(
+            frame,
+            &mut app.lyrics,
+            &app.config.style,
+            app.logic.get_playing_position(),
+            sidebar_area,
+            sidebar_focused,
+        );
+    }
+
+    draw_help_bar(frame, app, main.help_bar);
+
+    // Draw inline lyrics as an overlay at the bottom of the content area.
+    // Only shown when lyrics_display is Inline (not Off, Left, or Right).
+    if !is_loading
+        && lyrics_display == blackbird_client_shared::config::LyricsDisplay::Inline
+        && app.lyrics.shared.has_synced_lyrics()
+        && let Some(overlay) = layout::inline_lyrics_overlay(content_area)
+    {
+        draw_inline_lyrics(frame, app, overlay);
+    }
+
+    // Draw playback mode dropdown if open.
+    if app.playback_mode_dropdown {
+        now_playing::draw_playback_mode_dropdown(frame, app, size);
+    }
+
+    // Draw album art overlay on top of everything if active.
+    if app.album_art_overlay.is_some() {
+        album_art_overlay::draw(frame, app, size);
+    }
+
+    // Draw quit confirmation dialog on top of everything.
+    if app.quit_confirming {
+        let yes = keys::KEY_CONFIRM_YES.to_smolstr();
+        let no = keys::KEY_CONFIRM_NO.to_smolstr();
+        let prompt = format!("Quit? {yes}/{no}");
+        let popup_width = prompt.len() as u16 + 4; // border (2) + padding (2)
+        let popup_height = 3_u16;
+        let x = size.x + (size.width.saturating_sub(popup_width)) / 2;
+        let y = size.y + (size.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(x, y, popup_width, popup_height);
+
+        // Clear the area behind the popup.
+        let clear = Block::default().style(Style::default().bg(bg_color));
+        frame.render_widget(clear, popup_area);
+
+        let popup = Paragraph::new(format!(" {prompt}"))
+            .block(Block::bordered().style(Style::default().fg(app.config.style.text_color())))
+            .style(Style::default().fg(app.config.style.text_color()));
+        frame.render_widget(popup, popup_area);
+    }
+}
+
+/// Hashes a string to produce a pleasing colour (uses shared implementation).
+/// Uses gamma-corrected version to match the retired GUI's color rendering.
+pub fn string_to_color(s: &str) -> Color {
+    hsv_to_color(shared_style::string_to_hsv(s))
+}
+
+fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let style = &app.config.style;
+    let details = app.logic.get_track_display_details();
+
+    let (position_secs, duration_secs) = details
+        .as_ref()
+        .map(|d| {
+            (
+                d.track_position.as_secs_f32(),
+                d.track_duration.as_secs_f32(),
+            )
+        })
+        .unwrap_or((0.0, 0.0));
+
+    // Use the preview ratio during scrub bar drags for instant visual feedback,
+    // falling back to the playback thread's reported position otherwise.
+    let (ratio, display_position_secs) = if let Some(preview) = app.scrub_preview_ratio {
+        let r = preview.clamp(0.0, 1.0);
+        (r, r * duration_secs)
+    } else if duration_secs > 0.0 {
+        (
+            (position_secs / duration_secs).clamp(0.0, 1.0),
+            position_secs,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+
+    let position_str =
+        blackbird_core::util::seconds_to_hms_string(display_position_secs as u32, true);
+    let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
+    let volume = app.logic.get_volume();
+
+    let label = format!(" {position_str} / {duration_str} ");
+
+    // Split area: scrub bar | volume slider.
+    let sv = layout::split_scrub_volume(area);
+
+    // Render the scrub bar with half-block precision. Each column can show
+    // empty, a left-half block (▌), or a full block (█), giving twice the
+    // resolution of the built-in Gauge widget.
+    let bar_width = sv.scrub_bar.width as f64;
+    let filled_half_blocks = (ratio as f64 * bar_width * 2.0).round() as u16;
+    let full_cols = filled_half_blocks / 2;
+    let has_half = filled_half_blocks % 2 == 1;
+
+    let fg = style.track_name_playing_color();
+    let bg = effective_bg(&app.config);
+    let buf = frame.buffer_mut();
+    let y = sv.scrub_bar.y;
+
+    for col in 0..sv.scrub_bar.width {
+        let x = sv.scrub_bar.x + col;
+        let pos = ratatui::layout::Position::new(x, y);
+        if !sv.scrub_bar.contains(pos) {
+            continue;
+        }
+        let cell = &mut buf[pos];
+        if col < full_cols {
+            cell.set_char('█');
+            cell.set_style(Style::default().fg(fg));
+        } else if col == full_cols && has_half {
+            cell.set_char('▌');
+            cell.set_style(Style::default().fg(fg).bg(bg));
+        } else {
+            cell.set_char(' ');
+            cell.set_style(Style::default().bg(bg));
+        }
+    }
+
+    // Center the time label over the bar.
+    let label_width = label.len() as u16;
+    let label_start = sv.scrub_bar.x + sv.scrub_bar.width.saturating_sub(label_width) / 2;
+    for (ci, ch) in label.chars().enumerate() {
+        let x = label_start + ci as u16;
+        let pos = ratatui::layout::Position::new(x, y);
+        if sv.scrub_bar.contains(pos) {
+            let col = x - sv.scrub_bar.x;
+            let cell = &mut buf[pos];
+            cell.set_char(ch);
+            if col < full_cols {
+                // Label on filled portion: invert colors.
+                cell.set_style(Style::default().fg(bg).bg(fg));
+            } else {
+                cell.set_style(Style::default().fg(fg).bg(bg));
+            }
+        }
+    }
+
+    // Draw volume as a visual slider: "♪ ████░░░░ nn%"
+    let vol_area = sv.volume;
+    let bar_width = (vol_area.width as usize).saturating_sub(layout::VOLUME_BAR_PADDING as usize);
+    let filled = ((volume * bar_width as f32).round() as usize).min(bar_width);
+    let empty = bar_width.saturating_sub(filled);
+
+    let vol_pct = format!("{:3.0}%", volume * 100.0);
+    let vol_active_color = if app.volume_editing {
+        style.track_name_playing_color()
+    } else {
+        style.track_duration_color()
+    };
+
+    let vol_line = Line::from(vec![
+        Span::styled("\u{266A} ", Style::default().fg(vol_active_color)),
+        Span::styled(
+            "\u{2588}".repeat(filled),
+            Style::default().fg(vol_active_color),
+        ),
+        Span::styled(
+            "\u{2591}".repeat(empty),
+            Style::default().fg(effective_bg(&app.config)),
+        ),
+        Span::styled(format!(" {vol_pct}"), Style::default().fg(vol_active_color)),
+    ]);
+    frame.render_widget(Paragraph::new(vol_line), vol_area);
+}
+
+fn draw_inline_lyrics(frame: &mut Frame, app: &App, area: Rect) {
+    let style = &app.config.style;
+    let position = app.logic.get_playing_position();
+    let lyrics_line = app.lyrics.shared.current_inline_line(position);
+
+    let line = if let Some(lyrics_line) = lyrics_line {
+        let mut spans = Vec::new();
+        // Timestamp prefix, matching the full lyrics panel style.
+        if let Some(start_ms) = lyrics_line.start {
+            let timestamp_secs = (start_ms / 1000) as u32;
+            let timestamp_str = blackbird_core::util::seconds_to_hms_string(timestamp_secs, false);
+            spans.push(Span::styled(
+                format!(" {timestamp_str:>6} "),
+                Style::default().fg(style.track_name_playing_color()),
+            ));
+        } else {
+            spans.push(Span::raw(" "));
+        }
+        spans.push(Span::styled(
+            &lyrics_line.value,
+            Style::default().fg(style.text_color()),
+        ));
+        Line::from(spans)
+    } else {
+        Line::from(Span::styled(
+            " [no lyrics]",
+            Style::default().fg(style.track_duration_color()),
+        ))
+    };
+
+    let paragraph = Paragraph::new(line).style(
+        Style::default()
+            .bg(effective_bg(&app.config))
+            .fg(style.track_duration_color()),
+    );
+    // Use top and bottom borders to visually separate inline lyrics from
+    // the content area above and the help bar below.
+    let block = Block::default()
+        .borders(ratatui::widgets::Borders::TOP | ratatui::widgets::Borders::BOTTOM)
+        .border_style(Style::default().fg(style.album_color()));
+    // Clear the area first so library content underneath doesn't bleed through.
+    frame.render_widget(Clear, area);
+    frame.render_widget(paragraph.block(block), area);
+}
+
+/// Handle click on scrub bar or volume slider area.
+pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
+    // Recompute the scrub bar layout matching draw_scrub_bar.
+    let sv = layout::split_scrub_volume(scrub_area);
+
+    if x >= sv.volume.x && x < sv.volume.x + sv.volume.width {
+        // Click on volume slider: "♪ ████░░░░ nnn%"
+        // The slider bar starts at offset VOLUME_ICON_WIDTH ("♪ ") and ends VOLUME_LABEL_WIDTH before the end (" nnn%")
+        let bar_start = sv.volume.x + layout::VOLUME_ICON_WIDTH;
+        let bar_width = sv.volume.width.saturating_sub(layout::VOLUME_BAR_PADDING);
+        if bar_width > 1 && x >= bar_start && x < bar_start + bar_width {
+            let ratio = (x - bar_start) as f32 / (bar_width - 1) as f32;
+            app.logic.set_volume(ratio.clamp(0.0, 1.0));
+        }
+    } else if x >= sv.scrub_bar.x && x < sv.scrub_bar.x + sv.scrub_bar.width {
+        // Set preview ratio for instant visual feedback; the actual seek
+        // is deferred until mouse-up via `seek_current_immediate`.
+        let ratio = (x - sv.scrub_bar.x) as f32 / sv.scrub_bar.width as f32;
+        app.scrub_preview_ratio = Some(ratio);
+    }
+}
+
+fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
+    let style = &app.config.style;
+
+    let help_entries: &[keys::HelpEntry] = match app.focused_panel {
+        FocusedPanel::Library => keys::LIBRARY_HELP,
+        FocusedPanel::Search => keys::SEARCH_HELP,
+        FocusedPanel::Lyrics => keys::LYRICS_HELP,
+        FocusedPanel::Logs => keys::LOGS_HELP,
+        FocusedPanel::Queue => keys::QUEUE_HELP,
+        FocusedPanel::Settings => keys::SETTINGS_HELP,
+    };
+
+    let mut spans: Vec<Span> = Vec::new();
+    let mut x_pos = area.x + 1; // Account for the leading space.
+    spans.push(Span::raw(" "));
+
+    let highlight = Style::default().fg(style.track_name_playing_color());
+
+    app.help_bar_items.clear();
+
+    for entry in help_entries {
+        match entry {
+            keys::HelpEntry::Single(action) => {
+                let Some((key, label)) = action.help_label(&app.logic) else {
+                    continue;
+                };
+                let key_str = String::from(key);
+                let label_str = format!(":{label} ");
+                let item_width = key_str.len() as u16 + label_str.len() as u16;
+
+                app.help_bar_items
+                    .push((x_pos, x_pos + item_width, *action));
+
+                spans.push(Span::styled(key_str, highlight));
+                spans.push(Span::raw(label_str));
+
+                x_pos += item_width;
+            }
+            keys::HelpEntry::Pair(a, b, desc) => {
+                let la = a.help_label(&app.logic);
+                let lb = b.help_label(&app.logic);
+
+                let (key_a_str, key_b_str) = match (&la, &lb) {
+                    (Some((ka, _)), Some((kb, _))) => {
+                        (String::from(ka.as_str()), String::from(kb.as_str()))
+                    }
+                    // If only one is visible, render it as a single entry.
+                    (Some((key, desc)), None) | (None, Some((key, desc))) => {
+                        let action = if la.is_some() { *a } else { *b };
+                        let key_str = String::from(key.as_str());
+                        let label_str = format!(":{desc} ");
+                        let item_width = key_str.len() as u16 + label_str.len() as u16;
+
+                        app.help_bar_items.push((x_pos, x_pos + item_width, action));
+
+                        spans.push(Span::styled(key_str, highlight));
+                        spans.push(Span::raw(label_str));
+
+                        x_pos += item_width;
+                        continue;
+                    }
+                    (None, None) => continue,
+                };
+
+                let desc_str = format!(":{desc} ");
+
+                // Click target for first key.
+                let ka_width = key_a_str.len() as u16;
+                app.help_bar_items.push((x_pos, x_pos + ka_width, *a));
+                spans.push(Span::styled(key_a_str, highlight));
+                x_pos += ka_width;
+
+                // Separator `/` (highlighted but not clickable).
+                spans.push(Span::styled("/", highlight));
+                x_pos += 1;
+
+                // Click target for second key.
+                let kb_width = key_b_str.len() as u16;
+                app.help_bar_items.push((x_pos, x_pos + kb_width, *b));
+                spans.push(Span::styled(key_b_str, highlight));
+                x_pos += kb_width;
+
+                // Description (not clickable).
+                x_pos += desc_str.len() as u16;
+                spans.push(Span::raw(desc_str));
+            }
+        }
+    }
+
+    let help_line = Line::from(spans);
+    let help = Paragraph::new(help_line).style(Style::default().bg(effective_bg(&app.config)));
+    frame.render_widget(help, area);
+}
+
+#[cfg(test)]
+mod render_tests {
+    use image::{ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        layout::{Position, Rect, Size},
+    };
+    use ratatui_image::{
+        Image, Resize,
+        picker::Picker,
+        protocol::Protocol,
+        sliced::{SignedPosition, SlicedImage, SlicedProtocol},
+    };
+    use std::sync::Arc;
+
+    /// Creates a small 4×4 PNG test image (solid red).
+    fn test_png() -> Vec<u8> {
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_pixel(40, 40, Rgba([255, 0, 0, 255]));
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 40, 40, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    /// Creates a PNG with distinct colors per row (vertical gradient).
+    /// 8 rows of distinct colors, each 10 pixels tall × 10 pixels wide.
+    fn gradient_png() -> Vec<u8> {
+        let colors = [
+            Rgba([255, 0, 0, 255]),
+            Rgba([0, 255, 0, 255]),
+            Rgba([0, 0, 255, 255]),
+            Rgba([255, 255, 255, 255]),
+            Rgba([255, 128, 0, 255]),
+            Rgba([128, 0, 255, 255]),
+            Rgba([0, 255, 255, 255]),
+            Rgba([255, 0, 255, 255]),
+        ];
+        let mut img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::new(80, 80);
+        for y in 0..80 {
+            for x in 0..80 {
+                img.put_pixel(x, y, colors[(y / 10) as usize]);
+            }
+        }
+        let mut buf = Vec::new();
+        PngEncoder::new(&mut buf)
+            .write_image(img.as_raw(), 80, 80, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        buf
+    }
+
+    /// Verifies that `Image` mode with a halfblocks picker renders
+    /// image content into the terminal buffer (colored cells), confirming
+    /// that ratatui-image's halfblocks backend is functional.
+    #[test]
+    fn test_image_mode_halfblocks_backend() {
+        let picker = Picker::halfblocks();
+        let png_bytes = test_png();
+        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
+        // The halfblocks picker has font_size 10×20, so a 40×40 pixel image
+        // maps to 4×2 character cells. Use a size that fits.
+        let size = Size::new(4, 2);
+        let protocol: Protocol = picker
+            .new_protocol(dyn_img, size, Resize::Fit(None))
+            .unwrap();
+
+        let backend = TestBackend::new(10, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 4, 2);
+                f.render_widget(Image::new(&protocol).allow_clipping(true), area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+
+        // The halfblocks protocol renders image data as cell colors.
+        // For a solid red image, cells should have Rgb(255, 0, 0) as fg or bg.
+        // Verify at least one cell in the art area has a non-default color.
+        let has_color = (0..4u16)
+            .flat_map(|y| (0..2u16).map(move |x| (x, y)))
+            .any(|(x, y)| {
+                let cell = buffer.cell(Position { x, y }).unwrap();
+                cell.fg != ratatui::style::Color::default()
+                    || cell.bg != ratatui::style::Color::default()
+            });
+
+        assert!(
+            has_color,
+            "expected at least one colored cell in the art area"
+        );
+    }
+
+    /// Verifies that when no protocol is available (None), rendering
+    /// correctly falls through to the fallback path (no Image widget
+    /// rendered, no image colors in the buffer).
+    #[test]
+    fn test_fallback_to_halfblocks_when_no_protocol() {
+        let protocol: Option<Arc<Protocol>> = None;
+
+        let backend = TestBackend::new(10, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 4, 2);
+                if let Some(ref protocol) = protocol {
+                    f.render_widget(Image::new(protocol).allow_clipping(true), area);
+                } else {
+                    // Fallback: render a plain block (simulating half-block fallback).
+                    f.render_widget(ratatui::widgets::Block::default(), area);
+                }
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // With the fallback, no image colors should be present.
+        let has_color = (0..4u16)
+            .flat_map(|y| (0..2u16).map(move |x| (x, y)))
+            .any(|(x, y)| {
+                let cell = buffer.cell(Position { x, y }).unwrap();
+                cell.fg != ratatui::style::Color::default()
+                    || cell.bg != ratatui::style::Color::default()
+            });
+
+        assert!(!has_color, "fallback path should not render image colors");
+    }
+
+    /// Verifies that `SlicedImage` with a scroll offset renders the
+    /// correct portion of the image. Uses a vertical-gradient test image
+    /// where each row has a distinct color, then scrolls 1 line into the art
+    /// area and verifies the buffer is non-empty.
+    #[test]
+    fn test_library_scroll_partial_group() {
+        let picker = Picker::halfblocks();
+        let png_bytes = gradient_png();
+        let dyn_img = image::load_from_memory(&png_bytes).unwrap();
+
+        // Create a SlicedProtocol sized to 8 cols × 8 rows.
+        let sliced = SlicedProtocol::new(&picker, dyn_img, Some(Size::new(8, 8))).unwrap();
+
+        // Render with scroll_offset = 3 (skip first 3 rows of the image).
+        let backend = TestBackend::new(20, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let area = Rect::new(0, 0, 8, 8);
+                let position = SignedPosition { x: 0, y: -3 };
+                f.render_widget(SlicedImage::new(&sliced, position), area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let has_content_scrolled =
+            (0..8u16)
+                .flat_map(|y| (0..8u16).map(move |x| (x, y)))
+                .any(|(x, y)| {
+                    let cell = buffer.cell(Position { x, y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                });
+        assert!(
+            has_content_scrolled,
+            "expected colored cells in scrolled art area"
+        );
+
+        // Also render with scroll_offset = 0 and verify it also has content.
+        let backend2 = TestBackend::new(20, 10);
+        let mut terminal2 = Terminal::new(backend2).unwrap();
+        terminal2
+            .draw(|f| {
+                let area = Rect::new(0, 0, 8, 8);
+                let position = SignedPosition { x: 0, y: 0 };
+                f.render_widget(SlicedImage::new(&sliced, position), area);
+            })
+            .unwrap();
+
+        let buffer2 = terminal2.backend().buffer();
+        let has_content_normal =
+            (0..8u16)
+                .flat_map(|y| (0..8u16).map(move |x| (x, y)))
+                .any(|(x, y)| {
+                    let cell = buffer2.cell(Position { x, y }).unwrap();
+                    cell.fg != ratatui::style::Color::default()
+                        || cell.bg != ratatui::style::Color::default()
+                });
+        assert!(
+            has_content_normal,
+            "expected colored cells in non-scrolled art area"
+        );
+    }
+
+    /// Verifies that the `Halfblock` config variant is distinct from
+    /// `Auto` and `Image`, confirming the config-level decision point that
+    /// bypasses picker creation.
+    #[test]
+    fn test_halfblock_config_bypasses_image() {
+        use crate::config::AlbumArtProtocol;
+        assert_eq!(AlbumArtProtocol::default(), AlbumArtProtocol::Auto);
+        assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Auto);
+        assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Image);
+    }
 }

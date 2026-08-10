@@ -1,4 +1,4 @@
-//! Library scroll indicator logic shared between egui and TUI clients.
+//! Library scroll indicator logic shared between the blackbird clients.
 //!
 //! This module computes scroll indicator positions based on the current sort order.
 //! For alphabetical sorting, it shows letters (A-Z). For year-based sorting (newest
@@ -13,7 +13,8 @@ use std::borrow::Cow;
 /// section starts in the library.
 ///
 /// The `cluster_threshold` parameter controls how close labels can be before
-/// they are merged (typically 0.015 for GUI, or 1.0/visible_height for TUI).
+/// they are merged (typically a fixed small threshold for the retired GUI, or
+/// 1.0/visible_height for the TUI).
 pub fn compute_positions<'a>(
     entries: impl Iterator<Item = (Cow<'a, str>, usize)>,
     cluster_threshold: f32,

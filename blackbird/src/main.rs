@@ -1,36 +1,48 @@
-use std::sync::{Arc, RwLock, atomic::AtomicBool};
-
+mod app;
 mod config;
-mod controls;
-mod cover_art_cache;
+mod cover_art;
+mod keys;
+mod log_buffer;
 mod ui;
 
+use std::io::Write as _;
+use std::time::{Duration, Instant};
+
+use app::{App, FocusedPanel};
 use blackbird_core as bc;
 use blackbird_shared::config::ConfigFile as _;
-
 use config::Config;
-use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+use cover_art::CoverArtCache;
+use keys::Action;
+use log_buffer::{LogBuffer, LogBufferLayer};
+
+use crossterm::{
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEvent,
+        MouseEventKind,
+    },
+    execute,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+};
+use ratatui::layout::Rect;
+use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui_image::picker::{Capability, Picker, ProtocolType};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-fn main() {
-    // Initialize platform-specific tray icon requirements (GTK on Linux).
-    #[cfg(feature = "tray-icon")]
-    blackbird_client_shared::tray::init_platform();
+fn main() -> anyhow::Result<()> {
+    // Create log buffer for TUI display instead of stdout.
+    let log_buffer = LogBuffer::new();
 
-    // Log to a file so that shutdown diagnostics are visible even when the
-    // GUI window has closed.
+    // Also log to a file for debugging (especially shutdown issues).
     let log_dir = blackbird_shared::paths::data_dir();
-    std::fs::create_dir_all(&log_dir).expect("failed to create log directory");
-    let file_layer = std::fs::File::create(log_dir.join("blackbird-gui.log"))
-        .map(|f| {
-            tracing_subscriber::fmt::layer()
-                .with_writer(std::sync::Mutex::new(f))
-                .with_ansi(false)
-        })
-        .ok();
+    std::fs::create_dir_all(&log_dir)?;
+    let log_file = std::fs::File::create(log_dir.join("blackbird.log"))?;
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::sync::Mutex::new(log_file))
+        .with_ansi(false);
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(LogBufferLayer::new(log_buffer.clone()))
         .with(file_layer)
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -38,341 +50,986 @@ fn main() {
         )
         .init();
 
-    let icon = blackbird_client_shared::load_icon();
-
-    // Load and save config at startup
     let config = Config::load();
-    config.save();
 
     let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
     let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
     let (library_populated_tx, library_populated_rx) = std::sync::mpsc::channel::<()>();
-    let (track_updated_tx, _track_updated_rx) = std::sync::mpsc::channel::<()>();
+    let (track_updated_tx, track_updated_rx) = std::sync::mpsc::channel::<()>();
 
     let logic = bc::Logic::new(bc::LogicArgs {
-        base_url: config.shared.server.base_url.clone(),
-        username: config.shared.server.username.clone(),
-        password: config.shared.server.password.clone(),
-        transcode: config.shared.server.transcode,
+        base_url: config.server.base_url.clone(),
+        username: config.server.username.clone(),
+        password: config.server.password.clone(),
+        transcode: config.server.transcode,
         volume: config.general.volume,
-        apply_replaygain: config.shared.playback.apply_replaygain,
-        replaygain_preamp_db: config.shared.playback.replaygain_preamp_db,
-        sort_order: config.shared.last_playback.sort_order,
-        playback_mode: config.shared.last_playback.playback_mode,
-        last_playback: config.shared.last_playback.as_track_and_position(),
+        apply_replaygain: config.playback.apply_replaygain,
+        replaygain_preamp_db: config.playback.replaygain_preamp_db,
+        sort_order: config.last_playback.sort_order,
+        playback_mode: config.last_playback.playback_mode,
+        last_playback: config.last_playback.as_track_and_position(),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         library_populated_tx,
         track_updated_tx,
     });
 
-    let native_options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_position([
-                config.general.window_position_x as f32,
-                config.general.window_position_y as f32,
-            ])
-            .with_inner_size([
-                config.general.window_width as f32,
-                config.general.window_height as f32,
-            ])
-            .with_icon(egui::IconData {
-                rgba: icon.as_raw().clone(),
-                width: icon.width(),
-                height: icon.height(),
-            }),
-        ..eframe::NativeOptions::default()
+    // Initialize platform-specific tray icon requirements (GTK on Linux).
+    #[cfg(feature = "tray-icon")]
+    blackbird_client_shared::tray::init_platform();
+
+    // Initialize media controls (MPRIS on Linux, SMTC on Windows) for global playback keys.
+    #[cfg(feature = "media-controls")]
+    let mut media_controls = blackbird_client_shared::controls::Controls::new(
+        {
+            #[cfg(target_os = "windows")]
+            {
+                create_hidden_media_window()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None
+            }
+        },
+        logic.subscribe_to_playback_events(),
+        logic.request_handle(),
+        logic.get_state(),
+    )
+    .map_err(|e| tracing::warn!("Failed to initialize media controls: {e}"))
+    .ok();
+
+    // Create tray icon and menu.
+    #[cfg(feature = "tray-icon")]
+    let (tray_icon, mut tray_menu) = {
+        let icon = blackbird_client_shared::load_icon();
+        blackbird_client_shared::tray::TrayMenu::new(icon, logic.get_playback_mode())
     };
 
-    let config = Arc::new(RwLock::new(config));
+    let playback_rx = logic.subscribe_to_playback_events();
+    let cover_art_cache = CoverArtCache::new(cover_art_loaded_rx);
 
-    eframe::run_native(
-        "blackbird",
-        native_options,
-        Box::new(move |cc| {
-            Ok(Box::new(App::new(
-                cc,
-                config.clone(),
-                logic,
-                cover_art_loaded_rx,
-                lyrics_loaded_rx,
-                library_populated_rx,
-                icon,
-            )))
-        }),
-    )
-    .unwrap();
-}
+    let mut app = App::new(
+        config,
+        logic,
+        playback_rx,
+        cover_art_cache,
+        lyrics_loaded_rx,
+        library_populated_rx,
+        track_updated_rx,
+        log_buffer,
+    );
 
-pub struct App {
-    // Logic must be declared (and thus dropped) before the background threads
-    // so that the playback thread receives its Shutdown message promptly.
-    logic: bc::Logic,
+    // Setup terminal
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // Query the terminal for graphics protocol support (Kitty/iTerm2/Sixel).
+    // This must happen after entering the alternate screen but before reading
+    // terminal events. `from_query_stdio()` writes escape sequences to stdout
+    // and reads the terminal response from stdin with an internal timeout.
+    //
+    // When `AlbumArtProtocol::Halfblock` is configured, skip the query entirely
+    // and leave the picker unset — all three art sites use the existing
+    // hand-rolled half-block rendering.
+    let picker = match app.config.layout.album_art_protocol {
+        config::AlbumArtProtocol::Halfblock => {
+            tracing::info!("album_art_protocol = halfblock, skipping graphics protocol query");
+            None
+        }
+        config::AlbumArtProtocol::Auto => {
+            // Only enable protocol rendering when a real graphics protocol is
+            // detected. If detection falls back to halfblocks, leave the picker
+            // unset so callers use the existing hand-rolled half-block rendering.
+            match Picker::from_query_stdio() {
+                Ok(p) if p.protocol_type() != ProtocolType::Halfblocks => {
+                    tracing::info!(
+                        "detected terminal graphics protocol: {:?}",
+                        p.protocol_type()
+                    );
+                    Some(p)
+                }
+                Ok(_) => {
+                    tracing::info!(
+                        "terminal supports only halfblocks, using existing half-block rendering"
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::info!(
+                        "no terminal graphics protocol detected ({e}), using half-blocks"
+                    );
+                    None
+                }
+            }
+        }
+        config::AlbumArtProtocol::Image => {
+            // Always use ratatui-image. If no real protocol is detected, fall
+            // back to the halfblocks backend (higher fidelity than the quantized
+            // 4×4 / 16-row grids).
+            match Picker::from_query_stdio() {
+                Ok(p) => {
+                    tracing::info!(
+                        "detected terminal graphics protocol: {:?}",
+                        p.protocol_type()
+                    );
+                    Some(p)
+                }
+                Err(e) => {
+                    tracing::info!(
+                        "no terminal graphics protocol detected ({e}), using halfblocks backend"
+                    );
+                    Some(Picker::halfblocks())
+                }
+            }
+        }
+    };
+    app.cover_art_cache
+        .set_picker(picker.map(correct_picker_font_size));
+
+    let result = run_app(
+        &mut terminal,
+        &mut app,
+        #[cfg(feature = "media-controls")]
+        &mut media_controls,
+        #[cfg(feature = "tray-icon")]
+        &mut tray_menu,
+        #[cfg(feature = "tray-icon")]
+        &tray_icon,
+    );
+
+    // Restore terminal
+    disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+
+    // Save state on exit.
+    app.save_state();
+
+    // Drop app first — this drops Logic, which sends Shutdown to the playback
+    // thread and stops audio. Must happen before tray/media_controls, whose
+    // destructors block for tens of seconds on D-Bus/GLib cleanup.
+    drop(app);
 
     // TrayIcon/TrayMenu/Controls destructors do synchronous D-Bus/GLib calls
-    // that block for tens of seconds when the GLib main context isn't being
-    // actively iterated. Wrap in ManuallyDrop to skip their destructors — the
-    // process exit handles cleanup.
+    // that block when the GLib main context isn't being actively iterated.
+    // Skip all their destructors — the process exit handles cleanup.
     #[cfg(feature = "tray-icon")]
-    tray_menu: std::mem::ManuallyDrop<blackbird_client_shared::tray::TrayMenu>,
-    #[cfg(feature = "tray-icon")]
-    tray_icon: std::mem::ManuallyDrop<blackbird_client_shared::tray::TrayIcon>,
+    {
+        std::mem::forget(tray_icon);
+        std::mem::forget(tray_menu);
+    }
     #[cfg(feature = "media-controls")]
-    controls: std::mem::ManuallyDrop<controls::Controls>,
+    std::mem::forget(media_controls);
 
-    config: Arc<RwLock<Config>>,
-    /// Suppresses the config reload thread while settings is open, preventing
-    /// disk values from clobbering in-memory edits.
-    config_reload_suppressed: Arc<AtomicBool>,
-    _config_reload_thread: std::thread::JoinHandle<()>,
-    _repaint_thread: std::thread::JoinHandle<()>,
-    playback_to_logic_rx: bc::PlaybackToLogicRx,
-    cover_art_cache: cover_art_cache::CoverArtCache,
-    lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
-    library_populated_rx: std::sync::mpsc::Receiver<()>,
-    current_window_position: Option<(i32, i32)>,
-    current_window_size: Option<(u32, u32)>,
-    pub(crate) ui_state: ui::UiState,
-    shutdown_initiated: bool,
-    _global_hotkey_manager: GlobalHotKeyManager,
-    search_hotkey: HotKey,
-    mini_library_hotkey: HotKey,
+    result
 }
-impl App {
-    pub fn new(
-        cc: &eframe::CreationContext<'_>,
-        config: Arc<RwLock<Config>>,
-        logic: bc::Logic,
-        cover_art_loaded_rx: std::sync::mpsc::Receiver<bc::CoverArt>,
-        lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
-        library_populated_rx: std::sync::mpsc::Receiver<()>,
-        #[cfg_attr(not(feature = "tray-icon"), allow(unused_variables))] icon: image::RgbaImage,
-    ) -> Self {
-        let config_reload_suppressed = Arc::new(AtomicBool::new(false));
-        let _config_reload_thread = std::thread::spawn({
-            let config = config.clone();
-            let suppressed = config_reload_suppressed.clone();
-            let egui_ctx = cc.egui_ctx.clone();
-            move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(1));
 
-                // Skip reload while settings is open to avoid clobbering
-                // in-memory edits.
-                if suppressed.load(std::sync::atomic::Ordering::Relaxed) {
-                    continue;
-                }
+/// Corrects the picker's font size using the terminal's reported window size
+/// when the capability query did not return a cell size.
+/// `Picker::from_query_stdio()` silently falls back to a guessed 10×20 font in
+/// that case; images are pre-resized to `cells × font size` pixels before
+/// transmission, so a wrong guess makes Kitty and iTerm2 render album art over
+/// the wrong number of cells (typically far too few on HiDPI displays).
+fn correct_picker_font_size(picker: Picker) -> Picker {
+    let cell_size_queried = picker
+        .capabilities()
+        .iter()
+        .any(|c| matches!(c, Capability::CellSize(Some(_))));
+    if cell_size_queried {
+        return picker;
+    }
+    let Some((cell_width, cell_height)) = ui::layout::cell_pixel_size() else {
+        tracing::warn!(
+            "the terminal did not report a cell size; album art may render at the wrong scale \
+             with the guessed font size {:?}",
+            picker.font_size()
+        );
+        return picker;
+    };
+    tracing::info!(
+        "the cell size query was not answered; correcting the picker font size from {:?} to \
+         {cell_width}×{cell_height} using the reported window size",
+        picker.font_size()
+    );
+    // `from_fontsize` is deprecated in favour of `from_query_stdio`, but the
+    // query is exactly what failed to produce a cell size here, and it is the
+    // only constructor that both accepts an explicit font size and performs
+    // tmux detection.
+    #[allow(deprecated)]
+    let mut corrected = Picker::from_fontsize((cell_width, cell_height).into());
+    corrected.set_protocol_type(picker.protocol_type());
+    corrected
+}
 
-                let new_config = Config::load();
-                let current_config = config.read().unwrap();
-                if new_config != *current_config {
-                    drop(current_config);
-                    *config.write().unwrap() = new_config;
-                    config.read().unwrap().save();
-                    egui_ctx.request_repaint();
-                }
-            }
-        });
+/// Duration for high-frequency ticks during animations (inertia scrolling).
+const ANIMATION_TICK_RATE: Duration = Duration::from_millis(16);
 
-        let _repaint_thread = std::thread::spawn({
-            let egui_ctx = cc.egui_ctx.clone();
-            move || loop {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                egui_ctx.request_repaint();
-            }
-        });
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    app: &mut App,
+    #[cfg(feature = "media-controls")] media_controls: &mut Option<
+        blackbird_client_shared::controls::Controls,
+    >,
+    #[cfg(feature = "tray-icon")] tray_menu: &mut blackbird_client_shared::tray::TrayMenu,
+    #[cfg(feature = "tray-icon")] tray_icon: &blackbird_client_shared::tray::TrayIcon,
+) -> anyhow::Result<()> {
+    let mut last_tick = Instant::now();
+    let mut last_full_redraw = Instant::now();
 
-        #[cfg(feature = "media-controls")]
-        let controls = controls::Controls::new(
+    /// Interval between full terminal redraws to repair damage from
+    /// rogue library output (e.g. glib warnings written to stderr).
+    const FULL_REDRAW_INTERVAL: Duration = Duration::from_secs(5);
+
+    loop {
+        if app.needs_redraw {
+            // Periodically invalidate the diff buffer so the next draw
+            // rewrites every cell, repairing any terminal corruption
+            // caused by external library output (e.g. glib warnings).
+            // Unlike `terminal.clear()`, this doesn't send a clear
+            // escape sequence, so there's no visible flicker.
+            //
+            // When using the terminal's native background, swap every frame
+            // to force full redraws. Without this, ratatui's diff skips cells
+            // that haven't changed from the default state, causing artifacts
+            // during rapid scrolling.
+            if app.config.layout.use_terminal_background
+                || last_full_redraw.elapsed() >= FULL_REDRAW_INTERVAL
             {
-                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                cc.window_handle().ok().and_then(|handle| {
-                    if let RawWindowHandle::Win32(h) = handle.as_raw() {
-                        Some(h.hwnd.get() as *mut std::ffi::c_void)
-                    } else {
-                        None
+                terminal.swap_buffers();
+                last_full_redraw = Instant::now();
+            }
+            app.cover_art_cache.begin_frame();
+            terminal.draw(|frame| ui::draw(frame, app))?;
+            app.needs_redraw = false;
+        }
+        let term_size = terminal.size()?;
+        let size = Rect::new(0, 0, term_size.width, term_size.height);
+
+        // Use a fast tick rate when inertia animation is active for smooth scrolling.
+        let tick_rate =
+            if app.library.viewport.inertia_active() || app.search.viewport.inertia_active() {
+                ANIMATION_TICK_RATE
+            } else {
+                Duration::from_millis(app.config.general.tick_rate_ms)
+            };
+        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+        if event::poll(timeout)? {
+            let mut scroll_delta: i32 = 0;
+
+            // Process the first event, then drain all remaining queued events.
+            let mut process_event = |evt: Event, app: &mut App| match evt {
+                Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                    handle_key_event(app, &key);
+                    app.needs_redraw = true;
+                }
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::ScrollUp => {
+                        scroll_delta -= 1;
+                        app.needs_redraw = true;
                     }
-                })
-            },
-            logic.subscribe_to_playback_events(),
-            logic.request_handle(),
-            logic.get_state(),
-        )
-        .expect("Failed to initialize media controls");
+                    MouseEventKind::ScrollDown => {
+                        scroll_delta += 1;
+                        app.needs_redraw = true;
+                    }
+                    _ => {
+                        handle_mouse_event(app, &mouse, size);
+                        app.needs_redraw = true;
+                    }
+                },
+                Event::Resize(_, _) => {
+                    app.needs_redraw = true;
+                }
+                _ => {}
+            };
 
-        let cover_art_cache = cover_art_cache::CoverArtCache::new(cover_art_loaded_rx);
+            process_event(event::read()?, app);
+            while event::poll(Duration::ZERO)? {
+                process_event(event::read()?, app);
+            }
 
-        let ui_state = ui::initialize(cc, &config.read().unwrap());
+            // Apply coalesced scroll as a single operation.
+            if scroll_delta != 0 {
+                apply_scroll(app, scroll_delta);
+            }
+        }
 
-        #[cfg(feature = "tray-icon")]
-        let (tray_icon, tray_menu) = {
-            let current_playback_mode = logic.get_playback_mode();
-            blackbird_client_shared::tray::TrayMenu::new(icon, current_playback_mode)
-        };
-
-        let global_hotkey_manager =
-            GlobalHotKeyManager::new().expect("Failed to create global hotkey manager");
-
-        // Parse global search hotkey from config
-        let (code, modifiers) = {
-            let cfg = config.read().unwrap();
-            cfg.keybindings
-                .parse_global_hotkey(&cfg.keybindings.global_search)
-                .expect("Failed to parse global search hotkey from config")
-        };
-
-        let search_hotkey = HotKey::new(Some(modifiers), code);
-        global_hotkey_manager
-            .register(search_hotkey)
-            .expect("Failed to register global search hotkey");
-
-        // Parse global mini-library hotkey from config
-        let (code, modifiers) = {
-            let cfg = config.read().unwrap();
-            cfg.keybindings
-                .parse_global_hotkey(&cfg.keybindings.global_mini_library)
-                .expect("Failed to parse global mini-library hotkey from config")
-        };
-
-        let mini_library_hotkey = HotKey::new(Some(modifiers), code);
-        global_hotkey_manager
-            .register(mini_library_hotkey)
-            .expect("Failed to register global mini-library hotkey");
-
-        App {
-            #[cfg(feature = "tray-icon")]
-            tray_menu: std::mem::ManuallyDrop::new(tray_menu),
-            #[cfg(feature = "tray-icon")]
-            tray_icon: std::mem::ManuallyDrop::new(tray_icon),
+        if last_tick.elapsed() >= tick_rate {
+            app.tick();
+            // Delete the terminal images for cover art evicted during the
+            // tick, so a graphics-protocol terminal's image store stays
+            // bounded to what is on screen. Written after the tick (and thus
+            // after the most recent draw stopped placing that art), and
+            // harmless if the terminal already dropped the image.
+            if let Some(deletes) = app.cover_art_cache.take_pending_deletes() {
+                let backend = terminal.backend_mut();
+                let _ = backend.write_all(deletes.as_bytes());
+                let _ = backend.flush();
+            }
             #[cfg(feature = "media-controls")]
-            controls: std::mem::ManuallyDrop::new(controls),
+            if let Some(mc) = media_controls.as_mut() {
+                mc.update();
+            }
+            #[cfg(feature = "tray-icon")]
+            {
+                if let Some(action) = tray_menu.handle_menu_events(&app.logic) {
+                    match action {
+                        blackbird_client_shared::tray::TrayAction::Quit => {
+                            app.should_quit = true;
+                        }
+                        blackbird_client_shared::tray::TrayAction::Repaint
+                        | blackbird_client_shared::tray::TrayAction::FocusWindow => {}
+                    }
+                }
+                // Drain icon events to prevent accumulation.
+                let _ = tray_menu.handle_icon_events();
+                tray_menu.update(&app.logic, tray_icon);
+                blackbird_client_shared::tray::pump_platform_events();
+            }
+            last_tick = Instant::now();
+        }
 
-            config,
-            config_reload_suppressed,
-            _config_reload_thread,
-            _repaint_thread,
-            playback_to_logic_rx: logic.subscribe_to_playback_events(),
-            logic,
-            cover_art_cache,
-            lyrics_loaded_rx,
-            library_populated_rx,
-            current_window_position: None,
-            current_window_size: None,
-            ui_state,
-            shutdown_initiated: false,
-            _global_hotkey_manager: global_hotkey_manager,
-            search_hotkey,
-            mini_library_hotkey,
+        if app.should_quit {
+            return Ok(());
         }
     }
 }
-impl eframe::App for App {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Exit immediately if shutdown already initiated
-        if self.shutdown_initiated {
-            return;
+
+fn handle_key_event(app: &mut App, key: &event::KeyEvent) {
+    // Close album art overlay on Escape, q, or Enter.
+    if app.album_art_overlay.is_some() {
+        if keys::album_art_overlay_action(key).is_some() {
+            app.album_art_overlay = None;
         }
-
-        #[cfg(feature = "tray-icon")]
-        {
-            if let Some(blackbird_client_shared::tray::TrayAction::FocusWindow) =
-                self.tray_menu.handle_icon_events()
-            {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
-            }
-
-            if let Some(action) = self.tray_menu.handle_menu_events(&self.logic) {
-                match action {
-                    blackbird_client_shared::tray::TrayAction::Quit => {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                    blackbird_client_shared::tray::TrayAction::Repaint => {
-                        ctx.request_repaint();
-                    }
-                    blackbird_client_shared::tray::TrayAction::FocusWindow => {}
-                }
-            }
-        }
-
-        // Handle global hotkey events
-        while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-            if event.state == HotKeyState::Released {
-                if event.id == self.search_hotkey.id() {
-                    self.ui_state.search.open = !self.ui_state.search.open;
-                    ctx.request_repaint();
-                } else if event.id == self.mini_library_hotkey.id() {
-                    if self.ui_state.mini_library.open {
-                        self.ui_state.mini_library.open = false;
-                    } else {
-                        let playing_track = self.logic.get_playing_track_id();
-                        self.ui_state
-                            .mini_library
-                            .open_with_playing_track(playing_track);
-                    }
-                    ctx.request_repaint();
-                }
-            }
-        }
-
-        // Check for shutdown signal from Tokio thread
-        if self.logic.should_shutdown() {
-            self.shutdown_initiated = true;
-            tracing::info!("Shutdown requested, closing application");
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
-        }
-
-        #[cfg(feature = "media-controls")]
-        self.controls.update();
-        // Keep ReplayGain settings in sync with the config. Cheap: the
-        // setters are no-ops when the value is unchanged.
-        {
-            let cfg = self.config.read().unwrap();
-            self.logic
-                .set_apply_replaygain(cfg.shared.playback.apply_replaygain);
-            self.logic
-                .set_replaygain_preamp_db(cfg.shared.playback.replaygain_preamp_db);
-        }
-        self.logic.update();
-        // Reconcile against the previous frame's demand, then start a new
-        // demand frame for this frame's draw.
-        self.cover_art_cache.update(ctx, &self.logic);
-        self.cover_art_cache.begin_frame();
-
-        // Update tray menu
-        #[cfg(feature = "tray-icon")]
-        self.tray_menu.update(&self.logic, &self.tray_icon);
-
-        // Update current window size
-        ctx.input(|i| {
-            if let Some(rect) = i.viewport().outer_rect {
-                self.current_window_position = Some((rect.left() as i32, rect.top() as i32));
-            }
-            if let Some(rect) = i.viewport().inner_rect {
-                self.current_window_size = Some((rect.width() as u32, rect.height() as u32));
-            }
-        });
-
-        self.render(ctx);
+        return;
     }
 
-    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        let mut config = self.config.write().unwrap();
-        if let Some((x, y)) = self.current_window_position {
-            config.general.window_position_x = x;
-            config.general.window_position_y = y;
+    // Handle quit confirmation dialog
+    if app.quit_confirming {
+        match keys::quit_confirm_action(key) {
+            Action::Select => app.should_quit = true,
+            _ => app.quit_confirming = false,
         }
-        if let Some((width, height)) = self.current_window_size {
-            config.general.window_width = width;
-            config.general.window_height = height;
+        return;
+    }
+
+    // Handle playback mode dropdown.
+    if app.playback_mode_dropdown {
+        if let Some(action) = keys::playback_mode_dropdown_action(key) {
+            let modes = blackbird_core::PlaybackMode::ALL;
+            match action {
+                Action::Back | Action::Select => {
+                    app.playback_mode_dropdown = false;
+                }
+                Action::MoveUp => {
+                    let current = app.logic.get_playback_mode();
+                    let idx = modes.iter().position(|m| *m == current).unwrap_or(0);
+                    let prev = if idx == 0 { modes.len() - 1 } else { idx - 1 };
+                    app.logic.set_playback_mode(modes[prev]);
+                }
+                Action::MoveDown => {
+                    let current = app.logic.get_playback_mode();
+                    let idx = modes.iter().position(|m| *m == current).unwrap_or(0);
+                    let next = (idx + 1) % modes.len();
+                    app.logic.set_playback_mode(modes[next]);
+                }
+                _ => {}
+            }
         }
-        config.general.volume = self.logic.get_volume();
-        if let Some(track_and_position) = self.logic.get_playing_track_and_position() {
-            config.shared.last_playback.track_id = Some(track_and_position.track_id);
-            config.shared.last_playback.track_position_secs =
-                track_and_position.position.as_secs_f64();
+        return;
+    }
+
+    // Handle volume editing mode first
+    if app.volume_editing {
+        if let Some(action) = keys::volume_action(key) {
+            match action {
+                Action::VolumeUp => app.adjust_volume(ui::layout::VOLUME_STEP),
+                Action::VolumeDown => app.adjust_volume(-ui::layout::VOLUME_STEP),
+                Action::Back => app.volume_editing = false,
+                _ => {}
+            }
         }
-        config.shared.last_playback.playback_mode = self.logic.get_playback_mode();
-        config.shared.last_playback.sort_order = self.logic.get_sort_order();
-        config.save();
+        return;
+    }
+
+    match app.focused_panel {
+        FocusedPanel::Library => {
+            if let Some(action) = keys::library_action(key) {
+                ui::library::handle_key(app, action);
+            }
+        }
+        FocusedPanel::Search => {
+            if let Some(action) = keys::search_action(key)
+                && let Some(sa) = app.search.handle_key(&app.logic, action)
+            {
+                match sa {
+                    ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                    ui::search::SearchAction::GotoTrack(track_id) => {
+                        app.logic.set_scroll_target(&track_id);
+                        app.library.scroll_to_track = Some(track_id);
+                        app.toggle_search();
+                    }
+                }
+            }
+        }
+        FocusedPanel::Lyrics => {
+            if let Some(action) = keys::lyrics_action(key)
+                && let Some(la) = ui::lyrics::handle_key(&mut app.lyrics, &app.logic, action)
+            {
+                match la {
+                    ui::lyrics::LyricsAction::ToggleLyrics => app.toggle_lyrics(),
+                    ui::lyrics::LyricsAction::Quit => app.should_quit = true,
+                    ui::lyrics::LyricsAction::SeekRelative(secs) => app.seek_relative(secs),
+                }
+            }
+        }
+        FocusedPanel::Logs => {
+            if let Some(action) = keys::logs_action(key)
+                && let Some(la) = ui::logs::handle_key(&mut app.logs, action)
+            {
+                match la {
+                    ui::logs::LogsAction::ToggleLogs => app.toggle_logs(),
+                    ui::logs::LogsAction::Quit => app.should_quit = true,
+                }
+            }
+        }
+        FocusedPanel::Queue => {
+            if let Some(action) = keys::queue_action(key)
+                && let Some(qa) = ui::queue::handle_key(&mut app.queue, &app.logic, action)
+            {
+                match qa {
+                    ui::queue::QueueAction::ToggleQueue => app.toggle_queue(),
+                    ui::queue::QueueAction::Quit => app.should_quit = true,
+                }
+            }
+        }
+        FocusedPanel::Settings => {
+            if let Some(action) = keys::settings_action(key, app.settings.editing) {
+                let (settings_action, server_changed) =
+                    ui::settings::handle_key(&mut app.settings, &mut app.config, action);
+                if server_changed {
+                    app.config.save();
+                    app.logic.reload_library(
+                        app.config.server.base_url.clone(),
+                        app.config.server.username.clone(),
+                        app.config.server.password.clone(),
+                        app.config.server.transcode,
+                    );
+                }
+                // Config changes are applied in-memory for live preview;
+                // disk save is deferred to settings exit or app exit.
+                if let Some(sa) = settings_action {
+                    match sa {
+                        ui::settings::SettingsAction::ToggleSettings => {
+                            app.config.save();
+                            app.toggle_settings();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
+    // Compute layout areas matching ui::draw
+    let main = ui::layout::split_main(size);
+
+    let now_playing_area = main.now_playing;
+    let scrub_area = main.scrub_bar;
+    let help_bar_area = main.help_bar;
+
+    let x = mouse.column;
+    let y = mouse.row;
+
+    // Compute the content layout (including optional lyrics sidebar) matching
+    // ui::draw, so mouse hit-testing uses the same rects.
+    let is_loading = !app.logic.has_loaded_all_tracks();
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
+    let content_layout = if show_sidebar {
+        ui::layout::split_content_with_sidebar(
+            main.content,
+            lyrics_display,
+            app.config.layout.lyrics_sidebar_width,
+        )
+    } else {
+        ui::layout::ContentLayout {
+            main: main.content,
+            lyrics_sidebar: None,
+            lyrics_border: None,
+        }
+    };
+    let library_area = content_layout.main;
+
+    // Check whether the cursor is over the inline lyrics overlay so we can
+    // block interactions that would otherwise reach the library underneath.
+    // The inline overlay is only shown when lyrics_display is Inline.
+    let over_inline_lyrics = lyrics_display
+        == blackbird_client_shared::config::LyricsDisplay::Inline
+        && app.lyrics.shared.has_synced_lyrics()
+        && ui::layout::inline_lyrics_overlay(content_layout.main)
+            .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+
+    // Check whether the cursor is over the lyrics sidebar.
+    let over_lyrics_sidebar = content_layout
+        .lyrics_sidebar
+        .is_some_and(|r| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height);
+
+    // Check whether the cursor is over the lyrics sidebar border (drag handle).
+    // The border is 1 column wide, so we add tolerance toward the sidebar side
+    // to make it easier to grab. Tolerance extends away from the main content
+    // so it doesn't interfere with the library's scrollbar.
+    let over_lyrics_border = content_layout.lyrics_border.is_some_and(|r| {
+        let tol = ui::layout::LYRICS_SIDEBAR_DRAG_TOLERANCE;
+        let is_right_sidebar =
+            lyrics_display == blackbird_client_shared::config::LyricsDisplay::Right;
+        // Right sidebar: border is to the left of the sidebar, so tolerance
+        // extends right (into the sidebar, away from the library scrollbar).
+        // Left sidebar: border is to the right of the sidebar, so tolerance
+        // extends left (into the sidebar, away from the library scrollbar).
+        let (x_start, x_end) = if is_right_sidebar {
+            (r.x, r.x + r.width + tol)
+        } else {
+            (r.x.saturating_sub(tol), r.x + r.width)
+        };
+        y >= r.y && y < r.y + r.height && x >= x_start && x < x_end
+    });
+
+    match mouse.kind {
+        MouseEventKind::Moved => {
+            // Suppress hover position when cursor is over the overlay or sidebar
+            // so library rows underneath don't get underlined.
+            if over_inline_lyrics || over_lyrics_sidebar || over_lyrics_border {
+                app.mouse_position = None;
+            } else {
+                app.mouse_position = Some((x, y));
+            }
+        }
+        MouseEventKind::Down(MouseButton::Left) => {
+            app.mouse_position = Some((x, y));
+
+            // --- Playback mode dropdown (handled before other areas) ---
+            if app.playback_mode_dropdown {
+                let dropdown_rect = ui::now_playing::playback_mode_dropdown_rect(size);
+                let inner = Rect::new(
+                    dropdown_rect.x + 1,
+                    dropdown_rect.y + 1,
+                    dropdown_rect.width.saturating_sub(2),
+                    dropdown_rect.height.saturating_sub(2),
+                );
+                if x >= inner.x
+                    && x < inner.x + inner.width
+                    && y >= inner.y
+                    && y < inner.y + inner.height
+                {
+                    let idx = (y - inner.y) as usize;
+                    let modes = blackbird_core::PlaybackMode::ALL;
+                    if idx < modes.len() {
+                        app.logic.set_playback_mode(modes[idx]);
+                        app.playback_mode_dropdown = false;
+                    }
+                } else {
+                    app.playback_mode_dropdown = false;
+                }
+                return;
+            }
+
+            // --- Album art overlay (handled first, on top of everything) ---
+            if app.album_art_overlay.is_some() {
+                let aspect_ratio = app
+                    .cover_art_cache
+                    .get_aspect_ratio(app.album_art_overlay.as_ref().map(|o| &o.cover_art_id));
+                let rect = ui::layout::overlay_rect(size, aspect_ratio);
+                if ui::album_art_overlay::is_x_button_click(size, aspect_ratio, x, y) {
+                    app.album_art_overlay = None;
+                } else if x >= rect.x
+                    && x < rect.x + rect.width
+                    && y >= rect.y
+                    && y < rect.y + rect.height
+                {
+                    // Click inside overlay but not on X → ignore
+                } else {
+                    app.album_art_overlay = None;
+                }
+                return;
+            }
+
+            // --- Now Playing area ---
+            if y >= now_playing_area.y && y < now_playing_area.y + now_playing_area.height {
+                ui::now_playing::handle_mouse_click(app, now_playing_area, x, y);
+                return;
+            }
+
+            // --- Scrub bar / Volume area ---
+            if y == scrub_area.y && x >= scrub_area.x && x < scrub_area.x + scrub_area.width {
+                ui::handle_scrub_volume_click(app, scrub_area, x);
+                app.scrub_dragging = true;
+                return;
+            }
+
+            // --- Lyrics sidebar border (start drag-to-resize) ---
+            if over_lyrics_border {
+                app.lyrics_sidebar_dragging = true;
+                return;
+            }
+
+            // --- Lyrics sidebar content (click to focus + seek) ---
+            if over_lyrics_sidebar && let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                // Focus the sidebar if not already focused, mirroring
+                // toggle_lyrics for the sidebar case (no reset_view —
+                // preserve scroll position).
+                if app.focused_panel != FocusedPanel::Lyrics {
+                    app.focus_lyrics_panel(false);
+                }
+                handle_sidebar_click(app, sidebar_rect, x, y);
+                return;
+            }
+
+            // --- Inline lyrics overlay (click → switch to sidebar mode) ---
+            if over_inline_lyrics {
+                app.config.layout.base.lyrics_display =
+                    ui::lyrics::inline_overlay_click_switches_to_sidebar();
+                app.config.save();
+                return;
+            }
+
+            // --- Library area ---
+            if y >= library_area.y
+                && y < library_area.y + library_area.height
+                && x >= library_area.x
+                && x < library_area.x + library_area.width
+            {
+                // When the sidebar is focused, clicking the library area
+                // switches focus to the library and handles the click as a
+                // library click (play track, star, etc.). When the full lyrics
+                // panel is active (no sidebar), the lyrics are rendered in
+                // this area, so clicks route to the lyrics handler.
+                if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
+                    app.focused_panel = FocusedPanel::Library;
+                    ui::library::handle_mouse_click(app, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Library {
+                    ui::library::handle_mouse_click(app, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Search {
+                    app.search.handle_mouse_click(library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Lyrics {
+                    ui::lyrics::handle_mouse_click(
+                        &mut app.lyrics,
+                        &app.logic,
+                        &app.config.style,
+                        library_area,
+                        x,
+                        y,
+                    );
+                } else if app.focused_panel == FocusedPanel::Queue {
+                    ui::queue::handle_mouse_click(&mut app.queue, &app.logic, library_area, x, y);
+                } else if app.focused_panel == FocusedPanel::Settings {
+                    let server_changed = ui::settings::handle_mouse_click(
+                        &mut app.settings,
+                        &mut app.config,
+                        library_area,
+                        x,
+                        y,
+                    );
+                    if server_changed {
+                        app.config.save();
+                        app.logic.reload_library(
+                            app.config.server.base_url.clone(),
+                            app.config.server.username.clone(),
+                            app.config.server.password.clone(),
+                            app.config.server.transcode,
+                        );
+                    }
+                }
+                return;
+            }
+
+            // --- Help bar area ---
+            if y >= help_bar_area.y && y < help_bar_area.y + help_bar_area.height {
+                handle_help_bar_click(app, x);
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            // Commit the scrub bar position on release with an immediate
+            // (non-debounced) seek so it always takes effect.
+            if app.scrub_dragging
+                && let Some(preview) = app.scrub_preview_ratio
+                && let Some(details) = app.logic.get_track_display_details()
+            {
+                let seek_pos = std::time::Duration::from_secs_f32(
+                    details.track_duration.as_secs_f32() * preview,
+                );
+                app.logic.seek_current_immediate(seek_pos);
+            }
+            app.scrub_dragging = false;
+            app.scrub_preview_ratio = None;
+            // Save config if the sidebar was being resized.
+            if app.lyrics_sidebar_dragging {
+                app.lyrics_sidebar_dragging = false;
+                app.config.save();
+            }
+            ui::library::handle_mouse_up(app);
+            if app.focused_panel == FocusedPanel::Search
+                && let Some(sa) = app.search.handle_mouse_up(&app.logic)
+            {
+                match sa {
+                    ui::search::SearchAction::ToggleSearch => app.toggle_search(),
+                    ui::search::SearchAction::GotoTrack(track_id) => {
+                        app.logic.set_scroll_target(&track_id);
+                        app.library.scroll_to_track = Some(track_id);
+                        app.toggle_search();
+                    }
+                }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            app.mouse_position = Some((x, y));
+
+            // Continue scrub bar / volume drag regardless of Y position.
+            if app.scrub_dragging {
+                let clamped_x = x.clamp(scrub_area.x, scrub_area.x + scrub_area.width - 1);
+                ui::handle_scrub_volume_click(app, scrub_area, clamped_x);
+                return;
+            }
+
+            // Continue lyrics sidebar border drag.
+            if app.lyrics_sidebar_dragging {
+                if let Some(sidebar_rect) = content_layout.lyrics_sidebar {
+                    let is_left =
+                        lyrics_display == blackbird_client_shared::config::LyricsDisplay::Left;
+                    // For a left sidebar, the outer edge is sidebar_rect.x.
+                    // For a right sidebar, the outer edge is sidebar_rect.x + sidebar_rect.width - 1.
+                    let sidebar_outer_x = if is_left {
+                        sidebar_rect.x
+                    } else {
+                        sidebar_rect.x + sidebar_rect.width
+                    };
+                    let content_width = main.content.width;
+                    let max_width = (content_width / 2).max(ui::layout::LYRICS_SIDEBAR_MIN_WIDTH);
+                    let new_width = ui::lyrics::compute_sidebar_width_from_drag(
+                        x,
+                        sidebar_outer_x,
+                        is_left,
+                        ui::layout::LYRICS_SIDEBAR_MIN_WIDTH,
+                        max_width,
+                    );
+                    app.config.layout.lyrics_sidebar_width = new_width;
+                }
+                return;
+            }
+
+            if app.focused_panel == FocusedPanel::Library {
+                ui::library::handle_mouse_drag(app, library_area, x, y);
+            } else if app.focused_panel == FocusedPanel::Search {
+                app.search.handle_mouse_drag(library_area, x, y);
+            }
+        }
+        // ScrollUp and ScrollDown are handled by the coalesced scroll path
+        // in run_app (via apply_scroll), not here.
+        _ => {}
+    }
+}
+
+/// Handle a click in the lyrics sidebar — seek to the clicked line's timestamp.
+/// Delegates to the unified `handle_mouse_click` which uses the back-mapping
+/// approach shared by both views.
+fn handle_sidebar_click(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
+    ui::lyrics::handle_mouse_click(
+        &mut app.lyrics,
+        &app.logic,
+        &app.config.style,
+        sidebar_area,
+        x,
+        y,
+    );
+}
+
+fn handle_help_bar_click(app: &mut App, x: u16) {
+    let Some(&(_, _, action)) = app
+        .help_bar_items
+        .iter()
+        .find(|(x_start, x_end, _)| x >= *x_start && x < *x_end)
+    else {
+        return;
+    };
+
+    match action {
+        Action::Quit => {
+            // In settings, "q" closes the panel rather than triggering quit.
+            if app.focused_panel == FocusedPanel::Settings {
+                app.config.save();
+                app.toggle_settings();
+            } else {
+                app.quit_confirming = true;
+            }
+        }
+        Action::PlayPause => app.logic.toggle_current(),
+        Action::Next => app.logic.next(),
+        Action::Previous => app.logic.previous(),
+        Action::NextGroup => app.logic.next_group(),
+        Action::PreviousGroup => app.logic.previous_group(),
+        Action::Stop => app.logic.stop_current(),
+        Action::Search => app.toggle_search(),
+        Action::Lyrics => app.toggle_lyrics(),
+        Action::Queue => app.toggle_queue(),
+        Action::Logs => app.toggle_logs(),
+        Action::VolumeMode => app.volume_editing = !app.volume_editing,
+        Action::Star => {
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                let state = app.logic.get_state();
+                let starred = state
+                    .read()
+                    .unwrap()
+                    .library
+                    .track_map
+                    .get(&track_id)
+                    .is_some_and(|t| t.starred);
+                app.logic.set_track_starred(&track_id, !starred);
+                app.library.mark_dirty();
+            }
+        }
+        Action::SeekForward => app.seek_relative(ui::layout::SEEK_STEP_SECS),
+        Action::SeekBackward => app.seek_relative(-ui::layout::SEEK_STEP_SECS),
+        Action::GotoPlaying => {
+            if let Some(track_id) = app.logic.get_playing_track_id() {
+                app.logic.set_scroll_target(&track_id);
+                app.library.scroll_to_track = Some(track_id);
+            }
+        }
+        Action::CyclePlaybackMode(dir) => app.cycle_playback_mode(dir),
+        Action::ToggleSortOrder(dir) => {
+            let scroll_target = app.library.selected_track_id().cloned();
+            let next = blackbird_client_shared::cycle(
+                &bc::SortOrder::ALL,
+                app.logic.get_sort_order(),
+                dir,
+            );
+            app.logic.set_sort_order(next);
+            app.library.mark_dirty();
+            app.library.scroll_to_track = scroll_target;
+        }
+        Action::Settings => app.toggle_settings(),
+        Action::Select if app.focused_panel == FocusedPanel::Library => {
+            ui::library::handle_key(app, Action::Select);
+        }
+        Action::Back if app.focused_panel != FocusedPanel::Library => {
+            app.focused_panel = FocusedPanel::Library;
+        }
+        _ => {}
+    }
+}
+
+/// Applies a coalesced scroll delta to the currently focused panel.
+fn apply_scroll(app: &mut App, scroll_delta: i32) {
+    let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
+    let direction = scroll_delta.signum();
+
+    let lyrics_display = app.config.layout.base.lyrics_display;
+    let is_loading = !app.logic.has_loaded_all_tracks();
+    let sidebar_visible = lyrics_display.is_sidebar() && !is_loading;
+
+    match app.focused_panel {
+        FocusedPanel::Library => {
+            ui::library::handle_scroll(app, direction, steps);
+        }
+        FocusedPanel::Lyrics if sidebar_visible => {
+            // When the sidebar is focused, scroll the shared Scroller rather
+            // than moving the selection cursor. Guard against stale
+            // total_rows (0 before the first draw renders lyrics) to avoid
+            // silently swallowing the scroll and setting user_scrolled in
+            // a stuck state.
+            if app.lyrics.total_rows > 0 {
+                app.lyrics.user_scrolled = true;
+                app.lyrics
+                    .scroller
+                    .apply_wheel(direction, steps, app.lyrics.total_rows);
+            }
+        }
+        FocusedPanel::Lyrics => {
+            ui::lyrics::move_selection(
+                &mut app.lyrics,
+                app.logic.get_playing_position(),
+                direction * steps as i32,
+            );
+        }
+        FocusedPanel::Queue => {
+            ui::queue::scroll_selection(&mut app.queue, &app.logic, direction * steps as i32);
+        }
+        FocusedPanel::Logs => {
+            if direction < 0 {
+                app.logs.scroll_offset = app.logs.scroll_offset.saturating_sub(steps);
+            } else {
+                let log_len = app.logs.log_buffer.len();
+                if log_len > 0 {
+                    app.logs.scroll_offset = (app.logs.scroll_offset + steps).min(log_len - 1);
+                }
+            }
+        }
+        FocusedPanel::Search => {
+            app.search.handle_scroll(direction, steps);
+        }
+        FocusedPanel::Settings => {
+            ui::settings::scroll_selection(&mut app.settings, direction * steps as i32);
+        }
+    }
+}
+
+/// Create a hidden Win32 window to act as a proxy for SMTC media controls.
+/// Console windows don't support SMTC, so we create our own invisible window.
+#[cfg(all(target_os = "windows", feature = "media-controls"))]
+fn create_hidden_media_window() -> Option<*mut std::ffi::c_void> {
+    use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, RegisterClassW, WINDOW_EX_STYLE, WNDCLASSW,
+        WS_OVERLAPPEDWINDOW,
+    };
+    use windows::core::w;
+
+    unsafe extern "system" fn wnd_proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+        let hinstance = HINSTANCE(instance.0);
+        let class_name = w!("BlackbirdMediaHidden");
+
+        let wc = WNDCLASSW {
+            lpfnWndProc: Some(wnd_proc),
+            hInstance: hinstance,
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+        RegisterClassW(&wc);
+
+        let hwnd = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            class_name,
+            w!("Blackbird"),
+            WS_OVERLAPPEDWINDOW,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            Some(hinstance),
+            None,
+        )
+        .ok()?;
+
+        Some(hwnd.0)
     }
 }

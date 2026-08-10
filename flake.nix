@@ -20,9 +20,12 @@
         "aarch64-linux"
       ];
 
-      # System libraries needed to both build and run the GUI client. Several of
-      # these (libGL, Wayland, libxkbcommon) are loaded at runtime via dlopen, so
-      # they must also be reachable through LD_LIBRARY_PATH for the final binary.
+      # System libraries needed to both build and run the blackbird TUI client.
+      # Several of these (Wayland, libxkbcommon) are loaded at runtime via
+      # dlopen, so they must also be reachable through LD_LIBRARY_PATH for the
+      # final binary. xdotool provides libxdo, which muda's menu implementation
+      # links against (transitively via tray-icon), so it is required at link
+      # time even though the retired GUI that directly used it is gone.
       systemDeps =
         pkgs: with pkgs; [
           alsa-lib.dev
@@ -64,6 +67,7 @@
             outputHashes = {
               "cpal-0.18.0" = "sha256-s7O4jeM344Gk5+/4SuQSHkSZnEqghnYL1beuHn89SK8=";
               "rodio-0.22.2" = "sha256-8eUYtpNaawlaMMf908si+h9P7E5D9qsYuKW1+QCSwZw=";
+              "ratatui-image-11.0.6" = "sha256-0n+L0cEY3v2E7tFTSj4NbHL5EKtBfYuq1BkLa+6b+U0=";
             };
           };
 
@@ -74,13 +78,11 @@
             rm -f .cargo/config.toml
           '';
 
-          # The workspace's default-members only includes the GUI client, so
-          # build the TUI explicitly as well.
+          # A single-package build: the workspace's default member is the
+          # blackbird TUI client.
           cargoBuildFlags = [
             "-p"
             "blackbird"
-            "-p"
-            "blackbird-tui"
           ];
 
           nativeBuildInputs = with pkgs; [
@@ -93,16 +95,16 @@
           # in the build sandbox.
           doCheck = false;
 
-          # Expose the dlopen-ed libraries to both binaries at runtime.
+          # Expose the dlopen-ed libraries to the binary at runtime.
           postInstall = ''
-            for bin in blackbird blackbird-tui; do
+            for bin in blackbird; do
               wrapProgram $out/bin/$bin \
                 --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath deps}
             done
           '';
 
           meta = {
-            description = "A subsonic music client (GUI and TUI)";
+            description = "A subsonic music client (TUI)";
             homepage = "https://github.com/philpax/blackbird";
             mainProgram = "blackbird";
             platforms = supportedSystems;

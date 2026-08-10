@@ -10,7 +10,6 @@ members = [
     "blackbird-spotcheck",
     "blackbird-state",
     "blackbird-subsonic",
-    "blackbird-tui",
 ]
 resolver = "2"
 default-members = ["blackbird"]
@@ -21,13 +20,8 @@ chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.40", features = ["derive"] }
 crossterm = "0.29"
 data-encoding = "2.8.0"
-eframe = "0.32.0"
-egui = "0.32.0"
-egui-phosphor = { version = "0.10.0", features = ["regular", "fill"] }
-egui_extras = { version = "0.32.0", features = ["image"] }
 etcetera = "0.11"
 futures = "0.3"
-global-hotkey = "0.6"
 gtk = "0.18"
 icu_collator = "2.0.0"
 icu_normalizer = "2.0"
@@ -43,7 +37,6 @@ md5 = "0.7.0"
 rand = "0.9.0"
 ratatui = "0.30"
 ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"] }
-raw-window-handle = "0.6"
 reqwest = { version = "0.12.12", default-features = false, features = ["rustls-tls"] }
 rodio = { git = "https://github.com/RustAudio/rodio.git" }
 sanitize-filename = "0.6.0"
@@ -67,7 +60,7 @@ windows = { version = "0.62", features = [
 
 # philpax/ratatui-image fork adding kitty image deletion (`delete_image_sequence`)
 # and `Picker::is_tmux()`, used by the TUI to bound the terminal's image store.
-# See blackbird-tui/src/cover_art/mod.rs.
+# See blackbird/src/cover_art/mod.rs.
 [patch.crates-io]
 ratatui-image = { git = "https://github.com/philpax/ratatui-image", branch = "delete-image-sequence" }
 

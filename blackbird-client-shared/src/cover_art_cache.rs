@@ -1,4 +1,4 @@
-//! Cover art cache shared between the egui and TUI clients.
+//! Cover art cache shared between the blackbird clients.
 //!
 //! The cache is demand-driven. Each draw, the client starts a new demand
 //! frame with [`CoverArtCache::begin_frame`] and declares the art it wants

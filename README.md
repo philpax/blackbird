@@ -1,6 +1,6 @@
 # blackbird
 
-![blackbird as of 2025-10-06](./docs/2025-10-06.png)
+The current client is a terminal UI. A screenshot is pending; the retired egui GUI client was removed in favor of it.
 
 `blackbird` is a Subsonic protocol client by me, for me. I don't expect anyone to match my kind of freak, but I open-source most of my software, so here it is. It's designed to get as close to my original foobar2000 theme as possible, while being at least somewhat practical to use.
 
@@ -27,6 +27,8 @@ When I was a younger lad, I used to main foobar2000. This is what my highly-cust
 | Config (`config.toml`) | `~/.config/blackbird/` | `~/Library/Application Support/me.philpax.blackbird/` | `%APPDATA%/philpax/blackbird/config/` |
 | Cache (album art) | `~/.cache/blackbird/` | `~/Library/Caches/me.philpax.blackbird/` | `%LOCALAPPDATA%/philpax/blackbird/cache/` |
 | Data (logs) | `~/.local/share/blackbird/` | `~/Library/Application Support/me.philpax.blackbird/` | `%APPDATA%/philpax/blackbird/data/` |
+
+The client writes its log to the data directory as `blackbird.log`. Any pre-existing `blackbird-gui.log` files from the retired GUI client are orphaned by this change and can be deleted manually.
 
 ---
 

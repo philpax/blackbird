@@ -1,223 +1,205 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ui;
-
+/// Config is read from `config.toml`.
+/// Unknown fields (keybindings from the retired GUI, GUI style fields, etc.) are
+/// preserved via `#[serde(flatten)]` catch-all fields, allowing safe
+/// roundtripping between clients.
+///
+/// Fields from the shared config (`server`, `last_playback`, `layout`) are declared
+/// explicitly here rather than via `#[serde(flatten)]` so that `layout` can be replaced
+/// with the TUI-specific [`Layout`] wrapper.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(default)]
 pub struct Config {
     #[serde(default)]
     pub general: General,
-    #[serde(flatten)]
-    pub shared: blackbird_client_shared::config::Config,
     #[serde(default)]
-    pub style: ui::Style,
+    pub style: blackbird_client_shared::style::Style,
+    /// Layout settings, extending the shared layout with TUI-specific fields.
     #[serde(default)]
-    pub keybindings: Keybindings,
-    /// Catch-all for unknown top-level sections (e.g. TUI-specific fields).
+    pub layout: Layout,
+    /// Server connection settings.
+    #[serde(default)]
+    pub server: blackbird_shared::config::Server,
+    /// Last playback state, persisted across sessions.
+    #[serde(default)]
+    pub last_playback: blackbird_client_shared::config::LastPlayback,
+    /// Playback-related settings shared across clients.
+    #[serde(default)]
+    pub playback: blackbird_client_shared::config::Playback,
+    /// Catch-all for unknown top-level sections (e.g. keybindings from GUI).
     #[serde(flatten)]
     pub extra: toml::Table,
 }
+
+/// Controls how album art is rendered in the TUI.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AlbumArtProtocol {
+    /// Use a graphics protocol (Kitty/iTerm2/Sixel) if detected, otherwise
+    /// fall back to the existing half-block rendering.
+    #[default]
+    Auto,
+    /// Always use ratatui-image, which uses a graphics protocol if detected
+    /// and otherwise renders full-resolution half-blocks (higher fidelity
+    /// than the existing quantized 4×4 / 16-row grids).
+    Image,
+    /// Always use the existing hand-rolled half-block rendering.
+    Halfblock,
+}
+
+/// TUI layout configuration, extending the shared [`blackbird_client_shared::config::Layout`]
+/// with TUI-specific fields. Unknown fields from other clients are preserved via the catch-all.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Layout {
+    /// Use the terminal's native background color instead of the configured one.
+    #[serde(default)]
+    pub use_terminal_background: bool,
+    /// Controls how album art is rendered (graphics protocol vs. half-blocks).
+    #[serde(default)]
+    pub album_art_protocol: AlbumArtProtocol,
+    /// Width of the lyrics sidebar in terminal columns, when visible.
+    #[serde(default = "default_lyrics_sidebar_width")]
+    pub lyrics_sidebar_width: u16,
+    /// Shared layout settings.
+    #[serde(flatten)]
+    pub base: blackbird_client_shared::config::Layout,
+    /// Catch-all for unknown fields from other clients.
+    #[serde(flatten)]
+    pub extra: toml::Table,
+}
+impl Default for Layout {
+    fn default() -> Self {
+        Self {
+            use_terminal_background: false,
+            album_art_protocol: AlbumArtProtocol::default(),
+            lyrics_sidebar_width: default_lyrics_sidebar_width(),
+            base: blackbird_client_shared::config::Layout::default(),
+            extra: toml::Table::new(),
+        }
+    }
+}
+
+fn default_lyrics_sidebar_width() -> u16 {
+    30
+}
+
 impl blackbird_shared::config::ConfigFile for Config {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct General {
-    pub repaint_secs: f32,
-    pub window_position_x: i32,
-    pub window_position_y: i32,
-    pub window_width: u32,
-    pub window_height: u32,
     pub volume: f32,
-    pub incremental_search_timeout_ms: u64,
-    /// Catch-all for unknown fields (e.g. TUI-specific settings like tick_rate_ms).
+    pub tick_rate_ms: u64,
+    /// Catch-all for unknown fields (e.g. GUI-specific window settings).
     #[serde(flatten)]
     pub extra: toml::Table,
 }
 impl Default for General {
     fn default() -> Self {
         Self {
-            repaint_secs: 1.0,
-            window_position_x: 0,
-            window_position_y: 0,
-            window_width: 640,
-            window_height: 1280,
             volume: 1.0,
-            incremental_search_timeout_ms: 5000,
+            tick_rate_ms: 100,
             extra: toml::Table::new(),
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct Keybindings {
-    /// Global hotkey to toggle search window (works even when app is not focused).
-    /// Format: "Ctrl+Alt+Shift+F" where modifiers are Ctrl, Alt, Shift, Super, Win, or Cmd.
-    /// "Cmd" is platform-aware: maps to Command on macOS, Ctrl on Linux/Windows.
-    /// Key can be a letter (A-Z) or function key (F1-F12).
-    pub global_search: String,
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    /// Global hotkey to toggle mini-library window (works even when app is not focused).
-    /// Shows a smaller library view centered on the currently playing track.
-    pub global_mini_library: String,
-
-    /// Local keybindings (work only when app window is focused).
-    /// Format: "Cmd+F" where Cmd is Ctrl on Linux/Windows and Command on macOS.
-    pub local_search: String,
-    pub local_lyrics: String,
-
-    /// Mouse button bindings for track navigation.
-    /// Valid values: "Extra1" (button 4), "Extra2" (button 5), or "None" to disable.
-    pub mouse_previous_track: String,
-    pub mouse_next_track: String,
-}
-
-impl Default for Keybindings {
-    fn default() -> Self {
-        Self {
-            global_search: "Cmd+Alt+Shift+F".to_string(),
-            global_mini_library: "Ctrl+Alt+Shift+G".to_string(),
-            local_search: "Cmd+F".to_string(),
-            local_lyrics: "Cmd+L".to_string(),
-            mouse_previous_track: "Extra1".to_string(),
-            mouse_next_track: "Extra2".to_string(),
-        }
-    }
-}
-
-impl Keybindings {
-    /// Parse a global hotkey string into (Code, Modifiers) for global-hotkey crate.
-    pub fn parse_global_hotkey(
-        &self,
-        binding: &str,
-    ) -> Option<(
-        global_hotkey::hotkey::Code,
-        global_hotkey::hotkey::Modifiers,
-    )> {
-        use global_hotkey::hotkey::{Code, Modifiers};
-
-        let parts: Vec<&str> = binding.split('+').collect();
-        if parts.is_empty() {
-            return None;
-        }
-
-        let mut modifiers = Modifiers::empty();
-        let key_str = parts.last()?;
-
-        for part in parts.iter().take(parts.len() - 1) {
-            match part.trim() {
-                "Ctrl" => modifiers |= Modifiers::CONTROL,
-                "Alt" => modifiers |= Modifiers::ALT,
-                "Shift" => modifiers |= Modifiers::SHIFT,
-                "Super" | "Win" => modifiers |= Modifiers::SUPER,
-                // "Cmd" is platform-aware: Super on macOS, Control on Linux/Windows.
-                "Cmd" => {
-                    #[cfg(target_os = "macos")]
-                    {
-                        modifiers |= Modifiers::SUPER;
-                    }
-                    #[cfg(not(target_os = "macos"))]
-                    {
-                        modifiers |= Modifiers::CONTROL;
-                    }
-                }
-                _ => return None,
-            }
-        }
-
-        let code = match key_str.trim() {
-            "A" => Code::KeyA,
-            "B" => Code::KeyB,
-            "C" => Code::KeyC,
-            "D" => Code::KeyD,
-            "E" => Code::KeyE,
-            "F" => Code::KeyF,
-            "G" => Code::KeyG,
-            "H" => Code::KeyH,
-            "I" => Code::KeyI,
-            "J" => Code::KeyJ,
-            "K" => Code::KeyK,
-            "L" => Code::KeyL,
-            "M" => Code::KeyM,
-            "N" => Code::KeyN,
-            "O" => Code::KeyO,
-            "P" => Code::KeyP,
-            "Q" => Code::KeyQ,
-            "R" => Code::KeyR,
-            "S" => Code::KeyS,
-            "T" => Code::KeyT,
-            "U" => Code::KeyU,
-            "V" => Code::KeyV,
-            "W" => Code::KeyW,
-            "X" => Code::KeyX,
-            "Y" => Code::KeyY,
-            "Z" => Code::KeyZ,
-            "F1" => Code::F1,
-            "F2" => Code::F2,
-            "F3" => Code::F3,
-            "F4" => Code::F4,
-            "F5" => Code::F5,
-            "F6" => Code::F6,
-            "F7" => Code::F7,
-            "F8" => Code::F8,
-            "F9" => Code::F9,
-            "F10" => Code::F10,
-            "F11" => Code::F11,
-            "F12" => Code::F12,
-            _ => return None,
-        };
-
-        Some((code, modifiers))
+    #[test]
+    fn config_roundtrip() {
+        let config = Config::default();
+        let toml_str = toml::to_string(&config).unwrap();
+        // Should not contain duplicate [layout] sections.
+        assert_eq!(
+            toml_str.matches("[layout]").count(),
+            1,
+            "expected exactly one [layout] section, got:\n{toml_str}"
+        );
+        // Should roundtrip cleanly.
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config, parsed);
     }
 
-    /// Parse a local keybinding string into egui::Key.
-    pub fn parse_local_key(&self, binding: &str) -> Option<egui::Key> {
-        let parts: Vec<&str> = binding.split('+').collect();
-        let key_str = parts.last()?.trim();
+    #[test]
+    fn config_roundtrip_with_tui_field() {
+        let mut config = Config::default();
+        config.layout.use_terminal_background = true;
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(toml_str.contains("use_terminal_background = true"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config, parsed);
+    }
 
-        match key_str {
-            "A" => Some(egui::Key::A),
-            "B" => Some(egui::Key::B),
-            "C" => Some(egui::Key::C),
-            "D" => Some(egui::Key::D),
-            "E" => Some(egui::Key::E),
-            "F" => Some(egui::Key::F),
-            "G" => Some(egui::Key::G),
-            "H" => Some(egui::Key::H),
-            "I" => Some(egui::Key::I),
-            "J" => Some(egui::Key::J),
-            "K" => Some(egui::Key::K),
-            "L" => Some(egui::Key::L),
-            "M" => Some(egui::Key::M),
-            "N" => Some(egui::Key::N),
-            "O" => Some(egui::Key::O),
-            "P" => Some(egui::Key::P),
-            "Q" => Some(egui::Key::Q),
-            "R" => Some(egui::Key::R),
-            "S" => Some(egui::Key::S),
-            "T" => Some(egui::Key::T),
-            "U" => Some(egui::Key::U),
-            "V" => Some(egui::Key::V),
-            "W" => Some(egui::Key::W),
-            "X" => Some(egui::Key::X),
-            "Y" => Some(egui::Key::Y),
-            "Z" => Some(egui::Key::Z),
-            _ => None,
+    #[test]
+    fn config_preserves_unknown_layout_fields() {
+        let toml_str = r#"
+[layout]
+lyrics_display = "right"
+use_terminal_background = false
+some_gui_only_field = 42
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.layout.base.lyrics_display,
+            blackbird_client_shared::config::LyricsDisplay::Right
+        );
+        assert!(!config.layout.use_terminal_background);
+        // The unknown field should be preserved in the catch-all.
+        assert_eq!(
+            config.layout.extra.get("some_gui_only_field"),
+            Some(&toml::Value::Integer(42))
+        );
+        // And it roundtrips.
+        let re_serialized = toml::to_string(&config).unwrap();
+        assert!(re_serialized.contains("some_gui_only_field = 42"));
+    }
+
+    #[test]
+    fn config_roundtrip_with_album_art_protocol() {
+        for protocol in [
+            AlbumArtProtocol::Auto,
+            AlbumArtProtocol::Image,
+            AlbumArtProtocol::Halfblock,
+        ] {
+            let mut config = Config::default();
+            config.layout.album_art_protocol = protocol;
+            let toml_str = toml::to_string(&config).unwrap();
+            let parsed: Config = toml::from_str(&toml_str).unwrap();
+            assert_eq!(config, parsed, "roundtrip failed for {protocol:?}");
         }
     }
 
-    /// Check if a local keybinding requires the command modifier (Cmd on Mac, Ctrl elsewhere).
-    pub fn requires_command(&self, binding: &str) -> bool {
-        binding.contains("Cmd")
+    #[test]
+    fn config_preserves_album_art_protocol() {
+        let toml_str = r#"
+[layout]
+album_art_protocol = "image"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.album_art_protocol, AlbumArtProtocol::Image);
     }
 
-    /// Parse a mouse button string into egui::PointerButton.
-    pub fn parse_mouse_button(&self, binding: &str) -> Option<egui::PointerButton> {
-        match binding.trim() {
-            "Extra1" => Some(egui::PointerButton::Extra1),
-            "Extra2" => Some(egui::PointerButton::Extra2),
-            "None" => None,
-            _ => None,
-        }
+    #[test]
+    fn config_roundtrip_lyrics_sidebar_width() {
+        let mut config = Config::default();
+        config.layout.lyrics_sidebar_width = 42;
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(toml_str.contains("lyrics_sidebar_width = 42"));
+        let parsed: Config = toml::from_str(&toml_str).unwrap();
+        assert_eq!(config, parsed);
+    }
+
+    #[test]
+    fn config_lyrics_sidebar_width_defaults_to_30() {
+        let toml_str = r#"
+[layout]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.layout.lyrics_sidebar_width, 30);
     }
 }

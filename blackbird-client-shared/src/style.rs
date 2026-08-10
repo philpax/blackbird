@@ -1,4 +1,4 @@
-//! Style definitions shared between the egui and TUI clients.
+//! Style definitions shared between the blackbird clients.
 
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};

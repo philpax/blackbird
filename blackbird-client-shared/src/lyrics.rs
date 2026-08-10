@@ -25,7 +25,7 @@ pub fn find_current_lyrics_line(
         .unwrap_or(0)
 }
 
-/// Shared lyrics data state used by both the egui and TUI clients.
+/// Shared lyrics data state used by the blackbird clients.
 ///
 /// Centralizes lyrics data management and fetch-decision logic so that both
 /// clients share the same behavior for when to request lyrics and how to

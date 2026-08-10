@@ -1,1 +1,0 @@
-Thanks to <https://github.com/satbyy/go-noto-universal> for the font!

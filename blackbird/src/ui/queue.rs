@@ -1,163 +1,280 @@
-use egui::{Align2, Color32, Context, Label, RichText, ScrollArea, Sense, Vec2, Vec2b, Window};
-
-use blackbird_client_shared::{Direction, cycle};
-
-use crate::{
-    bc,
-    ui::{style, style::StyleExt},
+use blackbird_client_shared::{self, style as shared_style};
+use blackbird_core::{self as bc, TrackDisplayDetails, blackbird_state::TrackId};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, List, ListItem, ListState},
 };
+
+use crate::keys::Action;
+
+use super::StyleExt;
+
+pub enum QueueAction {
+    ToggleQueue,
+    Quit,
+}
+
+pub struct QueueState {
+    /// Keyboard-selected line index. `None` = auto-follow current track.
+    pub selected_index: Option<usize>,
+    pub scroll_offset: usize,
+}
+
+impl QueueState {
+    pub fn new() -> Self {
+        Self {
+            selected_index: None,
+            scroll_offset: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.selected_index = None;
+        self.scroll_offset = 0;
+    }
+}
 
 /// Number of tracks to show before and after the current track in the queue window.
 const QUEUE_RADIUS: usize = 50;
 
-pub fn ui(logic: &mut bc::Logic, ctx: &Context, style: &style::Style, queue_open: &mut bool) {
-    // Handle mode cycling while the queue window is open.
-    ctx.input(|i| {
-        for event in &i.events {
-            if let egui::Event::Key {
-                key: egui::Key::M,
-                pressed: true,
-                modifiers,
-                ..
-            } = event
-                && !modifiers.command
-                && !modifiers.alt
-                && !modifiers.ctrl
-            {
-                let direction = if modifiers.shift {
-                    Direction::Backward
-                } else {
-                    Direction::Forward
-                };
-                let next = cycle(&bc::PlaybackMode::ALL, logic.get_playback_mode(), direction);
-                logic.set_playback_mode(next);
-            }
-        }
-    });
+pub fn draw(
+    frame: &mut Frame,
+    queue_state: &QueueState,
+    style: &shared_style::Style,
+    logic: &bc::Logic,
+    area: Rect,
+) {
+    let mode = logic.get_playback_mode();
+    let block = Block::default()
+        .title(format!(" Queue [{}] ", mode))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(style.album_color()));
 
-    // Gather queue data before rendering to avoid holding the state lock during UI rendering.
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
     let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
 
-    struct TrackInfo {
-        track_id: bc::blackbird_state::TrackId,
-        label: String,
-        duration_str: String,
+    if current.is_none() {
+        let msg = ratatui::widgets::Paragraph::new("No tracks in the queue.")
+            .style(Style::default().fg(style.track_duration_color()));
+        frame.render_widget(msg, inner);
+        return;
     }
 
-    let all_track_ids: Vec<_> = before
+    let state = logic.get_state();
+    let st = state.read().unwrap();
+
+    // Pre-compute style colors.
+    let text_color = style.text_color();
+    let track_duration_color = style.track_duration_color();
+    let track_name_playing_color = style.track_name_playing_color();
+    let track_name_hovered_color = style.track_name_hovered_color();
+
+    // Build list: [before... | current | after...]
+    let total_items = before.len() + 1 + after.len();
+    let current_list_index = before.len();
+    let selected_index = queue_state.selected_index;
+
+    let mut items: Vec<ListItem> = Vec::with_capacity(total_items);
+
+    let all_tracks: Vec<&TrackId> = before
         .iter()
         .chain(current.iter())
         .chain(after.iter())
-        .cloned()
         .collect();
 
-    let track_infos: Vec<TrackInfo> = {
-        let state = logic.get_state();
-        let st = state.read().unwrap();
-        all_track_ids
-            .iter()
-            .map(|track_id| {
-                let display = bc::TrackDisplayDetails::from_track_id(track_id, &st);
-                TrackInfo {
-                    track_id: track_id.clone(),
-                    label: match &display {
-                        Some(d) => format!("{} - {}", d.artist(), d.track_title),
-                        None => track_id.0.clone(),
-                    },
-                    duration_str: display
-                        .as_ref()
-                        .map(|d| {
-                            format!(
-                                " [{}]",
-                                bc::util::seconds_to_hms_string(
-                                    d.track_duration.as_secs() as u32,
-                                    false,
-                                )
-                            )
-                        })
-                        .unwrap_or_default(),
-                }
+    for (idx, track_id) in all_tracks.iter().enumerate() {
+        let is_current = idx == current_list_index;
+        let is_selected = selected_index == Some(idx);
+
+        let display = TrackDisplayDetails::from_track_id(track_id, &st);
+        let label = match &display {
+            Some(d) => format!("{} - {}", d.artist(), d.track_title),
+            None => track_id.0.to_string(),
+        };
+
+        let duration_str = display
+            .as_ref()
+            .map(|d| {
+                format!(
+                    " [{}]",
+                    bc::util::seconds_to_hms_string(d.track_duration.as_secs() as u32, false)
+                )
             })
-            .collect()
-    };
+            .unwrap_or_default();
+
+        let line_color = if is_selected {
+            track_name_hovered_color
+        } else if is_current {
+            track_name_playing_color
+        } else if idx < current_list_index {
+            // Previous tracks are dimmed.
+            ratatui::style::Color::Rgb(128, 128, 128)
+        } else {
+            text_color
+        };
+
+        let mut spans = Vec::new();
+
+        // Selection indicator.
+        if is_selected {
+            spans.push(Span::styled(
+                "> ",
+                Style::default()
+                    .fg(track_name_hovered_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if is_current {
+            spans.push(Span::styled(
+                "▶ ",
+                Style::default()
+                    .fg(track_name_playing_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            spans.push(Span::raw("  "));
+        }
+
+        let text_style = if is_selected || is_current {
+            Style::default().fg(line_color).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(line_color)
+        };
+
+        spans.push(Span::styled(label, text_style));
+        spans.push(Span::styled(
+            duration_str,
+            Style::default().fg(track_duration_color),
+        ));
+
+        items.push(ListItem::new(Line::from(spans)));
+    }
+
+    let list = List::new(items);
+
+    let mut list_state = ListState::default();
+    let focus_line = selected_index.unwrap_or(current_list_index);
+    list_state.select(Some(focus_line));
+    let visible_height = inner.height as usize;
+    let offset = focus_line.saturating_sub(visible_height / 2);
+    *list_state.offset_mut() = offset;
+
+    frame.render_stateful_widget(list, inner, &mut list_state);
+}
+
+pub fn handle_key(
+    queue_state: &mut QueueState,
+    logic: &bc::Logic,
+    action: Action,
+) -> Option<QueueAction> {
+    match action {
+        Action::Back => return Some(QueueAction::ToggleQueue),
+        Action::Quit => return Some(QueueAction::Quit),
+        Action::MoveUp => move_selection(queue_state, logic, -1),
+        Action::MoveDown => move_selection(queue_state, logic, 1),
+        Action::PageUp => {
+            move_selection(
+                queue_state,
+                logic,
+                -(super::layout::PAGE_SCROLL_SIZE as i32),
+            );
+        }
+        Action::PageDown => {
+            move_selection(queue_state, logic, super::layout::PAGE_SCROLL_SIZE as i32);
+        }
+        Action::Select => play_selected(queue_state, logic),
+        Action::PlayPause => logic.toggle_current(),
+        Action::Next => logic.next(),
+        Action::Previous => logic.previous(),
+        Action::NextGroup => logic.next_group(),
+        Action::PreviousGroup => logic.previous_group(),
+        Action::CyclePlaybackMode(dir) => {
+            let next = blackbird_client_shared::cycle(
+                &bc::PlaybackMode::ALL,
+                logic.get_playback_mode(),
+                dir,
+            );
+            logic.set_playback_mode(next);
+        }
+        _ => {}
+    }
+    None
+}
+
+/// Handle a mouse click in the queue area — play the clicked track.
+pub fn handle_mouse_click(
+    queue_state: &mut QueueState,
+    logic: &bc::Logic,
+    area: Rect,
+    _x: u16,
+    y: u16,
+) {
+    let inner_y = area.y + 1;
+    let inner_height = area.height.saturating_sub(2);
+    if y < inner_y || y >= inner_y + inner_height {
+        return;
+    }
+
+    let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
+    if current.is_none() {
+        return;
+    }
+    let total_items = before.len() + 1 + after.len();
 
     let current_list_index = before.len();
-    let mut clicked_track = None;
+    let visible_height = inner_height as usize;
+    let focus_line = queue_state.selected_index.unwrap_or(current_list_index);
+    let scroll_offset = focus_line.saturating_sub(visible_height / 2);
 
-    let mode = logic.get_playback_mode();
-    Window::new(format!("Queue [{}]", mode))
-        .open(queue_open)
-        .default_pos(ctx.screen_rect().center())
-        .default_size(ctx.screen_rect().size() * Vec2::new(0.4, 0.6))
-        .pivot(Align2::CENTER_CENTER)
-        .collapsible(false)
-        .show(ctx, |ui| {
-            if current.is_none() {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(10.0);
-                    ui.label("No tracks in the queue.");
-                    ui.add_space(10.0);
-                });
-                return;
-            }
+    let row_in_list = (y - inner_y) as usize;
+    let clicked_index = scroll_offset + row_in_list;
 
-            ScrollArea::vertical()
-                .auto_shrink(Vec2b::FALSE)
-                .show(ui, |ui| {
-                    ui.set_min_width(ui.available_width());
-
-                    for (idx, info) in track_infos.iter().enumerate() {
-                        let is_current = idx == current_list_index;
-                        let is_past = idx < current_list_index;
-
-                        let text_color = if is_current {
-                            style.track_name_playing_color32()
-                        } else if is_past {
-                            let [r, g, b, a] = style.text_color32().to_array();
-                            Color32::from_rgba_unmultiplied(
-                                (r as f32 * 0.5) as u8,
-                                (g as f32 * 0.5) as u8,
-                                (b as f32 * 0.5) as u8,
-                                a,
-                            )
-                        } else {
-                            style.text_color32()
-                        };
-
-                        let row_text = format!(
-                            "{}{}{}",
-                            if is_current { "\u{25b6} " } else { "  " },
-                            info.label,
-                            info.duration_str,
-                        );
-
-                        let rich_text = RichText::new(&row_text).color(text_color);
-                        let label_widget = if is_current {
-                            Label::new(rich_text.strong())
-                        } else {
-                            Label::new(rich_text)
-                        };
-
-                        let response = ui.add(label_widget.selectable(false));
-
-                        let row_interaction = ui.interact(
-                            response.rect,
-                            ui.id().with(("queue_track", idx)),
-                            Sense::click(),
-                        );
-
-                        if row_interaction.clicked() {
-                            clicked_track = Some(info.track_id.clone());
-                        }
-
-                        if row_interaction.hovered() {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                        }
-                    }
-                });
-        });
-
-    if let Some(track_id) = clicked_track {
-        logic.request_play_track(&track_id);
+    if clicked_index < total_items {
+        let all_tracks: Vec<TrackId> = before.into_iter().chain(current).chain(after).collect();
+        logic.request_play_track(&all_tracks[clicked_index]);
+        queue_state.selected_index = None;
     }
+}
+
+fn move_selection(queue_state: &mut QueueState, logic: &bc::Logic, delta: i32) {
+    let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
+    if current.is_none() {
+        return;
+    }
+    let total_items = before.len() + 1 + after.len();
+    if total_items == 0 {
+        return;
+    }
+
+    let current_list_index = before.len();
+    let current_sel = queue_state.selected_index.unwrap_or(current_list_index);
+    let new_index = (current_sel as i32 + delta).clamp(0, total_items as i32 - 1) as usize;
+    queue_state.selected_index = Some(new_index);
+}
+
+fn play_selected(queue_state: &mut QueueState, logic: &bc::Logic) {
+    let Some(selected) = queue_state.selected_index else {
+        return;
+    };
+
+    let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
+    if current.is_none() {
+        return;
+    }
+
+    let all_tracks: Vec<TrackId> = before.into_iter().chain(current).chain(after).collect();
+
+    if let Some(track_id) = all_tracks.get(selected) {
+        logic.request_play_track(track_id);
+        queue_state.selected_index = None;
+    }
+}
+
+/// Move selection by `delta` (for scroll events).
+pub fn scroll_selection(queue_state: &mut QueueState, logic: &bc::Logic, delta: i32) {
+    move_selection(queue_state, logic, delta);
 }
