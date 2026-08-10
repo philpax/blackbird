@@ -34,7 +34,7 @@ The client writes its log to the data directory as `blackbird.log`. Any pre-exis
 
 The current-track sidebar is split into ordered components configured under `[layout.sidebar]`:
 
-- `enabled` — whether the sidebar is visible at runtime; toggle with `t` in the TUI. Which side the sidebar sits on is `position` below (legacy `lyrics_display` keys are obsolete and no longer decide the side).
+- `enabled` — whether the sidebar is visible at runtime; toggle with `t` in the TUI. Which side the sidebar sits on is `position` below.
 - `position` — which side the sidebar sits on (`"left"` or `"right"`, default `"right"`).
 - `components` — the ordered component list, e.g. `["lyrics", "similar_songs"]` (default).
 - `similar_songs_count` — how many similar songs to request (default 20).
