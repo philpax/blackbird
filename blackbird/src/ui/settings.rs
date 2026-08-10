@@ -4,7 +4,7 @@ use blackbird_client_shared::{
 };
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout as RatatuiLayout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState},
@@ -503,34 +503,16 @@ fn select_nearest(state: &mut SettingsState, idx: usize) {
     }
 }
 
-/// The width of the settings sidebar for a given terminal width and configured
-/// value. Clamps the configured width into `[20, max(20, area_width - 2)]` so
-/// the panel never collapses below 20 columns and always leaves room for the
-/// library on the right, even on very narrow terminals.
-fn settings_width(area_width: u16, configured: u16) -> u16 {
-    let max = area_width.saturating_sub(2);
-    configured.clamp(20, max.max(20))
-}
-
-/// Draws the settings list into the left slice of `area` and returns the right
-/// slice (which the caller renders the real library into).
+/// Draws the settings list into the given rect. The rect comes from the
+/// unified screen layout (`ui::layout::layout_for`); settings no longer plans
+/// its own split.
 pub fn draw(
     frame: &mut Frame,
     state: &mut SettingsState,
     config: &crate::config::Config,
     area: Rect,
-) -> Rect {
-    // Settings is a left sidebar; the real library renders to its right so
-    // style/art/spacing changes preview live against the actual library. The
-    // settings width is configurable (draggable via the border).
-    let settings_w = settings_width(area.width, config.layout.settings_sidebar_width);
-    let chunks = RatatuiLayout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(settings_w), Constraint::Min(1)])
-        .split(area);
-
-    draw_settings_list(frame, state, &config.style, config, chunks[0]);
-    chunks[1]
+) {
+    draw_settings_list(frame, state, &config.style, config, area);
 }
 
 fn draw_settings_list(
@@ -1367,11 +1349,12 @@ pub fn handle_key(
 
 /// Handles a mouse click in the settings panel area. Selects the clicked row
 /// and activates it (toggles bools, cycles enums, enters edit mode for text).
+/// The x coordinate is deliberately unused: the caller already routes clicks
+/// x-scoped to the settings rect, and row mapping only needs the row index
+/// within the last-drawn list (`last_inner_area`).
 pub fn handle_mouse_click(
     state: &mut SettingsState,
     config: &mut crate::config::Config,
-    _area: Rect,
-    _x: u16,
     y: u16,
 ) -> bool {
     let Some(inner) = state.last_inner_area else {
@@ -1452,19 +1435,24 @@ mod tests {
 
     #[test]
     fn settings_width_stays_within_area() {
-        // The panel must never exceed the area and must stay >= 20 wide.
-        // width 20: max(20, 18)=20, so even a huge configured value clamps to 20.
-        assert_eq!(settings_width(20, 100), 20);
-        assert_eq!(settings_width(20, 20), 20);
-        // width 39: max(20, 37)=37, so 40 configured clamps to 37.
-        assert_eq!(settings_width(39, 40), 37);
-        assert_eq!(settings_width(39, 20), 20);
-        // width 40: max(20, 38)=38, 40 configured clamps to 38.
-        assert_eq!(settings_width(40, 40), 38);
-        // width 100: room for the full configured width.
-        assert_eq!(settings_width(100, 40), 40);
-        // Tiny width (e.g. 10): max(20, 8)=20, configured clamps up to 20.
-        assert_eq!(settings_width(10, 5), 20);
+        // The unified clamp (shared with the render/drag paths) lives in
+        // `ui::layout`; this test pins its contract here alongside the
+        // settings module.
+        let w = crate::ui::layout::settings_width;
+        // The panel must never collapse below 20 and must leave at least 20
+        // columns for the library preview.
+        // width 20: max(20, 0) = 20, so even a huge configured value clamps to 20.
+        assert_eq!(w(20, 100), 20);
+        assert_eq!(w(20, 20), 20);
+        // width 39: max(20, 19) = 20, so 40 configured clamps to 20 (leaves 19).
+        assert_eq!(w(39, 40), 20);
+        assert_eq!(w(39, 20), 20);
+        // width 40: max(20, 20) = 20, so 40 clamps to 20 (leaves exactly 20).
+        assert_eq!(w(40, 40), 20);
+        // width 100: room for the full configured width (40) plus 60 preview.
+        assert_eq!(w(100, 40), 40);
+        // Tiny width (e.g. 10): max(20, 0) = 20, configured clamps up to 20.
+        assert_eq!(w(10, 5), 20);
     }
 
     #[test]

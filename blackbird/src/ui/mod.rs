@@ -119,141 +119,108 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_scrub_bar(frame, app, main.scrub_bar);
     }
 
-    // Split the content area with an optional sidebar. The sidebar is shown
-    // when the effective sidebar position is Left or Right and the sidebar is
-    // enabled, and the app is not loading. When FocusedPanel::Lyrics is active
-    // with a sidebar visible, the sidebar gets keyboard focus and the main
-    // area renders the library (the default view). The full panel only
-    // appears when FocusedPanel::Lyrics is active and there is no sidebar
-    // visible.
-    let sidebar_position = app.config.layout.base.sidebar.position;
-    let show_sidebar = app.config.layout.base.sidebar.enabled && !is_loading;
-    let content_layout = if show_sidebar {
-        layout::split_content_with_sidebar(
-            main.content,
-            sidebar_position,
-            app.config.layout.sidebar_width,
-        )
-    } else {
-        layout::ContentLayout {
-            main: main.content,
-            lyrics_sidebar: None,
-            lyrics_border: None,
-        }
-    };
+    // Plan the whole screen once. Both the draw path and the input paths in
+    // `main.rs` consume the same rects, so draw and hit-testing agree.
+    let layout = layout::layout_for(app, size);
 
-    // The library, when a sidebar is shown, is framed with a 1-cell border; its
-    // content draws into the frame's inner rect. Other panels (search, queue,
-    // logs, settings) draw into the full content area.
-    let content_area = content_layout.main;
-
-    // Inline lyrics cut into the library's height as a bottom panel (not an
-    // overlay). The library's *outer* area (the frame, if any) shrinks so the
-    // lyrics panel renders below. Only shown for the Library panel.
-    let inline_lyrics_shown =
-        !is_loading && app.inline_lyrics_mode && app.lyrics.shared.has_synced_lyrics();
-
-    // When the sidebar is visible and focused, render the library (default
-    // view) in the main area instead of the full panel.
-    let render_panel = if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
-        FocusedPanel::Library
-    } else {
-        app.focused_panel
-    };
-
-    match render_panel {
-        FocusedPanel::Library => {
-            // When a sidebar is present, the library is framed; the frame's
-            // outer area is the full content rect. Inline lyrics (when shown)
-            // shrink the framed area's height.
-            let library_outer = if show_sidebar {
-                content_layout.main
-            } else {
-                content_area
-            };
-            let (library_outer, inline_lyrics_area) = if inline_lyrics_shown {
-                let (main, lyrics) = layout::split_inline_lyrics(library_outer);
-                (main, lyrics)
-            } else {
-                (library_outer, None)
-            };
-            if show_sidebar {
-                let border_color = app.config.style.library.border().to_color();
-                library::draw_in_frame(frame, app, library_outer, border_color);
-            } else {
-                library::draw(frame, app, library_outer);
-            }
-            if let Some(inline_area) = inline_lyrics_area {
-                draw_inline_lyrics(frame, app, inline_area);
-            }
-        }
-        FocusedPanel::Search => {
-            let scroll_line = app.search.viewport.line;
-            let hovered =
-                search::hovered_result_index(app.mouse_position, content_area, scroll_line);
-            search::draw(
-                frame,
-                &mut app.search,
-                &app.config.style,
-                &app.logic,
-                hovered,
-                content_area,
-            );
-        }
-        FocusedPanel::Lyrics => {
-            if app.sidebar.is_empty() {
-                // The sidebar has no components enabled while Lyrics was
-                // focused: fall back to the library (unframed, since no
-                // sidebar is present) with a hint that nothing is configured.
-                library::draw(frame, app, content_area);
-                let hint = Paragraph::new("No sidebar components enabled.").style(
-                    Style::default().fg(app.config.style.library.track_duration().to_color()),
-                );
-                frame.render_widget(
-                    hint,
-                    Rect::new(
-                        content_area.x + 1,
-                        content_area.y + 1,
-                        content_area.width.saturating_sub(2),
-                        1,
+    // Dispatch each visible content component exactly once from this single
+    // point. The modal overlays (playback dropdown, album art, quit dialog)
+    // are drawn separately below by design.
+    for component in layout::visible_components(&layout) {
+        match component {
+            layout::VisibleComponent::MainPanel => {
+                // The library is the main panel for Library and Settings
+                // focus, and for Lyrics-with-sidebar (which renders the
+                // library in the main area). The Settings arm is the same
+                // code path as Library — no special casing.
+                match layout.render_panel {
+                    FocusedPanel::Library | FocusedPanel::Settings => {
+                        // When a sidebar is shown, the library is framed; the
+                        // frame's outer area is `layout.panel` and its inner
+                        // rect is `layout.library`.
+                        if layout.show_sidebar {
+                            let border_color = app.config.style.library.border().to_color();
+                            library::draw_in_frame(frame, app, layout.panel, border_color);
+                        } else {
+                            library::draw(frame, app, layout.panel);
+                        }
+                    }
+                    FocusedPanel::Search => {
+                        let scroll_line = app.search.viewport.line;
+                        let hovered = search::hovered_result_index(
+                            app.mouse_position,
+                            layout.panel,
+                            scroll_line,
+                        );
+                        search::draw(
+                            frame,
+                            &mut app.search,
+                            &app.config.style,
+                            &app.logic,
+                            hovered,
+                            layout.panel,
+                        );
+                    }
+                    FocusedPanel::Lyrics => {
+                        if app.sidebar.is_empty() {
+                            // The sidebar has no components enabled while
+                            // Lyrics was focused: fall back to the library
+                            // (unframed, since no sidebar is present) with a
+                            // hint that nothing is configured.
+                            library::draw(frame, app, layout.panel);
+                            let hint = Paragraph::new("No sidebar components enabled.").style(
+                                Style::default().fg(app
+                                    .config
+                                    .style
+                                    .library
+                                    .track_duration()
+                                    .to_color()),
+                            );
+                            frame.render_widget(
+                                hint,
+                                Rect::new(
+                                    layout.panel.x + 1,
+                                    layout.panel.y + 1,
+                                    layout.panel.width.saturating_sub(2),
+                                    1,
+                                ),
+                            );
+                        } else {
+                            sidebar::draw_panel(frame, app, layout.panel)
+                        }
+                    }
+                    FocusedPanel::Logs => {
+                        logs::draw(frame, &mut app.logs, &app.config.style, layout.panel);
+                    }
+                    FocusedPanel::Queue => queue::draw(
+                        frame,
+                        &app.queue,
+                        &app.config.style,
+                        &app.logic,
+                        layout.panel,
                     ),
-                );
-            } else {
-                sidebar::draw_panel(frame, app, content_area)
+                }
             }
-        }
-        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, content_area),
-        FocusedPanel::Queue => queue::draw(
-            frame,
-            &app.queue,
-            &app.config.style,
-            &app.logic,
-            content_area,
-        ),
-        FocusedPanel::Settings => {
-            // Settings is a left sidebar; the real library fills the rest.
-            // `settings::draw` renders the list into the left slice and returns
-            // the right slice for the library. Inline lyrics are not shown in
-            // settings mode.
-            let library_area = settings::draw(frame, &mut app.settings, &app.config, content_area);
-            if show_sidebar {
-                let border_color = app.config.style.library.border().to_color();
-                library::draw_in_frame(frame, app, library_area, border_color);
-            } else {
-                library::draw(frame, app, library_area);
+            layout::VisibleComponent::Settings => {
+                if let Some(settings_rect) = layout.settings {
+                    settings::draw(frame, &mut app.settings, &app.config, settings_rect);
+                }
+            }
+            layout::VisibleComponent::LyricsSidebar => {
+                if let Some(sidebar_area) = layout.lyrics_sidebar {
+                    let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
+                    sidebar::draw_sidebar(frame, app, sidebar_area, sidebar_focused);
+                }
+            }
+            layout::VisibleComponent::InlineLyrics => {
+                if let Some(inline_area) = layout.inline_lyrics {
+                    draw_inline_lyrics(frame, app, inline_area);
+                }
             }
         }
     }
 
     draw_help_bar(frame, app, main.help_bar);
-
-    // Draw the sidebar if present. When the sidebar is focused
-    // (FocusedPanel::Lyrics + sidebar visible), pass is_focused = true so the
-    // selection indicator is rendered.
-    if let Some(sidebar_area) = content_layout.lyrics_sidebar {
-        let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
-        sidebar::draw_sidebar(frame, app, sidebar_area, sidebar_focused);
-    }
 
     // Draw playback mode dropdown if open.
     if app.playback_mode_dropdown {
