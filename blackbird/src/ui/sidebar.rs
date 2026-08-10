@@ -757,7 +757,6 @@ pub fn handle_mouse_click(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
                 &app.logic,
                 &app.config.style,
                 rect,
-                x,
                 y,
             );
         }

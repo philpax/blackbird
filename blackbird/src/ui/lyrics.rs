@@ -142,7 +142,6 @@ fn draw_lyrics_content(
         style,
         lyrics.selected_index,
         is_focused,
-        None,
     );
 
     // Determine which lyric line the mouse is hovering over, for the hover
@@ -267,7 +266,6 @@ pub fn handle_mouse_click(
     logic: &bc::Logic,
     style: &shared_style::Style,
     area: Rect,
-    _x: u16,
     y: u16,
 ) {
     let Some(lyrics_data) = &lyrics.shared.data else {
@@ -313,7 +311,6 @@ pub fn handle_mouse_click(
         // rows — it only affects the text width available for wrapping, and
         // we always reserve the 2-char indicator space.
         true,
-        None,
     );
 
     if let Some(line_index) = sidebar_click_to_line_index(y, inner, scroll_offset, &back_mapping) {
@@ -481,7 +478,6 @@ pub fn build_wrapped_lyrics(
     style: &shared_style::Style,
     selected_index: Option<usize>,
     show_selection_indicator: bool,
-    hovered_line: Option<usize>,
 ) -> (Vec<Line<'static>>, Vec<usize>) {
     let text_color = style.general.text().to_color();
     let track_duration_color = style.library.track_duration().to_color();
@@ -495,9 +491,6 @@ pub fn build_wrapped_lyrics(
         let is_current = lyrics_data.synced && idx == current_line_idx;
         let is_past = lyrics_data.synced && idx < current_line_idx;
         let is_selected = selected_index == Some(idx);
-        // Hover underline (like the library and similar-songs lists), except
-        // when the row is keyboard-selected.
-        let is_hovered = hovered_line == Some(idx) && !is_selected;
 
         let line_color = if is_selected {
             track_name_hovered_color
@@ -509,18 +502,10 @@ pub fn build_wrapped_lyrics(
             Color::Rgb(180, 180, 180)
         };
 
-        let underline = if is_hovered {
-            Modifier::UNDERLINED
-        } else {
-            Modifier::empty()
-        };
         let text_style = if is_selected || is_current {
-            Style::default()
-                .fg(line_color)
-                .add_modifier(Modifier::BOLD)
-                .add_modifier(underline)
+            Style::default().fg(line_color).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(line_color).add_modifier(underline)
+            Style::default().fg(line_color)
         };
 
         let display_text = if lyric_line.value.trim().is_empty() {
@@ -844,7 +829,7 @@ mod tests {
     fn selection_indicator_appears_on_selected_line_when_shown() {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true, None);
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
         // Line 0 should start with "  " (not selected).
         // Line 1 should start with "> " (selected).
         let line0_str = line_to_string(&lines[0]);
@@ -863,7 +848,7 @@ mod tests {
     fn selection_indicator_absent_when_not_shown() {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), false, None);
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), false);
         // No ">" indicator should be present on any line.
         for (i, line) in lines.iter().enumerate() {
             let s = line_to_string(line);
@@ -879,7 +864,7 @@ mod tests {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
         let hovered_color = style.library.track_name_hovered().to_color();
-        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true, None);
+        let (lines, _) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, Some(1), true);
         // Line 1 is selected; its text span should use the hovered color.
         // The line has 3 spans: indicator, timestamp, text.
         let line1 = &lines[1];
@@ -897,11 +882,10 @@ mod tests {
         let lyrics_data = make_lyrics(true, &[(Some(0), "first"), (Some(5000), "second")]);
         let style = make_style();
         // Full panel: is_focused=true
-        let (full_lines, full_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true, None);
+        let (full_lines, full_back) = build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
         // Sidebar: is_focused=true
         let (sidebar_lines, sidebar_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true, None);
+            build_wrapped_lyrics(&lyrics_data, 0, 80, &style, None, true);
         // Back-mappings should be identical.
         assert_eq!(full_back, sidebar_back);
         // Lines should have the same count.
@@ -921,9 +905,9 @@ mod tests {
         let style = make_style();
         // Use a width where 2 extra/less chars could cause a different wrap.
         let (focused_lines, focused_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), true, None);
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), true);
         let (unfocused_lines, unfocused_back) =
-            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), false, None);
+            build_wrapped_lyrics(&lyrics_data, 0, 20, &style, Some(1), false);
         // Same number of wrapped rows → no reflow.
         assert_eq!(
             focused_lines.len(),

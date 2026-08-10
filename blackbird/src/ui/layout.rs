@@ -35,10 +35,10 @@ pub fn split_main(area: Rect) -> MainLayout {
     }
 }
 
-/// Computes the overlay rect for inline lyrics, anchored to the bottom of the
-/// content area just above the help bar. Returns `None` if the content area is
-/// too small.
-pub fn inline_lyrics_overlay(content: Rect) -> Option<Rect> {
+/// Computes the bottom-panel rect for inline lyrics, anchored to the bottom of
+/// the content area just above the help bar. Returns `None` if the content area
+/// is too small.
+pub fn inline_lyrics_rect(content: Rect) -> Option<Rect> {
     if content.height < INLINE_LYRICS_HEIGHT {
         return None;
     }
@@ -55,7 +55,7 @@ pub fn inline_lyrics_overlay(content: Rect) -> Option<Rect> {
 /// main content's height (not an overlay). Returns `None` for the lyrics area
 /// when the content is too small.
 pub fn split_inline_lyrics(content: Rect) -> (Rect, Option<Rect>) {
-    let Some(lyrics) = inline_lyrics_overlay(content) else {
+    let Some(lyrics) = inline_lyrics_rect(content) else {
         return (content, None);
     };
     let main = Rect::new(content.x, content.y, content.width, lyrics.y - content.y);

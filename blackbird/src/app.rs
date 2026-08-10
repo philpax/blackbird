@@ -233,7 +233,8 @@ impl App {
             }
         }
 
-        // Process lyrics data.
+        // Process lyrics data. Like the similar-songs drain below, each delivery is
+        // handled immediately so stale in-flight responses can't interleave.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
             changed = true;
             self.lyrics.shared.on_lyrics_loaded(&lyrics_data);
