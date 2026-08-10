@@ -223,6 +223,8 @@ impl App {
                     && self.config.layout.base.sidebar.enabled;
                 if similar_enabled || panel_open {
                     self.similar_songs.on_fetch_started(&tap.track_id);
+                    // A new track wipes any stale similar/extension fetch error.
+                    self.logic.clear_similar_errors();
                     self.logic.request_similar_songs(
                         &tap.track_id,
                         self.config.layout.base.sidebar.similar_songs_count,
@@ -248,6 +250,11 @@ impl App {
                 .is_some_and(|id| id == &similar_data.track_id)
             {
                 self.similar_songs.on_loaded(&similar_data);
+                // A successful delivery (non-empty result, meaning the server
+                // responded) clears any stale similar/extension fetch error.
+                if !similar_data.similar.is_empty() {
+                    self.logic.clear_similar_errors();
+                }
             }
         }
 

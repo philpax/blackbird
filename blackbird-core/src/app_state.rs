@@ -225,6 +225,17 @@ pub enum AppStateError {
     },
 }
 impl AppStateError {
+    /// Whether this error is a similar-songs or OpenSubsonic-extensions fetch
+    /// failure. Used to clear only those variants (e.g. on a new track start)
+    /// without clobbering unrelated errors in the single error slot.
+    pub fn is_similar_related(&self) -> bool {
+        matches!(
+            self,
+            AppStateError::SimilarSongsFetchFailed { .. }
+                | AppStateError::OpenSubsonicExtensionsFetchFailed { .. }
+        )
+    }
+
     /// Should be paired with [`Self::display_message`]
     pub fn display_name(&self) -> &'static str {
         match self {

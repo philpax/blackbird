@@ -776,6 +776,8 @@ impl Logic {
     /// On failure an empty list is delivered (so the UI clears any stale
     /// results) and `AppStateError::SimilarSongsFetchFailed` is set.
     pub fn request_similar_songs(&self, track_id: &TrackId, count: usize) {
+        // A hand-edited config must not bypass the settings UI's 1..=100 clamp.
+        let count = count.clamp(1, 100);
         // Skip if we already have an in-flight request for this track.
         {
             let mut last = self.last_requested_similar_track.lock().unwrap();
@@ -816,7 +818,7 @@ impl Logic {
                         .unwrap();
                 }
                 Err(e) => {
-                    tracing::debug!(
+                    tracing::warn!(
                         "Failed to fetch similar songs for track {}: {}",
                         track_id.0,
                         e
@@ -872,7 +874,7 @@ async fn fetch_open_subsonic_extensions(client: &bs::Client, state: &Arc<RwLock<
             state.write().unwrap().open_subsonic_extensions = extensions;
         }
         Err(e) => {
-            tracing::debug!("Failed to fetch OpenSubsonic extensions: {}", e);
+            tracing::warn!("Failed to fetch OpenSubsonic extensions: {}", e);
             state.write().unwrap().error = Some(AppStateError::OpenSubsonicExtensionsFetchFailed {
                 error: e.to_string(),
             });
@@ -923,6 +925,17 @@ impl Logic {
     }
     pub fn clear_error(&self) {
         self.write_state().error = None;
+    }
+
+    /// Clears a pending similar-songs or OpenSubsonic-extensions error, leaving
+    /// unrelated errors (e.g. `InitialFetchFailed`) intact. Called on a new
+    /// track start and on a successful similar-songs delivery so a stale fetch
+    /// failure doesn't linger in the single error slot.
+    pub fn clear_similar_errors(&self) {
+        let mut state = self.write_state();
+        if state.error.as_ref().is_some_and(|e| e.is_similar_related()) {
+            state.error = None;
+        }
     }
 
     pub fn get_state(&self) -> Arc<RwLock<AppState>> {
@@ -1454,5 +1467,36 @@ mod tests {
             similar_endpoint_for(&sonic),
             SimilarEndpoint::SonicSimilarTracks
         );
+    }
+
+    #[test]
+    fn test_similar_error_variant_clearing() {
+        use blackbird_state::TrackId;
+
+        // The two similar-related variants are recognized...
+        let similar = AppStateError::SimilarSongsFetchFailed {
+            track_id: TrackId("1".into()),
+            error: "boom".into(),
+        };
+        let extensions = AppStateError::OpenSubsonicExtensionsFetchFailed {
+            error: "boom".into(),
+        };
+        assert!(similar.is_similar_related());
+        assert!(extensions.is_similar_related());
+
+        // ...while an unrelated pending error (e.g. the initial fetch) is not,
+        // so variant-scoped clearing never clobbers it.
+        let initial = AppStateError::InitialFetchFailed {
+            error: "offline".into(),
+        };
+        assert!(!initial.is_similar_related());
+
+        // Clearing on success must leave the unrelated error intact: the
+        // `is_similar_related` predicate never matches a non-similar variant.
+        let state = AppState {
+            error: Some(initial.clone()),
+            ..AppState::default()
+        };
+        assert!(!state.error.as_ref().unwrap().is_similar_related());
     }
 }
