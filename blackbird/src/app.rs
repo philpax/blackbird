@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use blackbird_core::{self as bc, PlaybackToLogicMessage};
 use blackbird_shared::config::ConfigFile as _;
+use ratatui::layout::{Position, Rect};
 
 use crate::{
     config::Config,
@@ -89,6 +90,14 @@ pub struct App {
     pub should_quit: bool,
     pub needs_redraw: bool,
     pub mouse_position: Option<(u16, u16)>,
+    /// The terminal size from the most recent render or input event. Used to
+    /// hit-test modal overlays (e.g. the playback mode dropdown) against the
+    /// cursor without threading the size through every draw function.
+    pub terminal_size: Rect,
+    /// The playback mode dropdown's rect for the current `terminal_size`,
+    /// refreshed whenever the size changes. Caching it keeps hover gating from
+    /// re-running the layout split on every call.
+    pub dropdown_rect: Rect,
     pub album_art_overlay: Option<AlbumArtOverlay>,
     /// Whether the playback mode dropdown is open.
     pub playback_mode_dropdown: bool,
@@ -165,6 +174,8 @@ impl App {
             should_quit: false,
             needs_redraw: true,
             mouse_position: None,
+            terminal_size: Rect::new(0, 0, 0, 0),
+            dropdown_rect: Rect::new(0, 0, 0, 0),
             album_art_overlay: None,
             playback_mode_dropdown: false,
             help_bar_items: Vec::new(),
@@ -597,6 +608,18 @@ impl App {
             direction,
         );
         self.logic.set_playback_mode(next);
+    }
+
+    /// Mouse position for the panels beneath modal overlays: `None` when the
+    /// cursor is over the playback mode dropdown, since the dropdown owns that
+    /// region (hover underlines, cursor-targeted scrolling). The rest of the
+    /// screen still receives the raw position.
+    pub fn panel_mouse_position(&self) -> Option<(u16, u16)> {
+        let pos = self.mouse_position?;
+        if self.playback_mode_dropdown && self.dropdown_rect.contains(Position::new(pos.0, pos.1)) {
+            return None;
+        }
+        Some(pos)
     }
 
     pub fn save_state(&self) {

@@ -24,7 +24,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::{Terminal, backend::CrosstermBackend};
 use ratatui_image::picker::{Capability, Picker, ProtocolType};
 use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
@@ -559,6 +559,8 @@ fn apply_settings_action(app: &mut App, action: keys::Action) {
 /// `ui::layout::layout_for` — the same rects `ui::draw` uses, so rendering
 /// and hit-testing always agree.
 fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
+    app.terminal_size = size;
+    app.dropdown_rect = ui::now_playing::playback_mode_dropdown_rect(size);
     let layout = ui::layout::layout_for(app, size);
 
     let now_playing_area = layout.main.now_playing;
@@ -977,6 +979,19 @@ fn handle_help_bar_click(app: &mut App, x: u16) {
 /// region (library, sidebar component, search, queue, logs, settings), scrolls
 /// that region; otherwise falls back to the currently focused panel.
 fn apply_scroll(app: &mut App, scroll_delta: i32, size: Rect) {
+    app.terminal_size = size;
+    app.dropdown_rect = ui::now_playing::playback_mode_dropdown_rect(size);
+
+    // The dropdown owns its region: a wheel event over it is a no-op rather
+    // than falling back to the focused panel.
+    if app.playback_mode_dropdown
+        && app
+            .mouse_position
+            .is_some_and(|pos| app.dropdown_rect.contains(Position::new(pos.0, pos.1)))
+    {
+        return;
+    }
+
     let steps = scroll_delta.unsigned_abs() as usize * ui::layout::SCROLL_WHEEL_STEPS;
     let direction = scroll_delta.signum();
 
@@ -984,7 +999,7 @@ fn apply_scroll(app: &mut App, scroll_delta: i32, size: Rect) {
     let sidebar_visible = layout.show_sidebar;
 
     let region = ui::panel::scroll_region_at(
-        app.mouse_position,
+        app.panel_mouse_position(),
         layout.library,
         layout.lyrics_sidebar,
         app,

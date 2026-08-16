@@ -1494,12 +1494,7 @@ fn is_over_below_album_art(
 /// Computes which library entry's heart is being hovered by the mouse, if any.
 /// The caller must ensure the flat library cache is fresh before calling this.
 fn compute_hovered_heart_index(app: &App, area: Rect) -> Option<usize> {
-    // Suppress hover when the playback mode dropdown is covering the library.
-    if app.playback_mode_dropdown {
-        return None;
-    }
-
-    let (mx, my) = app.mouse_position?;
+    let (mx, my) = app.panel_mouse_position()?;
 
     // Must be within library area
     if my < area.y || my >= area.y + area.height || mx < area.x || mx >= area.x + area.width {
@@ -1557,12 +1552,7 @@ fn compute_hovered_heart_index(app: &App, area: Rect) -> Option<usize> {
 /// not just the heart column. For group headers, only the second line (album line) counts.
 /// The caller must ensure the flat library cache is fresh before calling this.
 fn compute_hovered_entry_index(app: &App, area: Rect) -> Option<usize> {
-    // Suppress hover when the playback mode dropdown is covering the library.
-    if app.playback_mode_dropdown {
-        return None;
-    }
-
-    let (mx, my) = app.mouse_position?;
+    let (mx, my) = app.panel_mouse_position()?;
 
     // Must be within library area.
     if my < area.y || my >= area.y + area.height || mx < area.x || mx >= area.x + area.width {

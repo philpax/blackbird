@@ -286,6 +286,8 @@ pub(crate) fn art_row_spans(
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let size = frame.area();
+    app.terminal_size = size;
+    app.dropdown_rect = now_playing::playback_mode_dropdown_rect(size);
 
     // Fill entire terminal with background color.
     //
@@ -344,7 +346,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
                     FocusedPanel::Search => {
                         let scroll_line = app.search.viewport.line;
                         let hovered = search::hovered_result_index(
-                            app.mouse_position,
+                            app.panel_mouse_position(),
                             layout.panel,
                             scroll_line,
                         );

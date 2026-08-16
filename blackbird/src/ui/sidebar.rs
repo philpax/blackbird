@@ -558,6 +558,7 @@ fn draw_component(
 ) {
     match component {
         SidebarComponentId::Lyrics => {
+            let mouse = app.panel_mouse_position();
             super::lyrics::draw_lyrics_component(
                 frame,
                 &mut app.lyrics,
@@ -565,7 +566,7 @@ fn draw_component(
                 app.logic.get_playing_position(),
                 area,
                 focused,
-                app.mouse_position,
+                mouse,
             );
         }
         SidebarComponentId::SimilarSongs => {
@@ -630,6 +631,7 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
         return;
     }
 
+    let mouse = app.panel_mouse_position();
     let similar = &mut app.similar_songs;
 
     if similar.loading {
@@ -664,7 +666,7 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
     let hovered_index = if similar.results.is_empty() {
         None
     } else {
-        match super::panel::hovered_row(app.mouse_position, inner, similar.viewport.line) {
+        match super::panel::hovered_row(mouse, inner, similar.viewport.line) {
             Some(idx) if idx < similar.results.len() => Some(idx),
             _ => None,
         }
@@ -734,6 +736,7 @@ pub fn draw_queue_sidebar(frame: &mut Frame, app: &mut App, area: Rect, focused:
         return;
     }
 
+    let mouse = app.panel_mouse_position();
     let queue = &mut app.queue_sidebar;
 
     // Fetch the queue window.
@@ -762,11 +765,10 @@ pub fn draw_queue_sidebar(frame: &mut Frame, app: &mut App, area: Rect, focused:
     }
 
     // Compute hovered index from mouse position.
-    let hovered_index =
-        match super::panel::hovered_row(app.mouse_position, inner, queue.viewport.line) {
-            Some(idx) if idx < total_items => Some(idx),
-            _ => None,
-        };
+    let hovered_index = match super::panel::hovered_row(mouse, inner, queue.viewport.line) {
+        Some(idx) if idx < total_items => Some(idx),
+        _ => None,
+    };
 
     let state_arc = app.logic.get_state();
     let app_state = state_arc.read().unwrap();
