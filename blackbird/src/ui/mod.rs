@@ -461,6 +461,36 @@ pub fn string_to_color(s: &str) -> Color {
     style_color(shared_style::string_to_hsv(s))
 }
 
+/// The time label rendered at the right edge of the scrub bar:
+/// ` position / duration `. Uses the drag preview ratio when set, matching
+/// the fill shown while dragging, so the label width agrees between render
+/// and hit-testing.
+fn scrub_time_label(app: &App) -> String {
+    let details = app.logic.get_track_display_details();
+    let (position_secs, duration_secs) = details
+        .as_ref()
+        .map(|d| {
+            (
+                d.track_position.as_secs_f32(),
+                d.track_duration.as_secs_f32(),
+            )
+        })
+        .unwrap_or((0.0, 0.0));
+
+    let display_position_secs = if let Some(preview) = app.scrub_preview_ratio {
+        preview.clamp(0.0, 1.0) * duration_secs
+    } else if duration_secs > 0.0 {
+        position_secs
+    } else {
+        0.0
+    };
+
+    let position_str =
+        blackbird_core::util::seconds_to_hms_string(display_position_secs as u32, true);
+    let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
+    format!(" {position_str} / {duration_str} ")
+}
+
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let style = &app.config.style;
     let details = app.logic.get_track_display_details();
@@ -477,33 +507,30 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // Use the preview ratio during scrub bar drags for instant visual feedback,
     // falling back to the playback thread's reported position otherwise.
-    let (ratio, display_position_secs) = if let Some(preview) = app.scrub_preview_ratio {
-        let r = preview.clamp(0.0, 1.0);
-        (r, r * duration_secs)
+    let ratio = if let Some(preview) = app.scrub_preview_ratio {
+        preview.clamp(0.0, 1.0)
     } else if duration_secs > 0.0 {
-        (
-            (position_secs / duration_secs).clamp(0.0, 1.0),
-            position_secs,
-        )
+        (position_secs / duration_secs).clamp(0.0, 1.0)
     } else {
-        (0.0, 0.0)
+        0.0
     };
 
-    let position_str =
-        blackbird_core::util::seconds_to_hms_string(display_position_secs as u32, true);
-    let duration_str = blackbird_core::util::seconds_to_hms_string(duration_secs as u32, true);
+    let label = scrub_time_label(app);
     let volume = app.logic.get_volume();
-
-    let label = format!(" {position_str} / {duration_str} ");
 
     // Split area: scrub bar | volume slider.
     let sv = layout::split_scrub_volume(area);
 
+    // The time label sits at the right edge of the scrub bar; the progress
+    // fill occupies the remaining width so its end aligns with the seekable
+    // range (see `handle_scrub_volume_click`).
+    let label_width = label.len() as u16;
+    let bar_width = sv.scrub_bar.width.saturating_sub(label_width);
+
     // Render the scrub bar with half-block precision. Each column can show
     // empty, a left-half block (▌), or a full block (█), giving twice the
     // resolution of the built-in Gauge widget.
-    let bar_width = sv.scrub_bar.width as f64;
-    let filled_half_blocks = (ratio as f64 * bar_width * 2.0).round() as u16;
+    let filled_half_blocks = (ratio as f64 * bar_width as f64 * 2.0).round() as u16;
     let full_cols = filled_half_blocks / 2;
     let has_half = filled_half_blocks % 2 == 1;
 
@@ -512,7 +539,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let buf = frame.buffer_mut();
     let y = sv.scrub_bar.y;
 
-    for col in 0..sv.scrub_bar.width {
+    for col in 0..bar_width {
         let x = sv.scrub_bar.x + col;
         let pos = ratatui::layout::Position::new(x, y);
         if !sv.scrub_bar.contains(pos) {
@@ -531,22 +558,19 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         }
     }
 
-    // Center the time label over the bar.
-    let label_width = label.len() as u16;
-    let label_start = sv.scrub_bar.x + sv.scrub_bar.width.saturating_sub(label_width) / 2;
+    // Right-align the time label at the end of the scrub bar, just left of
+    // the volume slider. It uses the app background and the default text
+    // colour, so it reads as part of the surrounding chrome rather than an
+    // overlay cut out of the bar.
+    let label_start = sv.scrub_bar.x + sv.scrub_bar.width.saturating_sub(label_width);
+    let label_fg = style.general.text().to_color();
     for (ci, ch) in label.chars().enumerate() {
         let x = label_start + ci as u16;
         let pos = ratatui::layout::Position::new(x, y);
         if sv.scrub_bar.contains(pos) {
-            let col = x - sv.scrub_bar.x;
             let cell = &mut buf[pos];
             cell.set_char(ch);
-            if col < full_cols {
-                // Label on filled portion: invert colors.
-                cell.set_style(Style::default().fg(bg).bg(fg));
-            } else {
-                cell.set_style(Style::default().fg(fg).bg(bg));
-            }
+            cell.set_style(Style::default().fg(label_fg).bg(bg));
         }
     }
 
@@ -638,10 +662,18 @@ pub fn handle_scrub_volume_click(app: &mut App, scrub_area: Rect, x: u16) {
             app.logic.set_volume(ratio.clamp(0.0, 1.0));
         }
     } else if x >= sv.scrub_bar.x && x < sv.scrub_bar.x + sv.scrub_bar.width {
-        // Set preview ratio for instant visual feedback; the actual seek
-        // is deferred until mouse-up via `seek_current_immediate`.
-        let ratio = (x - sv.scrub_bar.x) as f32 / sv.scrub_bar.width as f32;
-        app.scrub_preview_ratio = Some(ratio);
+        // The time label owns the right edge of the scrub bar; the seekable
+        // range is the remaining width. Overshoot into the label clamps to
+        // the end of the bar.
+        let label_width = scrub_time_label(app).len() as u16;
+        let interactive = sv.scrub_bar.width.saturating_sub(label_width);
+        if interactive > 0 {
+            let clamped_x = x.min(sv.scrub_bar.x + interactive - 1);
+            let ratio = (clamped_x - sv.scrub_bar.x) as f32 / interactive as f32;
+            // Set preview ratio for instant visual feedback; the actual seek
+            // is deferred until mouse-up via `seek_current_immediate`.
+            app.scrub_preview_ratio = Some(ratio);
+        }
     }
 }
 
