@@ -272,9 +272,6 @@ fn correct_picker_font_size(picker: Picker) -> Picker {
     corrected
 }
 
-/// Duration for high-frequency ticks during animations (inertia scrolling).
-const ANIMATION_TICK_RATE: Duration = Duration::from_millis(16);
-
 fn run_app(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     app: &mut App,
@@ -310,21 +307,19 @@ fn run_app(
                 last_full_redraw = Instant::now();
             }
             app.cover_art_cache.begin_frame();
+            app.begin_render();
             terminal.draw(|frame| ui::draw(frame, app))?;
-            app.needs_redraw = false;
         }
         let term_size = terminal.size()?;
         let size = Rect::new(0, 0, term_size.width, term_size.height);
 
-        // Use a fast tick rate when inertia animation is active for smooth scrolling.
-        let tick_rate =
-            if app.library.viewport.inertia_active() || app.search.viewport.inertia_active() {
-                ANIMATION_TICK_RATE
-            } else {
-                Duration::from_millis(app.config.general.tick_rate_ms)
-            };
-        let timeout = tick_rate.saturating_sub(last_tick.elapsed());
+        // Run at the shortest interval anything currently animating asked for,
+        // falling back to the configured tick rate when nothing is animating.
+        let frame_interval = app.frame_interval();
+        let timeout = frame_interval.saturating_sub(last_tick.elapsed());
+        let mut input_arrived = false;
         if event::poll(timeout)? {
+            input_arrived = true;
             let mut scroll_delta: i32 = 0;
 
             // Process the first event, then drain all remaining queued events.
@@ -364,7 +359,13 @@ fn run_app(
             }
         }
 
-        if last_tick.elapsed() >= tick_rate {
+        // Tick on input as well as on the interval. Input can start an
+        // animation — a scroll fling begins on mouse release — and a tick is
+        // where an animation states the frame interval it wants, so a slow
+        // configured tick rate would otherwise delay the animation's first
+        // frame by up to that interval. A burst of events is drained into a
+        // single tick above, so this costs at most one tick per iteration.
+        if input_arrived || last_tick.elapsed() >= frame_interval {
             app.tick();
             // Delete the terminal images for cover art evicted during the
             // tick, so a graphics-protocol terminal's image store stays

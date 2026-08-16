@@ -20,6 +20,46 @@ use crate::{
     },
 };
 
+/// Frame interval for smooth motion (~60 FPS), used by inertia scrolling.
+pub const SMOOTH_FRAME_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Floor on the event loop's frame interval, so a hand-edited `tick_rate_ms`
+/// of zero can't turn the loop into a busy spin. Matches the lower bound the
+/// settings UI enforces on the field.
+const MIN_FRAME_INTERVAL: Duration = Duration::from_millis(10);
+
+/// The frame intervals requested by whatever is currently animating.
+///
+/// Animations are driven by wall-clock time (see [`App::elapsed`]), so a
+/// component only has to say how often it wants to be redrawn; the event loop
+/// runs at the shortest live request, or the configured tick rate when nothing
+/// is animating.
+///
+/// Requests are tracked per producer because the two producers run at
+/// different points in the event loop: `App::tick` for state-driven animation
+/// (inertia scrolling) and rendering for view-driven animation (the loading
+/// screen). Each producer replaces only its own request, so neither can
+/// clobber or outlive the other's.
+#[derive(Default)]
+struct AnimationRequests {
+    /// The shortest interval requested during the most recent `App::tick`.
+    from_tick: Option<Duration>,
+    /// The shortest interval requested during the most recent render.
+    from_render: Option<Duration>,
+}
+
+impl AnimationRequests {
+    /// The shortest live request, or `None` if nothing is animating.
+    fn interval(&self) -> Option<Duration> {
+        self.from_tick.into_iter().chain(self.from_render).min()
+    }
+
+    /// Narrows `slot` to `interval`, so the shortest request of a frame wins.
+    fn request_into(slot: &mut Option<Duration>, interval: Duration) {
+        *slot = Some(slot.map_or(interval, |current| current.min(interval)));
+    }
+}
+
 /// Which panel/mode the UI is in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusedPanel {
@@ -54,8 +94,6 @@ pub struct App {
     pub playback_mode_dropdown: bool,
     /// Clickable regions in the help bar: (x_start, x_end, action).
     pub help_bar_items: Vec<(u16, u16, keys::Action)>,
-    /// Monotonically increasing tick counter for animations.
-    pub tick_count: u64,
     /// Whether the user is dragging the scrub bar or volume slider.
     pub scrub_dragging: bool,
     /// Preview seek ratio while dragging the scrub bar (0.0–1.0).
@@ -70,6 +108,11 @@ pub struct App {
     /// Whether the inline lyrics overlay mode is active. Set when the user is
     /// in inline display mode, independent of sidebar presence/visibility.
     pub inline_lyrics_mode: bool,
+
+    /// The frame intervals requested by whatever is currently animating.
+    animations: AnimationRequests,
+    /// The zero point for time-based animations.
+    started_at: Instant,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -125,13 +168,14 @@ impl App {
             album_art_overlay: None,
             playback_mode_dropdown: false,
             help_bar_items: Vec::new(),
-            tick_count: 0,
             scrub_dragging: false,
             scrub_preview_ratio: None,
             lyrics_sidebar_dragging: false,
             sidebar_component_drag: None,
             settings_sidebar_dragging: false,
             inline_lyrics_mode,
+            animations: AnimationRequests::default(),
+            started_at: Instant::now(),
 
             library: LibraryState::new(),
             search: SearchState::new(),
@@ -145,8 +189,65 @@ impl App {
         }
     }
 
+    /// The time since startup, which is the clock for time-phased animations.
+    ///
+    /// An animation that reads this plays at the same speed regardless of the
+    /// tick rate, which varies with the configuration and with what else is
+    /// animating. (Inertia scrolling does not: its velocity is in lines per
+    /// tick, so its distance still follows the tick rate.)
+    pub fn elapsed(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
+    /// Requests, from view code during a render, that the UI keep animating at
+    /// `interval` or faster for as long as the view keeps asking.
+    ///
+    /// This also marks the UI as needing a redraw, so an animating view
+    /// sustains itself: each frame it draws re-requests the next one, and the
+    /// animation stops on its own once the view stops asking.
+    pub fn request_render_animation(&mut self, interval: Duration) {
+        AnimationRequests::request_into(&mut self.animations.from_render, interval);
+        self.needs_redraw = true;
+    }
+
+    /// Requests, from state updates during [`App::tick`], that the UI keep
+    /// animating at `interval` or faster until the state stops asking.
+    ///
+    /// A state animation can be started by an event rather than by a tick — a
+    /// scroll fling begins on mouse release — so its first request lands on
+    /// the tick after that event. The event loop ticks on input for exactly
+    /// this reason, which keeps `tick` the only thing that decides which
+    /// viewports it is responsible for.
+    fn request_tick_animation(&mut self, interval: Duration) {
+        AnimationRequests::request_into(&mut self.animations.from_tick, interval);
+        self.needs_redraw = true;
+    }
+
+    /// The interval the event loop should run at: the shortest live animation
+    /// request, clamped to at most the configured tick rate and at least
+    /// [`MIN_FRAME_INTERVAL`].
+    pub fn frame_interval(&self) -> Duration {
+        let tick_rate = Duration::from_millis(self.config.general.tick_rate_ms);
+        let interval = match self.animations.interval() {
+            Some(animation) => animation.min(tick_rate),
+            None => tick_rate,
+        };
+        interval.max(MIN_FRAME_INTERVAL)
+    }
+
+    /// Prepares for the render that is about to happen: the redraw flag is
+    /// cleared and the render-side animation requests are dropped, so the
+    /// frame restates both for itself. Called by the event loop immediately
+    /// before drawing, never after — a view that animates requests its next
+    /// frame while drawing.
+    pub fn begin_render(&mut self) {
+        self.needs_redraw = false;
+        self.animations.from_render = None;
+    }
+
     pub fn tick(&mut self) {
-        self.tick_count = self.tick_count.wrapping_add(1);
+        // Drop the tick-side animation requests; this tick restates them.
+        self.animations.from_tick = None;
 
         // Keep the runtime sidebar order in sync with the config. The order
         // is a snapshot of the config's component list; recomputing a
@@ -333,11 +434,17 @@ impl App {
         }
 
         // Apply inertia scrolling when the focused panel has an active drag.
+        // A viewport is only polled for its inertia in the same branch that
+        // ticks it, so a viewport left mid-inertia by a focus change can't
+        // hold the event loop at the fast frame rate.
+        let mut inertia_active = false;
         if self.focused_panel == FocusedPanel::Library {
             changed |= self.library.tick_inertia(&self.logic);
+            inertia_active |= self.library.viewport.inertia_active();
         }
         if self.focused_panel == FocusedPanel::Search {
             changed |= self.search.tick_inertia();
+            inertia_active |= self.search.viewport.inertia_active();
         }
         // The similar-songs component has its own viewport inertia, active
         // whenever a sidebar is visible (not just when focused).
@@ -348,6 +455,7 @@ impl App {
             || self.focused_panel == FocusedPanel::Lyrics
         {
             changed |= self.similar_songs.tick_inertia();
+            inertia_active |= self.similar_songs.viewport.inertia_active();
         }
         // The queue sidebar component also has viewport inertia.
         if self
@@ -359,6 +467,10 @@ impl App {
                 self.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
             let total_items = before.len() + usize::from(current.is_some()) + after.len();
             changed |= self.queue_sidebar.tick_inertia(total_items);
+            inertia_active |= self.queue_sidebar.viewport.inertia_active();
+        }
+        if inertia_active {
+            self.request_tick_animation(SMOOTH_FRAME_INTERVAL);
         }
 
         if self.logic.should_shutdown() {
@@ -515,5 +627,115 @@ impl App {
             };
             self.logic.seek_current(new_pos);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::{MIN_FRAME_INTERVAL, SMOOTH_FRAME_INTERVAL};
+    use crate::ui::layout::tests::test_app;
+
+    /// Sets whether the library reports itself as fully loaded, which is what
+    /// selects the animated loading screen over the track list.
+    fn set_loaded(app: &mut crate::app::App, loaded: bool) {
+        app.logic
+            .get_state()
+            .write()
+            .unwrap()
+            .library
+            .has_loaded_all_tracks = loaded;
+    }
+
+    /// Renders one frame the way the event loop does, and reports whether the
+    /// frame asked to be animated again.
+    fn render_frame(app: &mut crate::app::App) -> Option<Duration> {
+        let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        app.begin_render();
+        terminal.draw(|frame| crate::ui::draw(frame, app)).unwrap();
+        app.animations.from_render
+    }
+
+    #[test]
+    fn frame_interval_is_the_tick_rate_when_nothing_animates() {
+        let mut app = test_app();
+        app.config.general.tick_rate_ms = 100;
+        assert_eq!(app.frame_interval(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn frame_interval_takes_the_shortest_request() {
+        let mut app = test_app();
+        app.config.general.tick_rate_ms = 100;
+
+        app.request_tick_animation(SMOOTH_FRAME_INTERVAL);
+        app.request_render_animation(Duration::from_millis(50));
+        assert_eq!(app.frame_interval(), SMOOTH_FRAME_INTERVAL);
+    }
+
+    #[test]
+    fn a_request_slower_than_the_tick_rate_does_not_slow_the_loop() {
+        let mut app = test_app();
+        app.config.general.tick_rate_ms = 100;
+
+        app.request_render_animation(Duration::from_secs(1));
+        assert_eq!(app.frame_interval(), Duration::from_millis(100));
+    }
+
+    #[test]
+    fn frame_interval_is_floored() {
+        let mut app = test_app();
+        app.config.general.tick_rate_ms = 0;
+        assert_eq!(app.frame_interval(), MIN_FRAME_INTERVAL);
+    }
+
+    #[test]
+    fn each_producer_only_clears_its_own_request() {
+        let mut app = test_app();
+        app.request_tick_animation(SMOOTH_FRAME_INTERVAL);
+
+        // A render leaves the tick-side request standing.
+        app.begin_render();
+        assert_eq!(app.animations.interval(), Some(SMOOTH_FRAME_INTERVAL));
+
+        // A tick with nothing animating drops it. Reset the config-reload
+        // timer first: `tick` would otherwise be free to reload and re-save
+        // the developer's real config file from a unit test.
+        app.last_config_check = Instant::now();
+        app.tick();
+        assert_eq!(app.animations.interval(), None);
+    }
+
+    #[test]
+    fn the_loading_screen_sustains_its_own_animation() {
+        let mut app = test_app();
+
+        // The test `Logic` has an empty base URL, so its initial fetch fails
+        // and the library area would render the connection error instead of
+        // the loading screen. That failure is one-shot, so waiting for it and
+        // clearing it leaves the error slot empty for the rest of the test.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while app.logic.get_error().is_none() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        app.logic.clear_error();
+
+        set_loaded(&mut app, false);
+
+        // Drawing the loading screen requests the next frame, which is what
+        // keeps it animating while the library loads and nothing else changes.
+        assert_eq!(
+            render_frame(&mut app),
+            Some(crate::ui::loading::FRAME_INTERVAL)
+        );
+        assert!(app.needs_redraw);
+
+        // Once the library has loaded, the request stops and the UI settles.
+        set_loaded(&mut app, true);
+        assert_eq!(render_frame(&mut app), None);
+        assert!(!app.needs_redraw);
     }
 }

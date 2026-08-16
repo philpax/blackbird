@@ -1062,7 +1062,11 @@ pub fn draw(frame: &mut Frame, app: &mut App, area: Rect) {
             .library
             .track_ids
             .len();
-        super::loading::draw(frame, app.tick_count, &app.config.style, track_count, inner);
+        // The loading screen animates, so it asks to be redrawn for as long as
+        // it is on screen; nothing else changes during the initial fetch.
+        app.request_render_animation(super::loading::FRAME_INTERVAL);
+        let elapsed = app.elapsed();
+        super::loading::draw(frame, elapsed, &app.config.style, track_count, inner);
         return;
     }
 

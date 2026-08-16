@@ -3,6 +3,8 @@
 //! Renders a flock of small bird glyphs drifting in a wave pattern,
 //! with the "blackbird" title and track-count status centered below.
 
+use std::time::Duration;
+
 use ratatui::{
     Frame,
     buffer::Buffer,
@@ -43,17 +45,29 @@ const FLOCK_HEIGHT: u16 = 5;
 /// Total height of the loading display: flock + blank line + title + status.
 const TOTAL_HEIGHT: u16 = FLOCK_HEIGHT + 1 + 1 + 1;
 
-/// Draws the animated loading screen centered in `area`.
+/// Interval between animation frames. Callers request redraws at this rate for
+/// as long as the loading screen is up.
+pub const FRAME_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The animation frame to draw for a given time since startup.
+fn frame_index(elapsed: Duration) -> u64 {
+    (elapsed.as_millis() / FRAME_INTERVAL.as_millis()) as u64
+}
+
+/// Draws the animated loading screen centered in `area`. `elapsed` is the time
+/// since startup, which phases the animation.
 pub fn draw(
     frame: &mut Frame,
-    tick_count: u64,
+    elapsed: Duration,
     style: &blackbird_client_shared::style::Style,
     track_count: usize,
     area: Rect,
 ) {
+    let index = frame_index(elapsed);
+
     if area.width < 4 || area.height < TOTAL_HEIGHT {
         // Area too small for the animation; fall back to simple text.
-        draw_minimal(frame, style, track_count, tick_count, area);
+        draw_minimal(frame, style, track_count, index, area);
         return;
     }
 
@@ -66,7 +80,7 @@ pub fn draw(
 
     // Draw the flock.
     let flock_area = Rect::new(area.x, top_y, area.width, FLOCK_HEIGHT);
-    draw_flock(frame.buffer_mut(), tick_count, accent, center_x, flock_area);
+    draw_flock(frame.buffer_mut(), index, accent, center_x, flock_area);
 
     // "blackbird" title, centered below the flock.
     let title_y = top_y + FLOCK_HEIGHT + 1;
@@ -84,7 +98,7 @@ pub fn draw(
     let status_y = title_y + 1;
     if status_y < area.y + area.height {
         let status_area = Rect::new(area.x, status_y, area.width, 1);
-        let status_text = loading_status_text(track_count, tick_count);
+        let status_text = loading_status_text(track_count, index);
         let status = Paragraph::new(Line::from(Span::styled(
             status_text,
             Style::default().fg(dim),
@@ -95,21 +109,15 @@ pub fn draw(
 }
 
 /// Renders each bird glyph into the buffer at its animated position.
-fn draw_flock(
-    buf: &mut Buffer,
-    tick_count: u64,
-    color: ratatui::style::Color,
-    cx: u16,
-    area: Rect,
-) {
-    let tick = tick_count as usize;
+fn draw_flock(buf: &mut Buffer, index: u64, color: ratatui::style::Color, cx: u16, area: Rect) {
+    let index = index as usize;
 
     for (i, &(base_x, base_y)) in FLOCK.iter().enumerate() {
         // Per-bird phase offset for varied motion.
-        let phase = (tick + i * 3) % SINE_TABLE.len();
+        let phase = (index + i * 3) % SINE_TABLE.len();
         let dx = SINE_TABLE[phase];
         // Vertical wave uses a different phase offset.
-        let vy_phase = (tick + i * 5) % SINE_TABLE.len();
+        let vy_phase = (index + i * 5) % SINE_TABLE.len();
         let dy = SINE_TABLE[vy_phase] / 2;
 
         let x = cx as i16 + base_x + dx;
@@ -131,8 +139,8 @@ fn draw_flock(
 /// Generates the status text with animated dots or a track count.
 /// The result is padded to a fixed width so centered text doesn't jitter
 /// as the dot count cycles.
-fn loading_status_text(track_count: usize, tick_count: u64) -> String {
-    let dot_count = (tick_count / 5 % 4 + 1) as usize;
+fn loading_status_text(track_count: usize, index: u64) -> String {
+    let dot_count = (index / 5 % 4 + 1) as usize;
     let dots = ".".repeat(dot_count);
     let pad = " ".repeat(4 - dot_count);
     if track_count > 0 {
@@ -147,11 +155,11 @@ fn draw_minimal(
     frame: &mut Frame,
     style: &blackbird_client_shared::style::Style,
     track_count: usize,
-    tick_count: u64,
+    index: u64,
     area: Rect,
 ) {
     let dim = style.library.track_duration().to_color();
-    let text = loading_status_text(track_count, tick_count);
+    let text = loading_status_text(track_count, index);
     let paragraph = Paragraph::new(text).style(Style::default().fg(dim));
     frame.render_widget(paragraph, area);
 }

@@ -694,7 +694,7 @@ pub const LOG_TARGET_WIDTH: usize = 24;
 pub const LOG_TARGET_SUFFIX_LEN: usize = 21;
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -762,10 +762,17 @@ mod tests {
     use crate::app::{App, FocusedPanel};
     use blackbird_core::{self as bc};
 
-    /// Builds a minimal, non-loading `App` for layout/visibility tests. The
+    /// Builds a minimal `App` for layout, visibility, and animation tests. The
     /// logic's mpsc senders and the app's receivers are dummy (dropped
-    /// immediately); only `has_loaded_all_tracks` and lyrics data matter here.
-    fn test_app() -> App {
+    /// immediately), and the library is marked loaded so the loading branch is
+    /// not exercised; layout tests care only about that flag and lyrics data.
+    ///
+    /// The base URL is empty, so the logic's initial fetch fails once shortly
+    /// after construction and leaves an `InitialFetchFailed` in the error slot.
+    /// A caller that clears the loaded flag to reach the loading screen must
+    /// wait for that failure and clear it, or it will render the connection
+    /// error instead.
+    pub(crate) fn test_app() -> App {
         let (cover_art_loaded_tx, cover_art_loaded_rx) = std::sync::mpsc::channel::<bc::CoverArt>();
         let (lyrics_loaded_tx, lyrics_loaded_rx) = std::sync::mpsc::channel::<bc::LyricsData>();
         let (similar_songs_loaded_tx, similar_songs_loaded_rx) =
