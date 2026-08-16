@@ -412,6 +412,31 @@ impl QueueSidebarState {
         self.viewport.apply_content_drag(y, total_items);
     }
 
+    /// Resolves a pending click by looking up the track at the clicked window
+    /// index. Returns the track id to play, or `None` when the click was
+    /// cancelled by a drag or the index no longer maps to a track (the queue
+    /// can change between press and release).
+    pub fn handle_mouse_up(&mut self, logic: &bc::Logic) -> Option<TrackId> {
+        let pending = self.click_pending.take();
+        let outcome = self.viewport.end_drag();
+        if outcome != super::scroll::EndDragOutcome::Idle {
+            return None;
+        }
+        let (_x, _y, index) = pending?;
+        let (before, current, after) = logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+        let total_items = before.len() + usize::from(current.is_some()) + after.len();
+        if index >= total_items {
+            return None;
+        }
+        if index < before.len() {
+            Some(before[index].clone())
+        } else if index == before.len() {
+            current
+        } else {
+            Some(after[index - before.len() - 1].clone())
+        }
+    }
+
     /// Handle a mouse-wheel scroll.
     pub fn handle_scroll(&mut self, direction: i32, steps: usize, total_items: usize) {
         self.viewport.apply_wheel(direction, steps, total_items);

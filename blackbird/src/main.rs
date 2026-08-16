@@ -791,6 +791,10 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             if let Some(track_id) = app.similar_songs.handle_mouse_up() {
                 app.logic.request_play_track(&track_id);
             }
+            // Resolve a pending queue click (sidebar component).
+            if let Some(track_id) = app.queue_sidebar.handle_mouse_up(&app.logic) {
+                app.logic.request_play_track(&track_id);
+            }
             if app.focused_panel == FocusedPanel::Search
                 && let Some(sa) = app.search.handle_mouse_up(&app.logic)
             {
