@@ -255,6 +255,8 @@ style! {
         lyrics_border = "Lyrics border", [0.55, 0.85, 0.75];
         /// Similar-songs panel frame border colour.
         similar_border = "Similar songs border", [0.35, 0.80, 0.70];
+        /// Queue panel frame border colour.
+        queue_border = "Queue border", [0.90, 0.75, 0.75];
     }
 
     /// Now-playing bar and scrub bar colours.

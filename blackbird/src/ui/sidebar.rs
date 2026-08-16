@@ -728,7 +728,7 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
 /// Draws the queue sidebar component (bordered block + track list).
 pub fn draw_queue_sidebar(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     let style = &app.config.style;
-    let block = super::framed_block(" Queue ", style.sidebar.similar_border().to_color());
+    let block = super::framed_block(" Queue ", style.sidebar.queue_border().to_color());
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
