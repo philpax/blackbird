@@ -43,10 +43,11 @@ pub enum TrackIndicator {
 }
 
 /// Renders a single track line with colored spans matching the library rendering.
-/// Produces: `[indicator][artist color] artist [ - ][title color] title[pc color] play_count
+/// Produces: `[indicator][artist color] artist [title color] title[pc color] play_count
 /// [padding][length color] dur`. Duration is right-aligned without brackets, play count
 /// is appended after the title when available, and padding fills the space between
-/// the left content and the right-aligned duration. The caller is responsible for
+/// the left content and the right-aligned duration. Disabled tracks keep their usual
+/// colours but with reduced brightness. The caller is responsible for
 /// applying hover underline if needed.
 pub fn render_track_line(
     track_id: &TrackId,
@@ -65,15 +66,15 @@ pub fn render_track_line(
         ));
     };
 
-    let dim_color = Color::Rgb(128, 128, 128);
-    let span_color = if dimmed {
-        dim_color
-    } else {
-        match indicator {
-            TrackIndicator::Playing => style.library.track_name_playing().to_color(),
-            TrackIndicator::Selected => style.library.track_name_hovered().to_color(),
-            TrackIndicator::None => Color::Reset,
-        }
+    let indicator_hsv: Option<shared_style::Hsv> = match indicator {
+        TrackIndicator::Playing => Some(style.library.track_name_playing),
+        TrackIndicator::Selected => Some(style.library.track_name_hovered),
+        TrackIndicator::None => None,
+    };
+    let span_color = match indicator_hsv {
+        Some(hsv) if !dimmed => style_color(hsv),
+        Some(hsv) => dimmed_style_color(hsv),
+        None => Color::Reset,
     };
 
     let artist = details.artist();
@@ -92,22 +93,25 @@ pub fn render_track_line(
     spans.push(Span::styled(
         artist.to_string(),
         Style::default().fg(if dimmed {
-            dim_color
+            dimmed_style_color(shared_style::string_to_hsv(artist))
         } else {
             string_to_color(artist)
         }),
     ));
 
-    // Separator.
-    spans.push(Span::raw(" - "));
+    // Space between artist and title; the colours distinguish the two.
+    spans.push(Span::raw(" "));
 
     // Title span.
-    let title_color = if dimmed {
-        dim_color
-    } else if is_selected {
-        style.library.track_name_hovered().to_color()
+    let title_hsv = if is_selected {
+        style.library.track_name_hovered
     } else {
-        style.library.track_name().to_color()
+        style.library.track_name
+    };
+    let title_color = if dimmed {
+        dimmed_style_color(title_hsv)
+    } else {
+        style_color(title_hsv)
     };
     spans.push(Span::styled(
         details.track_title.to_string(),
@@ -124,9 +128,9 @@ pub fn render_track_line(
 
     if let Some(pc) = details.play_count {
         let pc_color = if dimmed {
-            dim_color
+            dimmed_style_color(style.library.track_number)
         } else {
-            style.library.track_number().to_color()
+            style_color(style.library.track_number)
         };
         let pc_str = format!(" {pc}");
         spans.push(Span::styled(pc_str.clone(), Style::default().fg(pc_color)));
@@ -134,12 +138,15 @@ pub fn render_track_line(
     }
 
     // Duration without brackets, right-aligned with padding, matching the library.
-    let duration_color = if dimmed {
-        dim_color
-    } else if is_selected {
-        style.library.track_name_hovered().to_color()
+    let duration_hsv = if is_selected {
+        style.library.track_name_hovered
     } else {
-        style.library.track_length().to_color()
+        style.library.track_length
+    };
+    let duration_color = if dimmed {
+        dimmed_style_color(duration_hsv)
+    } else {
+        style_color(duration_hsv)
     };
 
     // Reserve space for the duration (left pad + duration + right pad).
@@ -243,6 +250,16 @@ impl ToColor for shared_style::Rgb {
 /// Converts a shared HSV colour to a ratatui `Color` (gamma-corrected).
 pub fn style_color(hsv: shared_style::Hsv) -> Color {
     shared_style::hsv_to_rgb(hsv).to_color()
+}
+
+/// Brightness (value) multiplier applied to disabled-track colours.
+const DIM_BRIGHTNESS: f32 = 0.4;
+
+/// Produces the dimmed variant of an HSV colour: same hue and saturation with
+/// reduced brightness, used for disabled (e.g. already-played) tracks.
+fn dimmed_style_color(hsv: shared_style::Hsv) -> Color {
+    let [h, s, v] = hsv;
+    style_color([h, s, v * DIM_BRIGHTNESS])
 }
 
 /// Builds half-block art spans for one terminal row from a 4x4 color grid,
