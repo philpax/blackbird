@@ -23,6 +23,7 @@ use ratatui::{
 };
 
 use smol_str::ToSmolStr as _;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::{
     app::{App, FocusedPanel},
@@ -41,9 +42,12 @@ pub enum TrackIndicator {
     None,
 }
 
-/// Renders a single track line with colored spans matching the unified rendering.
-/// Produces: `[indicator][artist color] artist [ - ][title color] title [length color] [duration]`.
-/// The caller is responsible for applying hover underline if needed.
+/// Renders a single track line with colored spans matching the library rendering.
+/// Produces: `[indicator][artist color] artist [ - ][title color] title[pc color] play_count
+/// [padding][length color] dur`. Duration is right-aligned without brackets, play count
+/// is appended after the title when available, and padding fills the space between
+/// the left content and the right-aligned duration. The caller is responsible for
+/// applying hover underline if needed.
 pub fn render_track_line(
     track_id: &TrackId,
     app_state: &bc::AppState,
@@ -51,6 +55,7 @@ pub fn render_track_line(
     is_selected: bool,
     indicator: TrackIndicator,
     dimmed: bool,
+    width: u16,
 ) -> Line<'static> {
     let details = TrackDisplayDetails::from_track_id(track_id, app_state);
     let Some(details) = details else {
@@ -109,7 +114,26 @@ pub fn render_track_line(
         Style::default().fg(title_color),
     ));
 
-    // Duration span.
+    // Play count after title, matching the library.
+    // Build left content first, then truncate if needed to make room for the
+    // right-aligned duration.
+    let mut left_width = 0;
+    for span in &spans {
+        left_width += span.content.width();
+    }
+
+    if let Some(pc) = details.play_count {
+        let pc_color = if dimmed {
+            dim_color
+        } else {
+            style.library.track_number().to_color()
+        };
+        let pc_str = format!(" {pc}");
+        spans.push(Span::styled(pc_str.clone(), Style::default().fg(pc_color)));
+        left_width += pc_str.width();
+    }
+
+    // Duration without brackets, right-aligned with padding, matching the library.
     let duration_color = if dimmed {
         dim_color
     } else if is_selected {
@@ -117,10 +141,51 @@ pub fn render_track_line(
     } else {
         style.library.track_length().to_color()
     };
-    spans.push(Span::styled(
-        format!(" [{dur_str}]"),
-        Style::default().fg(duration_color),
-    ));
+
+    // Reserve space for the duration (left pad + duration + right pad).
+    let right_width = dur_str.width() + 2;
+    let available_left = (width as usize).saturating_sub(right_width);
+
+    // Truncate the left content (title/play count) if it exceeds available space.
+    // Truncate from the end at character granularity to preserve the artist name.
+    if left_width > available_left {
+        let excess = left_width - available_left;
+        let mut to_remove = excess;
+        // Walk backwards through spans (skip first 3: indicator, artist, separator).
+        let mut i = spans.len();
+        while to_remove > 0 && i > 3 {
+            i -= 1;
+            let span = &mut spans[i];
+            let span_w = span.content.width();
+            if to_remove >= span_w {
+                // Remove this span entirely.
+                spans.remove(i);
+                to_remove -= span_w;
+            } else {
+                // Truncate this span's content so it fits.
+                let new_content = truncate_to_width(&span.content, span_w - to_remove);
+                span.content = new_content.into();
+                to_remove = 0;
+            }
+        }
+        // If the width is extremely narrow and even the first three spans exceed
+        // available space, truncate the artist span as a last resort.
+        if to_remove > 0 && spans.len() > 2 {
+            let artist = &mut spans[1];
+            let artist_w = artist.content.width();
+            let keep = artist_w.saturating_sub(to_remove);
+            artist.content = truncate_to_width(&artist.content, keep).into();
+        }
+        left_width = available_left;
+    }
+
+    // Compute padding between left content and duration.
+    let padding_needed = available_left.saturating_sub(left_width);
+    spans.push(Span::raw(" ".repeat(padding_needed)));
+
+    spans.push(Span::raw(" ")); // left padding
+    spans.push(Span::styled(dur_str, Style::default().fg(duration_color)));
+    spans.push(Span::raw(" ")); // right padding
 
     Line::from(spans)
 }
@@ -144,6 +209,24 @@ pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
     } else {
         config.style.general.background().to_color()
     }
+}
+
+/// Truncates `s` from the right so its display width is at most `max_width`.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if s.width() <= max_width {
+        return s.to_string();
+    }
+    let mut w = 0;
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        let cw = ch.width().unwrap_or(1);
+        if w + cw > max_width {
+            break;
+        }
+        w += cw;
+        result.push(ch);
+    }
+    result
 }
 
 /// Extension trait for using shared style colors with ratatui.
@@ -888,6 +971,7 @@ mod render_tests {
             false,
             TrackIndicator::None,
             false,
+            80,
         );
         assert_eq!(line.spans.len(), 1);
         assert_eq!(
@@ -903,6 +987,7 @@ mod render_tests {
             false,
             TrackIndicator::Playing,
             false,
+            80,
         );
         assert_eq!(line_playing.spans.len(), 1);
         assert_eq!(
@@ -918,11 +1003,35 @@ mod render_tests {
             true,
             TrackIndicator::Selected,
             false,
+            80,
         );
         assert_eq!(line_selected.spans.len(), 1);
         assert_eq!(
             line_selected.spans[0].content.to_string(),
             "[TrackId(\"nonexistent\")]"
         );
+    }
+
+    /// Verifies that `truncate_to_width` respects display-width limits,
+    /// including multi-width Unicode characters.
+    #[test]
+    fn test_truncate_to_width() {
+        use super::truncate_to_width;
+
+        // No truncation when already within limit.
+        assert_eq!(truncate_to_width("hello", 10), "hello");
+
+        // Truncate ASCII.
+        assert_eq!(truncate_to_width("hello", 3), "hel");
+
+        // Zero width returns empty.
+        assert_eq!(truncate_to_width("hello", 0), "");
+
+        // Multi-width characters (CJK is 2 cells wide).
+        assert_eq!(truncate_to_width("你好", 2), "你");
+        assert_eq!(truncate_to_width("你好", 4), "你好");
+
+        // Mixed ASCII and multi-width.
+        assert_eq!(truncate_to_width("a你b", 3), "a你");
     }
 }

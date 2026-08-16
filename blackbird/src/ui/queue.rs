@@ -94,7 +94,15 @@ pub fn draw(
 
         let dimmed = idx < current_list_index;
 
-        let line = super::render_track_line(track_id, &st, style, is_selected, indicator, dimmed);
+        let line = super::render_track_line(
+            track_id,
+            &st,
+            style,
+            is_selected,
+            indicator,
+            dimmed,
+            inner.width, // no scrollbar in fullscreen queue
+        );
 
         items.push(ListItem::new(line));
     }

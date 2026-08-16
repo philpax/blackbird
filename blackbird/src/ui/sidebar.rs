@@ -687,6 +687,7 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
                 is_selected,
                 super::TrackIndicator::None,
                 false,
+                inner.width.saturating_sub(1), // -1 for the scrollbar column
             );
             // Underline the hovered row (like the library), except when it is
             // the keyboard-selected row.
@@ -802,6 +803,7 @@ pub fn draw_queue_sidebar(frame: &mut Frame, app: &mut App, area: Rect, focused:
                 is_selected,
                 indicator,
                 dimmed,
+                inner.width.saturating_sub(1), // -1 for the scrollbar column
             );
 
             // Underline the hovered row, except when it's the keyboard-selected row.
