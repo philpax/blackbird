@@ -1,5 +1,5 @@
 use blackbird_client_shared::cover_art_cache::Resolution;
-use blackbird_core::PlaybackMode;
+use blackbird_core::{PlaybackMode, PlaybackState};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -218,20 +218,23 @@ fn heart_to_tui(state: blackbird_client_shared::style::HeartState) -> (&'static 
 
 fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
     let style = &app.config.style;
-    let is_playing = app.logic.get_playing_position().is_some();
+    let is_playing = app.logic.get_playback_state() == PlaybackState::Playing;
     let mode = app.logic.get_playback_mode();
 
-    let play_icon = if is_playing { "\u{25B6}" } else { "\u{23F8}" };
+    // The button shows the action it performs: pause while playing, play
+    // otherwise. All glyphs come from blocks every monospace font covers
+    // (Latin-1, box drawing, geometric shapes), so no font fallback occurs.
+    let play_icon = if is_playing { "\u{2551}" } else { "\u{25B6}" };
     let play_color = if is_playing {
         style.library.track_name_playing().to_color()
     } else {
         style.library.track_name_hovered().to_color()
     };
 
-    // Transport row:  |<  []  >|
+    // Transport row:  «  ▶/║  ■  »
     let transport = Line::from(vec![
         Span::styled(
-            "\u{23EE}",
+            "\u{00AB}",
             Style::default().fg(style.general.text().to_color()),
         ),
         Span::raw("  "),
@@ -241,12 +244,12 @@ fn draw_transport(frame: &mut Frame, app: &App, area: Rect) {
         ),
         Span::raw("  "),
         Span::styled(
-            "\u{23F9}",
+            "\u{25A0}",
             Style::default().fg(style.general.text().to_color()),
         ),
         Span::raw("  "),
         Span::styled(
-            "\u{23ED}",
+            "\u{00BB}",
             Style::default().fg(style.general.text().to_color()),
         ),
     ]);
@@ -342,7 +345,7 @@ pub fn handle_mouse_click(app: &mut App, area: Rect, x: u16, y: u16) {
     // Click on transport area
     if x >= transport_area.x && x < transport_area.x + transport_area.width {
         if row == 0 {
-            // Transport buttons row: "⏮  ▶  ⏹  ⏭" right-aligned in 24 chars
+            // Transport buttons row: «  ▶/║  ■  » right-aligned in 24 chars
             let rel_x = x.saturating_sub(transport_area.x);
             let btn_start = transport_area
                 .width
