@@ -767,6 +767,7 @@ fn render_row(
                     let name = match c {
                         SidebarComponent::Lyrics => "lyrics",
                         SidebarComponent::SimilarSongs => "similar songs",
+                        SidebarComponent::Queue => "queue",
                     };
                     let is_sel = i == state.component_list_sel;
                     let marker = if is_sel && state.component_list_armed {
@@ -803,6 +804,7 @@ fn render_row(
                     .map(|c| match c {
                         SidebarComponent::Lyrics => "lyrics",
                         SidebarComponent::SimilarSongs => "similar songs",
+                        SidebarComponent::Queue => "queue",
                     })
                     .collect();
                 spans.push(Span::styled(
@@ -1484,10 +1486,16 @@ mod tests {
         );
         assert_eq!(state.component_list_sel, 1);
 
-        // Add: with both present, 'a' is a no-op (all components present).
-        let list_len = config.layout.base.sidebar.components.len();
+        // Add: with Lyrics and SimilarSongs present, 'a' adds Queue (the first absent).
         let _ = handle_key(&mut state, &mut config, Action::Char('a'));
-        assert_eq!(config.layout.base.sidebar.components.len(), list_len);
+        assert_eq!(
+            config.layout.base.sidebar.components,
+            vec![
+                SidebarComponent::Lyrics,
+                SidebarComponent::SimilarSongs,
+                SidebarComponent::Queue
+            ]
+        );
 
         // Esc disarms the armed item (armed Select now confirms and exits).
         let _ = handle_key(&mut state, &mut config, Action::Back);
@@ -1501,31 +1509,40 @@ mod tests {
         assert!(!state.editing);
         assert_eq!(
             config.layout.base.sidebar.components,
-            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+            vec![
+                SidebarComponent::Lyrics,
+                SidebarComponent::SimilarSongs,
+                SidebarComponent::Queue
+            ]
         );
 
-        // Re-enter editing and delete similar songs.
+        // Re-enter editing and delete queue.
         let _ = handle_key(&mut state, &mut config, Action::Select);
         assert!(state.editing);
         let _ = handle_key(&mut state, &mut config, Action::MoveDown);
-        assert_eq!(state.component_list_sel, 1);
+        let _ = handle_key(&mut state, &mut config, Action::MoveDown);
+        assert_eq!(state.component_list_sel, 2);
         let _ = handle_key(&mut state, &mut config, Action::Select);
         assert!(state.component_list_armed);
         let _ = handle_key(&mut state, &mut config, Action::DeleteChar);
         assert_eq!(
             config.layout.base.sidebar.components,
-            vec![SidebarComponent::Lyrics]
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
         );
-        assert_eq!(state.component_list_sel, 0);
+        assert_eq!(state.component_list_sel, 1);
         assert!(!state.component_list_armed);
 
-        // Add 'a' again: re-adds the absent similar songs (heights rebalanced).
+        // Add 'a' again: re-adds Queue (the first absent).
         let _ = handle_key(&mut state, &mut config, Action::Char('a'));
         assert_eq!(
             config.layout.base.sidebar.components,
-            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+            vec![
+                SidebarComponent::Lyrics,
+                SidebarComponent::SimilarSongs,
+                SidebarComponent::Queue
+            ]
         );
-        assert_eq!(config.layout.base.sidebar.heights.len(), 2);
+        assert_eq!(config.layout.base.sidebar.heights.len(), 3);
         // Adding arms the new item; Esc disarms it first...
         assert!(state.component_list_armed);
         let _ = handle_key(&mut state, &mut config, Action::Back);

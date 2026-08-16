@@ -1,10 +1,9 @@
 use blackbird_client_shared::{self, style as shared_style};
-use blackbird_core::{self as bc, TrackDisplayDetails, blackbird_state::TrackId};
+use blackbird_core::{self as bc, blackbird_state::TrackId};
 use ratatui::{
     Frame,
     layout::Rect,
-    style::{Modifier, Style},
-    text::{Line, Span},
+    style::Style,
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
@@ -38,7 +37,7 @@ impl QueueState {
 }
 
 /// Number of tracks to show before and after the current track in the queue window.
-const QUEUE_RADIUS: usize = 50;
+pub(crate) const QUEUE_RADIUS: usize = 50;
 
 pub fn draw(
     frame: &mut Frame,
@@ -68,18 +67,10 @@ pub fn draw(
     let state = logic.get_state();
     let st = state.read().unwrap();
 
-    // Pre-compute style colors.
-    let text_color = style.general.text().to_color();
-    let track_duration_color = style.library.track_duration().to_color();
-    let track_name_playing_color = style.library.track_name_playing().to_color();
-    let track_name_hovered_color = style.library.track_name_hovered().to_color();
-
     // Build list: [before... | current | after...]
     let total_items = before.len() + 1 + after.len();
     let current_list_index = before.len();
     let selected_index = queue_state.selected_index;
-
-    let mut items: Vec<ListItem> = Vec::with_capacity(total_items);
 
     let all_tracks: Vec<&TrackId> = before
         .iter()
@@ -87,71 +78,25 @@ pub fn draw(
         .chain(after.iter())
         .collect();
 
+    let mut items: Vec<ListItem> = Vec::with_capacity(total_items);
+
     for (idx, track_id) in all_tracks.iter().enumerate() {
         let is_current = idx == current_list_index;
         let is_selected = selected_index == Some(idx);
 
-        let display = TrackDisplayDetails::from_track_id(track_id, &st);
-        let label = match &display {
-            Some(d) => format!("{} - {}", d.artist(), d.track_title),
-            None => track_id.0.to_string(),
+        let indicator = if is_current {
+            super::TrackIndicator::Playing
+        } else if is_selected {
+            super::TrackIndicator::Selected
+        } else {
+            super::TrackIndicator::None
         };
 
-        let duration_str = display
-            .as_ref()
-            .map(|d| {
-                format!(
-                    " [{}]",
-                    bc::util::seconds_to_hms_string(d.track_duration.as_secs() as u32, false)
-                )
-            })
-            .unwrap_or_default();
+        let dimmed = idx < current_list_index;
 
-        let line_color = if is_selected {
-            track_name_hovered_color
-        } else if is_current {
-            track_name_playing_color
-        } else if idx < current_list_index {
-            // Previous tracks are dimmed.
-            ratatui::style::Color::Rgb(128, 128, 128)
-        } else {
-            text_color
-        };
+        let line = super::render_track_line(track_id, &st, style, is_selected, indicator, dimmed);
 
-        let mut spans = Vec::new();
-
-        // Selection indicator.
-        if is_selected {
-            spans.push(Span::styled(
-                "> ",
-                Style::default()
-                    .fg(track_name_hovered_color)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else if is_current {
-            spans.push(Span::styled(
-                "▶ ",
-                Style::default()
-                    .fg(track_name_playing_color)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::raw("  "));
-        }
-
-        let text_style = if is_selected || is_current {
-            Style::default().fg(line_color).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(line_color)
-        };
-
-        spans.push(Span::styled(label, text_style));
-        spans.push(Span::styled(
-            duration_str,
-            Style::default().fg(track_duration_color),
-        ));
-
-        items.push(ListItem::new(Line::from(spans)));
+        items.push(ListItem::new(line));
     }
 
     let list = List::new(items);

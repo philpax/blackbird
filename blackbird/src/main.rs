@@ -539,6 +539,9 @@ fn apply_settings_action(app: &mut App, action: keys::Action) {
             app.config.server.transcode,
         );
     }
+    // Sync the runtime sidebar order immediately so the next draw reflects
+    // component additions/removals without waiting for the next tick.
+    app.sidebar.update_from_config(&mut app.config);
     // Config changes are applied in-memory for live preview;
     // disk save is deferred to settings exit or app exit.
     if let Some(sa) = settings_action {

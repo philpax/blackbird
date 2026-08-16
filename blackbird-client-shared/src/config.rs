@@ -54,18 +54,24 @@ pub enum SidebarComponent {
     /// Songs similar to the currently playing track, from the server's
     /// OpenSubsonic surface.
     SimilarSongs,
+    /// The playback queue, showing tracks before and after the current track.
+    Queue,
 }
 
 impl SidebarComponent {
     /// All sidebar components in the default display order.
-    pub const ALL: &[SidebarComponent] =
-        &[SidebarComponent::Lyrics, SidebarComponent::SimilarSongs];
+    pub const ALL: &[SidebarComponent] = &[
+        SidebarComponent::Lyrics,
+        SidebarComponent::SimilarSongs,
+        SidebarComponent::Queue,
+    ];
 
     /// Returns a human-readable label for display in UI.
     pub fn as_str(&self) -> &'static str {
         match self {
             SidebarComponent::Lyrics => "lyrics",
             SidebarComponent::SimilarSongs => "similar songs",
+            SidebarComponent::Queue => "queue",
         }
     }
 }
@@ -316,16 +322,20 @@ mod tests {
         let layout = Layout {
             sidebar: SidebarSettings {
                 enabled: true,
-                components: vec![SidebarComponent::SimilarSongs, SidebarComponent::Lyrics],
+                components: vec![
+                    SidebarComponent::SimilarSongs,
+                    SidebarComponent::Lyrics,
+                    SidebarComponent::Queue,
+                ],
                 similar_songs_count: 20,
-                heights: vec![0.5, 0.5],
+                heights: vec![0.33, 0.33, 0.34],
                 ..Default::default()
             },
             ..Default::default()
         };
         let toml_str = toml::to_string(&layout).unwrap();
         assert!(
-            toml_str.contains("components = [\"similar_songs\", \"lyrics\"]"),
+            toml_str.contains("components = [\"similar_songs\", \"lyrics\", \"queue\"]"),
             "expected snake_case component names, got:\n{toml_str}"
         );
     }

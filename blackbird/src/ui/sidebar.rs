@@ -1,7 +1,5 @@
 use blackbird_client_shared::config::SidebarComponent;
-use blackbird_core::{
-    self as bc, TrackDisplayDetails, blackbird_state::TrackId, util::seconds_to_hms_string,
-};
+use blackbird_core::{self as bc, blackbird_state::TrackId};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -13,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::{app::App, keys::Action};
 
-use super::{ToColor, layout, string_to_color};
+use super::{ToColor, layout};
 
 /// The sidebar component order/focus wrapper.
 ///
@@ -35,6 +33,7 @@ pub struct SidebarState {
 pub enum SidebarComponentId {
     Lyrics,
     SimilarSongs,
+    Queue,
 }
 
 impl From<SidebarComponent> for SidebarComponentId {
@@ -42,6 +41,7 @@ impl From<SidebarComponent> for SidebarComponentId {
         match c {
             SidebarComponent::Lyrics => SidebarComponentId::Lyrics,
             SidebarComponent::SimilarSongs => SidebarComponentId::SimilarSongs,
+            SidebarComponent::Queue => SidebarComponentId::Queue,
         }
     }
 }
@@ -97,6 +97,11 @@ impl SidebarState {
     /// Whether the similar-songs component is enabled in the sidebar order.
     pub fn similar_songs_enabled(&self) -> bool {
         self.order.contains(&SidebarComponentId::SimilarSongs)
+    }
+
+    /// Whether the queue component is enabled in the sidebar order.
+    pub fn queue_enabled(&self) -> bool {
+        self.order.contains(&SidebarComponentId::Queue)
     }
 }
 
@@ -309,6 +314,190 @@ fn move_selection_by(state: &mut SimilarSongsState, delta: i32) {
     state.ensure_selection_visible();
 }
 
+/// State for the queue sidebar component. Reads live data on each draw.
+pub struct QueueSidebarState {
+    /// Keyboard-selected index within the queue window.
+    pub selected_index: usize,
+    /// Shared scroll/drag/inertia mechanism.
+    pub viewport: super::scroll::Scroller,
+    /// Pending click at `(x, y, track_index)`. Resolved on mouse-up.
+    pub click_pending: Option<(u16, u16, usize)>,
+    /// Whether the viewport needs to be centered on the current track. Set to
+    /// true after a track change; cleared once the user scrolls or navigates.
+    pub needs_center: bool,
+}
+
+impl QueueSidebarState {
+    pub fn new() -> Self {
+        Self {
+            selected_index: 0,
+            viewport: super::scroll::Scroller::new(),
+            click_pending: None,
+            needs_center: true,
+        }
+    }
+
+    /// Resets all state for a new track.
+    pub fn reset(&mut self) {
+        self.selected_index = 0;
+        self.viewport = super::scroll::Scroller::new();
+        self.click_pending = None;
+        self.needs_center = true;
+    }
+
+    /// Ensure the selected index is within the visible window.
+    fn ensure_selection_visible(&mut self) {
+        let visible_height = self.viewport.visible_height;
+        if visible_height == 0 {
+            return;
+        }
+        if self.selected_index < self.viewport.line {
+            self.viewport.line = self.selected_index;
+        } else if self.selected_index >= self.viewport.line + visible_height {
+            self.viewport.line = self.selected_index + 1 - visible_height;
+        }
+    }
+
+    /// Handle a left-mouse-down inside the queue results area.
+    pub fn handle_mouse_click(&mut self, area: Rect, x: u16, y: u16, total_items: usize) {
+        let results = results_area(area);
+        if y < results.y || y >= results.y + results.height || total_items == 0 {
+            return;
+        }
+
+        if self.viewport.needs_scrollbar(total_items)
+            && super::scroll::is_in_scrollbar_column(results, x, 1)
+        {
+            self.viewport
+                .apply_scrollbar_drag(y, total_items, results.y, results.height);
+            self.click_pending = None;
+            return;
+        }
+
+        let row_in_list = (y - results.y) as usize;
+        let clicked_index = self.viewport.line + row_in_list;
+        if clicked_index < total_items {
+            self.selected_index = clicked_index;
+            self.click_pending = Some((x, y, clicked_index));
+            self.viewport.drag_last_y = Some(y);
+        }
+    }
+
+    /// Handle a left-mouse-drag inside the queue results area.
+    pub fn handle_mouse_drag(&mut self, area: Rect, x: u16, y: u16, total_items: usize) {
+        let results = results_area(area);
+
+        if self.viewport.scrollbar_dragging && y >= results.y && y < results.y + results.height {
+            self.viewport
+                .apply_scrollbar_drag(y, total_items, results.y, results.height);
+            self.click_pending = None;
+            return;
+        }
+
+        if self.viewport.needs_scrollbar(total_items)
+            && super::scroll::is_in_scrollbar_column(results, x, 1)
+            && y >= results.y
+            && y < results.y + results.height
+        {
+            self.viewport
+                .apply_scrollbar_drag(y, total_items, results.y, results.height);
+            self.click_pending = None;
+            return;
+        }
+
+        if self.click_pending.is_none() && !self.viewport.dragging {
+            return;
+        }
+        self.click_pending = None;
+        self.viewport.apply_content_drag(y, total_items);
+    }
+
+    /// Handle a mouse-wheel scroll.
+    pub fn handle_scroll(&mut self, direction: i32, steps: usize, total_items: usize) {
+        self.viewport.apply_wheel(direction, steps, total_items);
+    }
+
+    /// Advance inertia; returns true if the viewport moved.
+    pub fn tick_inertia(&mut self, total_items: usize) -> bool {
+        matches!(
+            self.viewport.tick_inertia(total_items),
+            super::scroll::InertiaTick::Moved
+        )
+    }
+
+    /// Handle a key; plays the selected track on `Select`.
+    pub fn handle_key(&mut self, logic: &bc::Logic, action: Action) {
+        let (before, current, after) = logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+        let total_items = before.len() + usize::from(current.is_some()) + after.len();
+        // Nothing to navigate if the queue is empty.
+        if total_items == 0 {
+            match action {
+                Action::PlayPause => logic.toggle_current(),
+                Action::Next => logic.next(),
+                Action::Previous => logic.previous(),
+                Action::NextGroup => logic.next_group(),
+                Action::PreviousGroup => logic.previous_group(),
+                Action::CyclePlaybackMode(dir) => {
+                    let next = blackbird_client_shared::cycle(
+                        &bc::PlaybackMode::ALL,
+                        logic.get_playback_mode(),
+                        dir,
+                    );
+                    logic.set_playback_mode(next);
+                }
+                _ => {}
+            }
+            return;
+        }
+        match action {
+            Action::MoveUp if self.selected_index > 0 => {
+                self.selected_index -= 1;
+                self.ensure_selection_visible();
+            }
+            Action::MoveDown if self.selected_index < total_items.saturating_sub(1) => {
+                self.selected_index += 1;
+                self.ensure_selection_visible();
+            }
+            Action::PageUp => {
+                let new_index =
+                    (self.selected_index as i32 - layout::PAGE_SCROLL_SIZE as i32).max(0);
+                self.selected_index = new_index as usize;
+                self.ensure_selection_visible();
+            }
+            Action::PageDown => {
+                let new_index = (self.selected_index as i32 + layout::PAGE_SCROLL_SIZE as i32)
+                    .min(total_items as i32 - 1);
+                self.selected_index = new_index as usize;
+                self.ensure_selection_visible();
+            }
+            Action::Select => {
+                let all_tracks: Vec<&TrackId> = before
+                    .iter()
+                    .chain(current.iter())
+                    .chain(after.iter())
+                    .collect();
+                if let Some(track_id) = all_tracks.get(self.selected_index) {
+                    logic.request_play_track(track_id);
+                }
+            }
+            Action::PlayPause => logic.toggle_current(),
+            Action::Next => logic.next(),
+            Action::Previous => logic.previous(),
+            Action::NextGroup => logic.next_group(),
+            Action::PreviousGroup => logic.previous_group(),
+            Action::CyclePlaybackMode(dir) => {
+                let next = blackbird_client_shared::cycle(
+                    &bc::PlaybackMode::ALL,
+                    logic.get_playback_mode(),
+                    dir,
+                );
+                logic.set_playback_mode(next);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Draws the full sidebar: the component sub-areas stacked vertically, each
 /// drawing its own bordered block. `area` is the sidebar region from the
 /// content layout (no outer border).
@@ -381,6 +570,9 @@ fn draw_component(
         }
         SidebarComponentId::SimilarSongs => {
             draw_similar_songs(frame, app, area, focused);
+        }
+        SidebarComponentId::Queue => {
+            draw_queue_sidebar(frame, app, area, focused);
         }
     }
 }
@@ -481,11 +673,6 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
     let state_arc = app.logic.get_state();
     let app_state = state_arc.read().unwrap();
 
-    let track_name_color = style.library.track_name().to_color();
-    let track_length_color = style.library.track_length().to_color();
-    let track_name_hovered_color = style.library.track_name_hovered().to_color();
-    let track_duration_color = style.library.track_duration().to_color();
-
     let items: Vec<ListItem> = similar
         .results
         .iter()
@@ -493,40 +680,14 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
         .map(|(i, track_id)| {
             let is_selected = focused && i == similar.selected_index;
             let is_hovered = hovered_index == Some(i);
-            let details = TrackDisplayDetails::from_track_id(track_id, &app_state);
-            let line = if let Some(d) = details {
-                let artist = d.artist();
-                let dur_str = seconds_to_hms_string(d.track_duration.as_secs() as u32, false);
-                // Match the library: the selected row's track title gets the
-                // hovered colour (the per-span colours would otherwise override
-                // the row style).
-                let title_color = if is_selected {
-                    track_name_hovered_color
-                } else {
-                    track_name_color
-                };
-                Line::from(vec![
-                    Span::styled(
-                        artist.to_string(),
-                        Style::default().fg(string_to_color(artist)),
-                    ),
-                    Span::raw(" - "),
-                    Span::styled(d.track_title.to_string(), Style::default().fg(title_color)),
-                    Span::styled(
-                        format!(" [{dur_str}]"),
-                        Style::default().fg(if is_selected {
-                            track_name_hovered_color
-                        } else {
-                            track_length_color
-                        }),
-                    ),
-                ])
-            } else {
-                Line::from(Span::styled(
-                    format!("[{track_id}]"),
-                    Style::default().fg(track_duration_color),
-                ))
-            };
+            let line = super::render_track_line(
+                track_id,
+                &app_state,
+                &app.config.style,
+                is_selected,
+                super::TrackIndicator::None,
+                false,
+            );
             // Underline the hovered row (like the library), except when it is
             // the keyboard-selected row.
             let line = if is_hovered && !is_selected {
@@ -556,6 +717,121 @@ pub fn draw_similar_songs(frame: &mut Frame, app: &mut App, area: Rect, focused:
         frame,
         inner,
         similar.results.len(),
+        style.library.track_duration().to_color(),
+        style.library.track_name_playing().to_color(),
+    );
+}
+
+/// Draws the queue sidebar component (bordered block + track list).
+pub fn draw_queue_sidebar(frame: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    let style = &app.config.style;
+    let block = super::framed_block(" Queue ", style.sidebar.similar_border().to_color());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
+
+    let queue = &mut app.queue_sidebar;
+
+    // Fetch the queue window.
+    let (before, current, after) = app.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+
+    if current.is_none() {
+        let msg = Paragraph::new("No tracks in the queue.")
+            .style(Style::default().fg(style.library.track_duration().to_color()));
+        frame.render_widget(msg, inner);
+        return;
+    }
+
+    // Render-time viewport maintenance.
+    let current_list_index = before.len();
+    let total_items = before.len() + 1 + after.len();
+    queue.viewport.visible_height = inner.height as usize;
+    queue.viewport.clamp(total_items);
+
+    // Center the viewport on the current track when needed (e.g., after a track
+    // change). Clear the flag so user scrolling takes precedence afterward.
+    if queue.needs_center {
+        queue.selected_index = current_list_index;
+        let half = queue.viewport.visible_height / 2;
+        queue.viewport.line = current_list_index.saturating_sub(half);
+        queue.needs_center = false;
+    }
+
+    // Compute hovered index from mouse position.
+    let hovered_index =
+        match super::panel::hovered_row(app.mouse_position, inner, queue.viewport.line) {
+            Some(idx) if idx < total_items => Some(idx),
+            _ => None,
+        };
+
+    let state_arc = app.logic.get_state();
+    let app_state = state_arc.read().unwrap();
+
+    let all_tracks: Vec<&TrackId> = before
+        .iter()
+        .chain(current.iter())
+        .chain(after.iter())
+        .collect();
+
+    let items: Vec<ListItem> = all_tracks
+        .iter()
+        .enumerate()
+        .map(|(i, track_id)| {
+            let is_selected = focused && i == queue.selected_index;
+            let is_current = i == current_list_index;
+            let is_hovered = hovered_index == Some(i);
+
+            let indicator = if is_current {
+                super::TrackIndicator::Playing
+            } else if is_selected {
+                super::TrackIndicator::Selected
+            } else {
+                super::TrackIndicator::None
+            };
+
+            // Dim past tracks (before the current track) to match the full-screen queue.
+            let dimmed = i < current_list_index;
+
+            let line = super::render_track_line(
+                track_id,
+                &app_state,
+                &app.config.style,
+                is_selected,
+                indicator,
+                dimmed,
+            );
+
+            // Underline the hovered row, except when it's the keyboard-selected row.
+            let line = if is_hovered && !is_selected {
+                let spans: Vec<Span> = line
+                    .spans
+                    .into_iter()
+                    .map(|s| {
+                        let mut s = s;
+                        s.style = s.style.add_modifier(Modifier::UNDERLINED);
+                        s
+                    })
+                    .collect();
+                Line::from(spans)
+            } else {
+                line
+            };
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items);
+    let mut list_state = ListState::default();
+    *list_state.offset_mut() = queue.viewport.line;
+
+    frame.render_stateful_widget(list, inner, &mut list_state);
+    queue.viewport.render_scrollbar(
+        frame,
+        inner,
+        total_items,
         style.library.track_duration().to_color(),
         style.library.track_name_playing().to_color(),
     );
@@ -599,6 +875,22 @@ pub fn handle_key(app: &mut App, action: Action) -> Option<SidebarKeyAction> {
                 }
             }
         }
+        SidebarComponentId::Queue => {
+            // Transport and navigation keys work in the queue sidebar.
+            match action {
+                Action::Back => Some(SidebarKeyAction::TogglePanel),
+                Action::SeekForward => Some(SidebarKeyAction::SeekRelative(
+                    super::layout::SEEK_STEP_SECS,
+                )),
+                Action::SeekBackward => Some(SidebarKeyAction::SeekRelative(
+                    -super::layout::SEEK_STEP_SECS,
+                )),
+                _ => {
+                    app.queue_sidebar.handle_key(&app.logic, action);
+                    None
+                }
+            }
+        }
     }
 }
 
@@ -630,12 +922,19 @@ pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
             }
         }
         SidebarComponentId::SimilarSongs => app.similar_songs.handle_scroll(direction, steps),
+        SidebarComponentId::Queue => {
+            let (before, current, after) =
+                app.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+            let total_items = before.len() + usize::from(current.is_some()) + after.len();
+            app.queue_sidebar
+                .handle_scroll(direction, steps, total_items);
+        }
     }
 }
 
 /// Handle a mouse drag inside the sidebar content, dispatching to the
-/// similar-songs component under the cursor. The lyrics component has no
-/// content-drag behavior, so drags over it are no-ops.
+/// similar-songs or queue component under the cursor. The lyrics component has
+/// no content-drag behavior, so drags over it are no-ops.
 pub fn handle_mouse_drag(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
     if app.sidebar.is_empty() {
         return;
@@ -647,26 +946,32 @@ pub fn handle_mouse_drag(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
             continue;
         };
         if y >= rect.y && y < rect.y + rect.height {
-            if *component == SidebarComponentId::SimilarSongs {
-                app.similar_songs.handle_mouse_drag(rect, x, y);
+            match *component {
+                SidebarComponentId::SimilarSongs => {
+                    app.similar_songs.handle_mouse_drag(rect, x, y);
+                }
+                SidebarComponentId::Queue => {
+                    let (before, current, after) =
+                        app.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+                    let total_items = before.len() + usize::from(current.is_some()) + after.len();
+                    app.queue_sidebar.handle_mouse_drag(rect, x, y, total_items);
+                }
+                _ => {}
             }
             return;
         }
     }
 }
 
-/// Feeds a component-boundary drag to the similar-songs component adjacent to
-/// the boundary, so its list keeps tracking the cursor while the user resizes.
-/// Components on the other side of the boundary (lyrics) have no content-drag
-/// behavior, so this is a no-op for them.
+/// Feeds a component-boundary drag to the similar-songs or queue component
+/// adjacent to the boundary, so its list keeps tracking the cursor while the
+/// user resizes. Components on the other side of the boundary (lyrics) have no
+/// content-drag behavior, so this is a no-op for them.
 pub fn handle_boundary_drag(app: &mut App, sidebar_area: Rect, boundary: usize, x: u16, y: u16) {
     let order: SmallVec<[SidebarComponentId; 4]> = app.sidebar.order.clone();
     let Some(component) = order.get(boundary).or_else(|| order.get(boundary + 1)) else {
         return;
     };
-    if *component != SidebarComponentId::SimilarSongs {
-        return;
-    }
     let component_rects = sidebar_layout(sidebar_area, app);
     let Some(rect) = component_rects
         .get(boundary)
@@ -675,7 +980,18 @@ pub fn handle_boundary_drag(app: &mut App, sidebar_area: Rect, boundary: usize, 
     else {
         return;
     };
-    app.similar_songs.handle_mouse_drag(rect, x, y);
+    match *component {
+        SidebarComponentId::SimilarSongs => {
+            app.similar_songs.handle_mouse_drag(rect, x, y);
+        }
+        SidebarComponentId::Queue => {
+            let (before, current, after) =
+                app.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+            let total_items = before.len() + usize::from(current.is_some()) + after.len();
+            app.queue_sidebar.handle_mouse_drag(rect, x, y, total_items);
+        }
+        _ => {}
+    }
 }
 
 /// Returns the sidebar component boundary index whose dividing row is under
@@ -762,6 +1078,13 @@ pub fn handle_mouse_click(app: &mut App, sidebar_area: Rect, x: u16, y: u16) {
         }
         SidebarComponentId::SimilarSongs => {
             app.similar_songs.handle_mouse_click(rect, x, y);
+        }
+        SidebarComponentId::Queue => {
+            let (before, current, after) =
+                app.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+            let total_items = before.len() + usize::from(current.is_some()) + after.len();
+            app.queue_sidebar
+                .handle_mouse_click(rect, x, y, total_items);
         }
     }
 }
@@ -968,5 +1291,25 @@ mod tests {
             state.order.as_slice(),
             &[SidebarComponentId::SimilarSongs, SidebarComponentId::Lyrics]
         );
+    }
+
+    /// Queue enabled returns true when the queue is in the sidebar order.
+    #[test]
+    fn test_queue_enabled() {
+        // Default config has no queue, so queue_enabled should be false.
+        let config = crate::config::Config::default();
+        let state = SidebarState::from_config(&config);
+        assert!(!state.queue_enabled());
+
+        // Config with queue enabled.
+        let mut config_with_queue = crate::config::Config::default();
+        config_with_queue.layout.base.sidebar.components = vec![
+            SidebarComponent::Lyrics,
+            SidebarComponent::Queue,
+            SidebarComponent::SimilarSongs,
+        ];
+        let state_queue = SidebarState::from_config(&config_with_queue);
+        assert!(state_queue.queue_enabled());
+        assert!(state_queue.similar_songs_enabled());
     }
 }

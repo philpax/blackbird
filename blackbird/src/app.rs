@@ -16,7 +16,7 @@ use crate::{
         queue::QueueState,
         search::SearchState,
         settings::SettingsState,
-        sidebar::{SidebarState, SimilarSongsState},
+        sidebar::{QueueSidebarState, SidebarState, SimilarSongsState},
     },
 };
 
@@ -83,6 +83,8 @@ pub struct App {
     pub sidebar: SidebarState,
     pub logs: LogsState,
     pub queue: QueueState,
+    /// State for the queue sidebar component.
+    pub queue_sidebar: QueueSidebarState,
     pub settings: SettingsState,
 }
 
@@ -138,6 +140,7 @@ impl App {
             sidebar,
             logs: LogsState::new(log_buffer),
             queue: QueueState::new(),
+            queue_sidebar: QueueSidebarState::new(),
             settings: SettingsState::new(),
         }
     }
@@ -213,6 +216,11 @@ impl App {
                 // songs are fetched if the sidebar would show them, or the
                 // lyrics/side panel is open so they may be viewed).
                 self.similar_songs.reset();
+
+                // Reset the queue sidebar state for the new track; the draw function
+                // will center the viewport on the current track position.
+                self.queue_sidebar.reset();
+
                 let similar_enabled = self
                     .config
                     .layout
@@ -341,6 +349,17 @@ impl App {
         {
             changed |= self.similar_songs.tick_inertia();
         }
+        // The queue sidebar component also has viewport inertia.
+        if self
+            .sidebar
+            .order
+            .contains(&crate::ui::sidebar::SidebarComponentId::Queue)
+        {
+            let (before, current, after) =
+                self.logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
+            let total_items = before.len() + usize::from(current.is_some()) + after.len();
+            changed |= self.queue_sidebar.tick_inertia(total_items);
+        }
 
         if self.logic.should_shutdown() {
             self.should_quit = true;
@@ -441,6 +460,10 @@ impl App {
         if self.focused_panel == FocusedPanel::Queue {
             self.focused_panel = FocusedPanel::Library;
         } else {
+            // Block opening the queue overlay when the queue sidebar is active.
+            if self.sidebar.queue_enabled() {
+                return;
+            }
             self.focused_panel = FocusedPanel::Queue;
             self.queue.reset();
         }

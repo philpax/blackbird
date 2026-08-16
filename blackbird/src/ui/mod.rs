@@ -13,6 +13,7 @@ pub(crate) mod settings;
 pub(crate) mod sidebar;
 
 use blackbird_client_shared::style as shared_style;
+use blackbird_core::{self as bc, TrackDisplayDetails, blackbird_state::TrackId};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -28,6 +29,101 @@ use crate::{
     cover_art::ArtColors,
     keys,
 };
+
+/// The indicator prefix for a track line in a list view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackIndicator {
+    /// Currently playing track (▶).
+    Playing,
+    /// Keyboard-selected track (>).
+    Selected,
+    /// No indicator (two spaces).
+    None,
+}
+
+/// Renders a single track line with colored spans matching the unified rendering.
+/// Produces: `[indicator][artist color] artist [ - ][title color] title [length color] [duration]`.
+/// The caller is responsible for applying hover underline if needed.
+pub fn render_track_line(
+    track_id: &TrackId,
+    app_state: &bc::AppState,
+    style: &shared_style::Style,
+    is_selected: bool,
+    indicator: TrackIndicator,
+    dimmed: bool,
+) -> Line<'static> {
+    let details = TrackDisplayDetails::from_track_id(track_id, app_state);
+    let Some(details) = details else {
+        return Line::from(Span::styled(
+            format!("[{track_id}]"),
+            Style::default().fg(style.library.track_duration().to_color()),
+        ));
+    };
+
+    let dim_color = Color::Rgb(128, 128, 128);
+    let span_color = if dimmed {
+        dim_color
+    } else {
+        match indicator {
+            TrackIndicator::Playing => style.library.track_name_playing().to_color(),
+            TrackIndicator::Selected => style.library.track_name_hovered().to_color(),
+            TrackIndicator::None => Color::Reset,
+        }
+    };
+
+    let artist = details.artist();
+    let dur_str = bc::util::seconds_to_hms_string(details.track_duration.as_secs() as u32, false);
+
+    let mut spans = Vec::new();
+
+    // Indicator prefix.
+    spans.push(match indicator {
+        TrackIndicator::Playing => Span::styled("▶ ", Style::default().fg(span_color)),
+        TrackIndicator::Selected => Span::styled("> ", Style::default().fg(span_color)),
+        TrackIndicator::None => Span::raw("  "),
+    });
+
+    // Artist span with hash-derived color.
+    spans.push(Span::styled(
+        artist.to_string(),
+        Style::default().fg(if dimmed {
+            dim_color
+        } else {
+            string_to_color(artist)
+        }),
+    ));
+
+    // Separator.
+    spans.push(Span::raw(" - "));
+
+    // Title span.
+    let title_color = if dimmed {
+        dim_color
+    } else if is_selected {
+        style.library.track_name_hovered().to_color()
+    } else {
+        style.library.track_name().to_color()
+    };
+    spans.push(Span::styled(
+        details.track_title.to_string(),
+        Style::default().fg(title_color),
+    ));
+
+    // Duration span.
+    let duration_color = if dimmed {
+        dim_color
+    } else if is_selected {
+        style.library.track_name_hovered().to_color()
+    } else {
+        style.library.track_length().to_color()
+    };
+    spans.push(Span::styled(
+        format!(" [{dur_str}]"),
+        Style::default().fg(duration_color),
+    ));
+
+    Line::from(spans)
+}
 
 /// Builds a bordered block with a title and border colour, the common framing
 /// used by the library (when a sidebar is present) and every sidebar
@@ -468,6 +564,12 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     app.help_bar_items.clear();
 
     for entry in help_entries {
+        // Hide the queue overlay keybinding when the queue sidebar is active.
+        if app.sidebar.queue_enabled()
+            && matches!(entry, keys::HelpEntry::Single(keys::Action::Queue))
+        {
+            continue;
+        }
         match entry {
             keys::HelpEntry::Single(action) => {
                 let Some((key, label)) = action.help_label(&app.logic) else {
@@ -559,6 +661,7 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 
 #[cfg(test)]
 mod render_tests {
+    use super::{TrackIndicator, render_track_line};
     use image::{ImageBuffer, ImageEncoder, Rgba, codecs::png::PngEncoder};
     use ratatui::{
         Terminal,
@@ -762,5 +865,64 @@ mod render_tests {
         assert_eq!(AlbumArtProtocol::default(), AlbumArtProtocol::Auto);
         assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Auto);
         assert_ne!(AlbumArtProtocol::Halfblock, AlbumArtProtocol::Image);
+    }
+
+    /// Verifies that `render_track_line` produces a fallback line when track
+    /// details are unavailable, and that the indicator prefix is correct.
+    #[test]
+    fn test_render_track_line_fallback() {
+        use blackbird_core::AppState;
+        use blackbird_core::blackbird_state::TrackId;
+
+        // Empty state: no tracks, so from_track_id returns None.
+        let state = AppState::default();
+
+        let style = blackbird_client_shared::style::Style::default();
+        let track_id = TrackId("nonexistent".to_string());
+
+        // Fallback line when details unavailable.
+        let line = render_track_line(
+            &track_id,
+            &state,
+            &style,
+            false,
+            TrackIndicator::None,
+            false,
+        );
+        assert_eq!(line.spans.len(), 1);
+        assert_eq!(
+            line.spans[0].content.to_string(),
+            "[TrackId(\"nonexistent\")]"
+        );
+
+        // Verify Playing indicator still produces fallback.
+        let line_playing = render_track_line(
+            &track_id,
+            &state,
+            &style,
+            false,
+            TrackIndicator::Playing,
+            false,
+        );
+        assert_eq!(line_playing.spans.len(), 1);
+        assert_eq!(
+            line_playing.spans[0].content.to_string(),
+            "[TrackId(\"nonexistent\")]"
+        );
+
+        // Verify Selected indicator still produces fallback.
+        let line_selected = render_track_line(
+            &track_id,
+            &state,
+            &style,
+            true,
+            TrackIndicator::Selected,
+            false,
+        );
+        assert_eq!(line_selected.spans.len(), 1);
+        assert_eq!(
+            line_selected.spans[0].content.to_string(),
+            "[TrackId(\"nonexistent\")]"
+        );
     }
 }
