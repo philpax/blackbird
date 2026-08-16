@@ -5,10 +5,12 @@ pub(crate) mod loading;
 pub(crate) mod logs;
 pub(crate) mod lyrics;
 pub(crate) mod now_playing;
+pub(crate) mod panel;
 pub(crate) mod queue;
 pub(crate) mod scroll;
 pub(crate) mod search;
 pub(crate) mod settings;
+pub(crate) mod sidebar;
 
 use blackbird_client_shared::style as shared_style;
 use ratatui::{
@@ -27,117 +29,41 @@ use crate::{
     keys,
 };
 
+/// Builds a bordered block with a title and border colour, the common framing
+/// used by the library (when a sidebar is present) and every sidebar
+/// component. Callers render the block over `area` and draw content into
+/// `block.inner(area)`.
+pub(crate) fn framed_block(title: &str, border_color: Color) -> Block<'static> {
+    Block::default()
+        .title(title.to_string())
+        .borders(ratatui::widgets::Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+}
+
 /// Returns the effective background color: either the configured background
 /// or `Color::Reset` (terminal native) when `use_terminal_background` is set.
 pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
     if config.layout.use_terminal_background {
         Color::Reset
     } else {
-        config.style.background_color()
+        config.style.general.background().to_color()
     }
 }
 
 /// Extension trait for using shared style colors with ratatui.
-/// Uses gamma-corrected colors to match the retired GUI's appearance.
-pub trait StyleExt {
-    fn background_color(&self) -> Color;
-    fn text_color(&self) -> Color;
-    fn album_color(&self) -> Color;
-    fn album_length_color(&self) -> Color;
-    fn album_year_color(&self) -> Color;
-    fn track_number_color(&self) -> Color;
-    fn track_length_color(&self) -> Color;
-    fn track_name_color(&self) -> Color;
-    fn track_name_hovered_color(&self) -> Color;
-    fn track_name_playing_color(&self) -> Color;
-    fn track_duration_color(&self) -> Color;
+/// Converts a shared `Rgb` to a ratatui `Color`.
+pub trait ToColor {
+    fn to_color(self) -> Color;
 }
-impl StyleExt for shared_style::Style {
-    fn background_color(&self) -> Color {
-        hsv_to_color(self.background_hsv)
-    }
-    fn text_color(&self) -> Color {
-        hsv_to_color(self.text_hsv)
-    }
-    fn album_color(&self) -> Color {
-        hsv_to_color(self.album_hsv)
-    }
-    fn album_length_color(&self) -> Color {
-        hsv_to_color(self.album_length_hsv)
-    }
-    fn album_year_color(&self) -> Color {
-        hsv_to_color(self.album_year_hsv)
-    }
-    fn track_number_color(&self) -> Color {
-        hsv_to_color(self.track_number_hsv)
-    }
-    fn track_length_color(&self) -> Color {
-        hsv_to_color(self.track_length_hsv)
-    }
-    fn track_name_color(&self) -> Color {
-        hsv_to_color(self.track_name_hsv)
-    }
-    fn track_name_hovered_color(&self) -> Color {
-        hsv_to_color(self.track_name_hovered_hsv)
-    }
-    fn track_name_playing_color(&self) -> Color {
-        hsv_to_color(self.track_name_playing_hsv)
-    }
-    fn track_duration_color(&self) -> Color {
-        hsv_to_color(self.track_duration_hsv)
+impl ToColor for shared_style::Rgb {
+    fn to_color(self) -> Color {
+        Color::Rgb(self.r, self.g, self.b)
     }
 }
-/// Converts a shared style Rgb color to ratatui's Color.
-fn rgb_to_color(rgb: shared_style::Rgb) -> Color {
-    Color::Rgb(rgb.r, rgb.g, rgb.b)
-}
-fn hsv_to_color(hsv: shared_style::Hsv) -> Color {
-    // adapted from the retired GUI, fusing together hsv conversion and gamma correction
-    /// All ranges in 0-1, rgb is linear.
-    #[inline]
-    pub fn from_hsv([h, s, v]: shared_style::Hsv) -> shared_style::Rgb {
-        #![allow(clippy::many_single_char_names)]
-        let h = (h.fract() + 1.0).fract(); // wrap
-        let s = s.clamp(0.0, 1.0);
 
-        let f = h * 6.0 - (h * 6.0).floor();
-        let p = v * (1.0 - s);
-        let q = v * (1.0 - f * s);
-        let t = v * (1.0 - (1.0 - f) * s);
-
-        let [r, g, b] = match (h * 6.0).floor() as i32 % 6 {
-            0 => [v, t, p],
-            1 => [q, v, p],
-            2 => [p, v, t],
-            3 => [p, q, v],
-            4 => [t, p, v],
-            5 => [v, p, q],
-            _ => unreachable!(),
-        };
-
-        pub fn gamma_u8_from_linear_f32(l: f32) -> u8 {
-            if l <= 0.0 {
-                0
-            } else if l <= 0.0031308 {
-                fast_round(3294.6 * l)
-            } else if l <= 1.0 {
-                fast_round(269.025 * l.powf(1.0 / 2.4) - 14.025)
-            } else {
-                255
-            }
-        }
-
-        fn fast_round(r: f32) -> u8 {
-            (r + 0.5) as _ // rust does a saturating cast since 1.45
-        }
-
-        shared_style::Rgb::new(
-            gamma_u8_from_linear_f32(r),
-            gamma_u8_from_linear_f32(g),
-            gamma_u8_from_linear_f32(b),
-        )
-    }
-    rgb_to_color(from_hsv(hsv))
+/// Converts a shared HSV colour to a ratatui `Color` (gamma-corrected).
+pub fn style_color(hsv: shared_style::Hsv) -> Color {
+    shared_style::hsv_to_rgb(hsv).to_color()
 }
 
 /// Builds half-block art spans for one terminal row from a 4x4 color grid,
@@ -193,97 +119,108 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_scrub_bar(frame, app, main.scrub_bar);
     }
 
-    // Split the content area with an optional lyrics sidebar. The sidebar is
-    // shown when lyrics_display is Left or Right and the app is not loading.
-    // When FocusedPanel::Lyrics is active with a sidebar visible, the sidebar
-    // gets keyboard focus and the main area renders the library (the default
-    // view). The full lyrics panel only appears when FocusedPanel::Lyrics is
-    // active and there is no sidebar (lyrics_display is Inline or Off).
-    let lyrics_display = app.config.layout.base.lyrics_display;
-    let show_sidebar = lyrics_display.is_sidebar() && !is_loading;
-    let content_layout = if show_sidebar {
-        layout::split_content_with_sidebar(
-            main.content,
-            lyrics_display,
-            app.config.layout.lyrics_sidebar_width,
-        )
-    } else {
-        layout::ContentLayout {
-            main: main.content,
-            lyrics_sidebar: None,
-            lyrics_border: None,
+    // Plan the whole screen once. Both the draw path and the input paths in
+    // `main.rs` consume the same rects, so draw and hit-testing agree.
+    let layout = layout::layout_for(app, size);
+
+    // Dispatch each visible content component exactly once from this single
+    // point. The modal overlays (playback dropdown, album art, quit dialog)
+    // are drawn separately below by design.
+    for component in layout::visible_components(&layout) {
+        match component {
+            layout::VisibleComponent::MainPanel => {
+                // The library is the main panel for Library and Settings
+                // focus, and for Lyrics-with-sidebar (which renders the
+                // library in the main area). The Settings arm is the same
+                // code path as Library — no special casing.
+                match layout.render_panel {
+                    FocusedPanel::Library | FocusedPanel::Settings => {
+                        // When a sidebar is shown, the library is framed; the
+                        // frame's outer area is `layout.panel` and its inner
+                        // rect is `layout.library`.
+                        if layout.show_sidebar {
+                            let border_color = app.config.style.library.border().to_color();
+                            library::draw_in_frame(frame, app, layout.panel, border_color);
+                        } else {
+                            library::draw(frame, app, layout.panel);
+                        }
+                    }
+                    FocusedPanel::Search => {
+                        let scroll_line = app.search.viewport.line;
+                        let hovered = search::hovered_result_index(
+                            app.mouse_position,
+                            layout.panel,
+                            scroll_line,
+                        );
+                        search::draw(
+                            frame,
+                            &mut app.search,
+                            &app.config.style,
+                            &app.logic,
+                            hovered,
+                            layout.panel,
+                        );
+                    }
+                    FocusedPanel::Lyrics => {
+                        if app.sidebar.is_empty() {
+                            // The sidebar has no components enabled while
+                            // Lyrics was focused: fall back to the library
+                            // (unframed, since no sidebar is present) with a
+                            // hint that nothing is configured.
+                            library::draw(frame, app, layout.panel);
+                            let hint = Paragraph::new("No sidebar components enabled.").style(
+                                Style::default().fg(app
+                                    .config
+                                    .style
+                                    .library
+                                    .track_duration()
+                                    .to_color()),
+                            );
+                            frame.render_widget(
+                                hint,
+                                Rect::new(
+                                    layout.panel.x + 1,
+                                    layout.panel.y + 1,
+                                    layout.panel.width.saturating_sub(2),
+                                    1,
+                                ),
+                            );
+                        } else {
+                            sidebar::draw_panel(frame, app, layout.panel)
+                        }
+                    }
+                    FocusedPanel::Logs => {
+                        logs::draw(frame, &mut app.logs, &app.config.style, layout.panel);
+                    }
+                    FocusedPanel::Queue => queue::draw(
+                        frame,
+                        &app.queue,
+                        &app.config.style,
+                        &app.logic,
+                        layout.panel,
+                    ),
+                }
+            }
+            layout::VisibleComponent::Settings => {
+                if let Some(settings_rect) = layout.settings {
+                    settings::draw(frame, &mut app.settings, &app.config, settings_rect);
+                }
+            }
+            layout::VisibleComponent::LyricsSidebar => {
+                if let Some(sidebar_area) = layout.lyrics_sidebar {
+                    let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
+                    sidebar::draw_sidebar(frame, app, sidebar_area, sidebar_focused);
+                }
+            }
+            layout::VisibleComponent::InlineLyrics => {
+                if let Some(inline_area) = layout.inline_lyrics {
+                    draw_inline_lyrics(frame, app, inline_area);
+                }
+            }
         }
-    };
-
-    let content_area = content_layout.main;
-
-    // When the sidebar is visible and focused, render the library (default
-    // view) in the main area instead of the full lyrics panel.
-    let render_panel = if app.focused_panel == FocusedPanel::Lyrics && show_sidebar {
-        FocusedPanel::Library
-    } else {
-        app.focused_panel
-    };
-
-    match render_panel {
-        FocusedPanel::Library => library::draw(frame, app, content_area),
-        FocusedPanel::Search => search::draw(
-            frame,
-            &mut app.search,
-            &app.config.style,
-            &app.logic,
-            content_area,
-        ),
-        FocusedPanel::Lyrics => lyrics::draw(
-            frame,
-            &mut app.lyrics,
-            &app.config.style,
-            app.logic.get_playing_position(),
-            content_area,
-        ),
-        FocusedPanel::Logs => logs::draw(frame, &mut app.logs, &app.config.style, content_area),
-        FocusedPanel::Queue => queue::draw(
-            frame,
-            &app.queue,
-            &app.config.style,
-            &app.logic,
-            content_area,
-        ),
-        FocusedPanel::Settings => settings::draw(
-            frame,
-            &mut app.settings,
-            &app.config.style,
-            &app.config,
-            content_area,
-        ),
-    }
-
-    // Draw the lyrics sidebar if present. When the sidebar is focused
-    // (FocusedPanel::Lyrics + sidebar visible), pass is_focused = true so
-    // the selection indicator is rendered.
-    if let Some(sidebar_area) = content_layout.lyrics_sidebar {
-        let sidebar_focused = app.focused_panel == FocusedPanel::Lyrics;
-        lyrics::draw_sidebar(
-            frame,
-            &mut app.lyrics,
-            &app.config.style,
-            app.logic.get_playing_position(),
-            sidebar_area,
-            sidebar_focused,
-        );
     }
 
     draw_help_bar(frame, app, main.help_bar);
-
-    // Draw inline lyrics as an overlay at the bottom of the content area.
-    // Only shown when lyrics_display is Inline (not Off, Left, or Right).
-    if !is_loading
-        && lyrics_display == blackbird_client_shared::config::LyricsDisplay::Inline
-        && app.lyrics.shared.has_synced_lyrics()
-        && let Some(overlay) = layout::inline_lyrics_overlay(content_area)
-    {
-        draw_inline_lyrics(frame, app, overlay);
-    }
 
     // Draw playback mode dropdown if open.
     if app.playback_mode_dropdown {
@@ -311,8 +248,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(clear, popup_area);
 
         let popup = Paragraph::new(format!(" {prompt}"))
-            .block(Block::bordered().style(Style::default().fg(app.config.style.text_color())))
-            .style(Style::default().fg(app.config.style.text_color()));
+            .block(
+                Block::bordered()
+                    .style(Style::default().fg(app.config.style.general.text().to_color())),
+            )
+            .style(Style::default().fg(app.config.style.general.text().to_color()));
         frame.render_widget(popup, popup_area);
     }
 }
@@ -320,7 +260,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// Hashes a string to produce a pleasing colour (uses shared implementation).
 /// Uses gamma-corrected version to match the retired GUI's color rendering.
 pub fn string_to_color(s: &str) -> Color {
-    hsv_to_color(shared_style::string_to_hsv(s))
+    style_color(shared_style::string_to_hsv(s))
 }
 
 fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -369,7 +309,7 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
     let full_cols = filled_half_blocks / 2;
     let has_half = filled_half_blocks % 2 == 1;
 
-    let fg = style.track_name_playing_color();
+    let fg = style.library.track_name_playing().to_color();
     let bg = effective_bg(&app.config);
     let buf = frame.buffer_mut();
     let y = sv.scrub_bar.y;
@@ -420,9 +360,9 @@ fn draw_scrub_bar(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let vol_pct = format!("{:3.0}%", volume * 100.0);
     let vol_active_color = if app.volume_editing {
-        style.track_name_playing_color()
+        style.library.track_name_playing().to_color()
     } else {
-        style.track_duration_color()
+        style.library.track_duration().to_color()
     };
 
     let vol_line = Line::from(vec![
@@ -453,33 +393,33 @@ fn draw_inline_lyrics(frame: &mut Frame, app: &App, area: Rect) {
             let timestamp_str = blackbird_core::util::seconds_to_hms_string(timestamp_secs, false);
             spans.push(Span::styled(
                 format!(" {timestamp_str:>6} "),
-                Style::default().fg(style.track_name_playing_color()),
+                Style::default().fg(style.library.track_name_playing().to_color()),
             ));
         } else {
             spans.push(Span::raw(" "));
         }
         spans.push(Span::styled(
             &lyrics_line.value,
-            Style::default().fg(style.text_color()),
+            Style::default().fg(style.general.text().to_color()),
         ));
         Line::from(spans)
     } else {
         Line::from(Span::styled(
             " [no lyrics]",
-            Style::default().fg(style.track_duration_color()),
+            Style::default().fg(style.library.track_duration().to_color()),
         ))
     };
 
     let paragraph = Paragraph::new(line).style(
         Style::default()
             .bg(effective_bg(&app.config))
-            .fg(style.track_duration_color()),
+            .fg(style.library.track_duration().to_color()),
     );
     // Use top and bottom borders to visually separate inline lyrics from
     // the content area above and the help bar below.
     let block = Block::default()
         .borders(ratatui::widgets::Borders::TOP | ratatui::widgets::Borders::BOTTOM)
-        .border_style(Style::default().fg(style.album_color()));
+        .border_style(Style::default().fg(style.sidebar.lyrics_border().to_color()));
     // Clear the area first so library content underneath doesn't bleed through.
     frame.render_widget(Clear, area);
     frame.render_widget(paragraph.block(block), area);
@@ -516,14 +456,14 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
         FocusedPanel::Lyrics => keys::LYRICS_HELP,
         FocusedPanel::Logs => keys::LOGS_HELP,
         FocusedPanel::Queue => keys::QUEUE_HELP,
-        FocusedPanel::Settings => keys::SETTINGS_HELP,
+        FocusedPanel::Settings => keys::settings_help(app.settings.edit_mode()),
     };
 
     let mut spans: Vec<Span> = Vec::new();
     let mut x_pos = area.x + 1; // Account for the leading space.
     spans.push(Span::raw(" "));
 
-    let highlight = Style::default().fg(style.track_name_playing_color());
+    let highlight = Style::default().fg(style.library.track_name_playing().to_color());
 
     app.help_bar_items.clear();
 
@@ -535,6 +475,22 @@ fn draw_help_bar(frame: &mut Frame, app: &mut App, area: Rect) {
                 };
                 let key_str = String::from(key);
                 let label_str = format!(":{label} ");
+                let item_width = key_str.len() as u16 + label_str.len() as u16;
+
+                app.help_bar_items
+                    .push((x_pos, x_pos + item_width, *action));
+
+                spans.push(Span::styled(key_str, highlight));
+                spans.push(Span::raw(label_str));
+
+                x_pos += item_width;
+            }
+            keys::HelpEntry::Custom(action, desc) => {
+                let Some((key, _)) = action.help_label(&app.logic) else {
+                    continue;
+                };
+                let key_str = String::from(key);
+                let label_str = format!(":{desc} ");
                 let item_width = key_str.len() as u16 + label_str.len() as u16;
 
                 app.help_bar_items

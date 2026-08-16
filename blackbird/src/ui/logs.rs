@@ -9,7 +9,7 @@ use ratatui::{
 
 use crate::{keys::Action, log_buffer::LogBuffer};
 
-use super::StyleExt;
+use super::ToColor;
 
 pub enum LogsAction {
     ToggleLogs,
@@ -41,22 +41,22 @@ pub fn draw(frame: &mut Frame, logs: &mut LogsState, style: &shared_style::Style
     let block = Block::default()
         .title(format!(" Logs ({}) ", entries.len()))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.album_color()));
+        .border_style(Style::default().fg(style.panels.border().to_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
     if entries.is_empty() {
         let empty = ratatui::widgets::Paragraph::new("No log entries")
-            .style(Style::default().fg(style.track_duration_color()));
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(empty, inner);
         return;
     }
 
     // Pre-compute style colors.
-    let text_color = style.text_color();
-    let track_duration_color = style.track_duration_color();
-    let track_name_hovered_color = style.track_name_hovered_color();
+    let text_color = style.general.text().to_color();
+    let track_duration_color = style.library.track_duration().to_color();
+    let track_name_hovered_color = style.library.track_name_hovered().to_color();
 
     let items: Vec<ListItem> = entries
         .iter()

@@ -2,8 +2,6 @@ use std::time::Duration;
 
 use blackbird_core::{LyricsData, blackbird_state::TrackId, bs::StructuredLyrics};
 
-use crate::config::LyricsDisplay;
-
 /// Find the index of the current lyrics line based on playback position.
 /// Returns 0 for unsynced lyrics or if no line matches.
 pub fn find_current_lyrics_line(
@@ -47,13 +45,13 @@ impl LyricsState {
 
     /// Called when a new track starts playing. Updates internal state and
     /// returns `true` if `Logic::request_lyrics` should be called.
-    pub fn on_track_started(
-        &mut self,
-        track_id: &TrackId,
-        lyrics_display: LyricsDisplay,
-        panel_open: bool,
-    ) -> bool {
-        if lyrics_display == LyricsDisplay::Off && !panel_open {
+    ///
+    /// `request_lyrics` is a plain bool decided by the *caller*: it should be
+    /// true whenever lyrics will be displayed for the track (inline overlay on,
+    /// lyrics in the sidebar, or the lyrics panel open). This keeps the shared
+    /// state independent of the display configuration.
+    pub fn on_track_started(&mut self, track_id: &TrackId, request_lyrics: bool) -> bool {
+        if !request_lyrics {
             return false;
         }
         self.track_id = Some(track_id.clone());

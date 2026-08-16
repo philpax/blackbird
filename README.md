@@ -30,6 +30,17 @@ When I was a younger lad, I used to main foobar2000. This is what my highly-cust
 
 The client writes its log to the data directory as `blackbird.log`. Any pre-existing `blackbird-gui.log` files from the retired GUI client are orphaned by this change and can be deleted manually.
 
+### Sidebar and similar songs
+
+The current-track sidebar is split into ordered components configured under `[layout.sidebar]`:
+
+- `enabled` — whether the sidebar is visible at runtime; toggle with `t` in the TUI. Which side the sidebar sits on is `position` below.
+- `position` — which side the sidebar sits on (`"left"` or `"right"`, default `"right"`).
+- `components` — the ordered component list, e.g. `["lyrics", "similar_songs"]` (default).
+- `similar_songs_count` — how many similar songs to request (default 20).
+
+Similar songs come from the server's OpenSubsonic surface. blackbird discovers the server's extensions via `getOpenSubsonicExtensions` at load/reload: when the server advertises `sonicSimilarity` (e.g. Navidrome with the AudioMuse-AI plugin), the sonic-similarity endpoint is used; otherwise it falls back to `getSimilarSongs2`.
+
 ---
 
 The contributing guidelines in [CONTRIBUTING.md](./CONTRIBUTING.md) are adapted from [philpax/contributing-templates](https://github.com/philpax/contributing-templates), which in turn derives from [nextest's AGENTS.md](https://github.com/nextest-rs/nextest/blob/main/AGENTS.md).

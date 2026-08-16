@@ -9,8 +9,14 @@ use crate::{
     keys,
     log_buffer::LogBuffer,
     ui::{
-        album_art_overlay::AlbumArtOverlay, library::LibraryState, logs::LogsState,
-        lyrics::LyricsViewState, queue::QueueState, search::SearchState, settings::SettingsState,
+        album_art_overlay::AlbumArtOverlay,
+        library::LibraryState,
+        logs::LogsState,
+        lyrics::LyricsViewState,
+        queue::QueueState,
+        search::SearchState,
+        settings::SettingsState,
+        sidebar::{SidebarState, SimilarSongsState},
     },
 };
 
@@ -32,6 +38,7 @@ pub struct App {
     pub cover_art_cache: CoverArtCache,
     pub playback_to_logic_rx: bc::PlaybackToLogicRx,
     pub lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
+    pub similar_songs_loaded_rx: std::sync::mpsc::Receiver<bc::SimilarSongsData>,
     pub library_populated_rx: std::sync::mpsc::Receiver<()>,
     pub track_updated_rx: std::sync::mpsc::Receiver<()>,
 
@@ -55,6 +62,14 @@ pub struct App {
     pub scrub_preview_ratio: Option<f32>,
     /// Whether the user is dragging the lyrics sidebar border to resize it.
     pub lyrics_sidebar_dragging: bool,
+    /// The index of the sidebar component boundary being drag-adjusted
+    /// (between component `i` and `i+1`), or `None`.
+    pub sidebar_component_drag: Option<usize>,
+    /// Whether the user is dragging the settings sidebar border to resize it.
+    pub settings_sidebar_dragging: bool,
+    /// Whether the inline lyrics overlay mode is active. Set when the user is
+    /// in inline display mode, independent of sidebar presence/visibility.
+    pub inline_lyrics_mode: bool,
 
     // Config auto-reload
     last_config_check: Instant,
@@ -63,6 +78,9 @@ pub struct App {
     pub library: LibraryState,
     pub search: SearchState,
     pub lyrics: LyricsViewState,
+    pub similar_songs: SimilarSongsState,
+    /// The sidebar component order/focus wrapper.
+    pub sidebar: SidebarState,
     pub logs: LogsState,
     pub queue: QueueState,
     pub settings: SettingsState,
@@ -76,16 +94,21 @@ impl App {
         playback_to_logic_rx: bc::PlaybackToLogicRx,
         cover_art_cache: CoverArtCache,
         lyrics_loaded_rx: std::sync::mpsc::Receiver<bc::LyricsData>,
+        similar_songs_loaded_rx: std::sync::mpsc::Receiver<bc::SimilarSongsData>,
         library_populated_rx: std::sync::mpsc::Receiver<()>,
         track_updated_rx: std::sync::mpsc::Receiver<()>,
         log_buffer: LogBuffer,
     ) -> Self {
+        // Compute derived flags before `config` is moved into the struct.
+        let inline_lyrics_mode = config.layout.show_inline_lyrics;
+        let sidebar = SidebarState::from_config(&config);
         Self {
             logic,
             config,
             cover_art_cache,
             playback_to_logic_rx,
             lyrics_loaded_rx,
+            similar_songs_loaded_rx,
             library_populated_rx,
             track_updated_rx,
 
@@ -104,10 +127,15 @@ impl App {
             scrub_dragging: false,
             scrub_preview_ratio: None,
             lyrics_sidebar_dragging: false,
+            sidebar_component_drag: None,
+            settings_sidebar_dragging: false,
+            inline_lyrics_mode,
 
             library: LibraryState::new(),
             search: SearchState::new(),
             lyrics: LyricsViewState::new(),
+            similar_songs: SimilarSongsState::new(),
+            sidebar,
             logs: LogsState::new(log_buffer),
             queue: QueueState::new(),
             settings: SettingsState::new(),
@@ -116,6 +144,15 @@ impl App {
 
     pub fn tick(&mut self) {
         self.tick_count = self.tick_count.wrapping_add(1);
+
+        // Keep the runtime sidebar order in sync with the config. The order
+        // is a snapshot of the config's component list; recomputing a
+        // 4-element SmallVec each tick is cheap and picks up both live
+        // settings edits and external config reloads.
+        self.sidebar.update_from_config(&mut self.config);
+        // The inline-lyrics flag tracks the `show_inline_lyrics` setting,
+        // independent of sidebar state.
+        self.inline_lyrics_mode = self.config.layout.show_inline_lyrics;
 
         // Keep ReplayGain settings in sync with the config. Cheap: the
         // setters are no-ops when the value is unchanged.
@@ -149,22 +186,77 @@ impl App {
                 // Reset all lyrics view state for the new track.
                 self.lyrics.reset_view();
 
-                // Request lyrics if inline lyrics are enabled or the panel is open.
+                // Request lyrics if they will be displayed for this track:
+                // the lyrics panel is open, lyrics are an enabled sidebar
+                // component, or inline lyrics are on. The inline-mode flag is
+                // independent of sidebar presence/visibility.
                 let panel_open = self.focused_panel == FocusedPanel::Lyrics;
-                if self.lyrics.shared.on_track_started(
-                    &tap.track_id,
-                    self.config.layout.base.lyrics_display,
-                    panel_open,
-                ) {
+                let lyrics_in_sidebar = self
+                    .config
+                    .layout
+                    .base
+                    .sidebar
+                    .components
+                    .contains(&blackbird_client_shared::config::SidebarComponent::Lyrics)
+                    && self.config.layout.base.sidebar.enabled;
+                let request_lyrics = panel_open || lyrics_in_sidebar || self.inline_lyrics_mode;
+                if self
+                    .lyrics
+                    .shared
+                    .on_track_started(&tap.track_id, request_lyrics)
+                {
                     self.logic.request_lyrics(&tap.track_id);
+                }
+
+                // Request similar songs for the new track if the component is
+                // enabled (respecting the panel-open/visible policy: similar
+                // songs are fetched if the sidebar would show them, or the
+                // lyrics/side panel is open so they may be viewed).
+                self.similar_songs.reset();
+                let similar_enabled = self
+                    .config
+                    .layout
+                    .base
+                    .sidebar
+                    .components
+                    .contains(&blackbird_client_shared::config::SidebarComponent::SimilarSongs)
+                    && self.config.layout.base.sidebar.enabled;
+                if similar_enabled || panel_open {
+                    self.similar_songs.on_fetch_started(&tap.track_id);
+                    // A new track wipes any stale similar/extension fetch error.
+                    self.logic.clear_similar_errors();
+                    self.logic.request_similar_songs(
+                        &tap.track_id,
+                        self.config.layout.base.sidebar.similar_songs_count,
+                    );
                 }
             }
         }
 
-        // Process lyrics data.
+        // Process lyrics data. Like the similar-songs drain below, each delivery is
+        // handled immediately so stale in-flight responses can't interleave.
         while let Ok(lyrics_data) = self.lyrics_loaded_rx.try_recv() {
             changed = true;
             self.lyrics.shared.on_lyrics_loaded(&lyrics_data);
+        }
+
+        // Process similar-songs data. Only accept results for the current
+        // track, so a stale response from a previous track is ignored.
+        while let Ok(similar_data) = self.similar_songs_loaded_rx.try_recv() {
+            changed = true;
+            if self
+                .similar_songs
+                .track_id
+                .as_ref()
+                .is_some_and(|id| id == &similar_data.track_id)
+            {
+                self.similar_songs.on_loaded(&similar_data);
+                // A successful delivery (non-empty result, meaning the server
+                // responded) clears any stale similar/extension fetch error.
+                if !similar_data.similar.is_empty() {
+                    self.logic.clear_similar_errors();
+                }
+            }
         }
 
         // Process library population.
@@ -213,10 +305,12 @@ impl App {
         }
 
         // Reload config from disk if changed (check once per second).
-        // Skip while settings is open or sidebar is being dragged — in-memory
-        // changes haven't been saved yet and would be overwritten.
+        // Skip while settings is open or the sidebar is being dragged —
+        // in-memory changes haven't been saved yet and would be overwritten.
         if self.focused_panel != FocusedPanel::Settings
             && !self.lyrics_sidebar_dragging
+            && self.sidebar_component_drag.is_none()
+            && !self.settings_sidebar_dragging
             && self.last_config_check.elapsed() >= Duration::from_secs(1)
         {
             self.last_config_check = Instant::now();
@@ -224,6 +318,8 @@ impl App {
             if new_config != self.config {
                 self.config = new_config;
                 self.config.save();
+                // The runtime sidebar order and inline-mode flag are synced at
+                // the top of the next tick.
                 changed = true;
             }
         }
@@ -234,6 +330,16 @@ impl App {
         }
         if self.focused_panel == FocusedPanel::Search {
             changed |= self.search.tick_inertia();
+        }
+        // The similar-songs component has its own viewport inertia, active
+        // whenever a sidebar is visible (not just when focused).
+        if self
+            .sidebar
+            .order
+            .contains(&crate::ui::sidebar::SidebarComponentId::SimilarSongs)
+            || self.focused_panel == FocusedPanel::Lyrics
+        {
+            changed |= self.similar_songs.tick_inertia();
         }
 
         if self.logic.should_shutdown() {
@@ -260,8 +366,8 @@ impl App {
     }
 
     pub fn toggle_lyrics(&mut self) {
-        let lyrics_display = self.config.layout.base.lyrics_display;
-        if lyrics_display.is_sidebar() {
+        let sidebar_visible = self.config.layout.base.sidebar.enabled;
+        if sidebar_visible {
             // When a sidebar is visible, the lyrics keybinding toggles focus
             // to/from the sidebar rather than opening the full panel.
             if self.focused_panel == FocusedPanel::Lyrics {
@@ -282,6 +388,19 @@ impl App {
         }
     }
 
+    /// Toggle the sidebar's runtime visibility (`sidebar.enabled`), saving the
+    /// config. The effective sidebar position is preserved (position is always
+    /// Left or Right; `enabled` controls visibility).
+    pub fn toggle_sidebar(&mut self) {
+        self.config.layout.base.sidebar.enabled = !self.config.layout.base.sidebar.enabled;
+        // If hiding the sidebar while the sidebar has focus, return focus to
+        // the library.
+        if !self.config.layout.base.sidebar.enabled && self.focused_panel == FocusedPanel::Lyrics {
+            self.focused_panel = FocusedPanel::Library;
+        }
+        self.config.save();
+    }
+
     /// Focus the lyrics panel and request lyrics if not already loaded.
     /// When `reset` is true, resets the view state (used for the full panel).
     pub(crate) fn focus_lyrics_panel(&mut self, reset: bool) {
@@ -292,9 +411,20 @@ impl App {
         // Request lyrics if not already loaded for the current track.
         let playing_id = self.logic.get_playing_track_id();
         if self.lyrics.shared.on_panel_opened(playing_id.as_ref())
-            && let Some(track_id) = playing_id
+            && let Some(track_id) = playing_id.as_ref()
         {
-            self.logic.request_lyrics(&track_id);
+            self.logic.request_lyrics(track_id);
+        }
+        // Request similar songs if not already loaded/loading for the current
+        // track, so the panel is populated even without a visible sidebar.
+        if let Some(track_id) = playing_id.as_ref()
+            && self.similar_songs.track_id.as_ref() != Some(track_id)
+        {
+            self.similar_songs.on_fetch_started(track_id);
+            self.logic.request_similar_songs(
+                track_id,
+                self.config.layout.base.sidebar.similar_songs_count,
+            );
         }
     }
 

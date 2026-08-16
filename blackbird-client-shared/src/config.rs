@@ -45,60 +45,145 @@ impl EnumerableEnum for AlbumArtStyle {
     }
 }
 
-impl EnumerableEnum for LyricsDisplay {
-    const ALL: &'static [LyricsDisplay] = LyricsDisplay::ALL;
-    fn as_str(&self) -> &'static str {
-        LyricsDisplay::as_str(self)
-    }
-}
-
-/// Controls how lyrics are displayed in the client UI.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+/// A component that can be shown in the current-track sidebar.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
-pub enum LyricsDisplay {
-    /// Lyrics are not shown.
-    Off,
-    /// Lyrics are shown inline at the bottom of the content area.
-    #[default]
-    Inline,
-    /// Lyrics are shown in a sidebar on the left side of the content area.
-    Left,
-    /// Lyrics are shown in a sidebar on the right side of the content area.
-    Right,
+pub enum SidebarComponent {
+    /// The lyrics for the currently playing track.
+    Lyrics,
+    /// Songs similar to the currently playing track, from the server's
+    /// OpenSubsonic surface.
+    SimilarSongs,
 }
 
-impl LyricsDisplay {
-    /// All variants for UI display/cycling.
-    pub const ALL: &[LyricsDisplay] = &[
-        LyricsDisplay::Off,
-        LyricsDisplay::Inline,
-        LyricsDisplay::Left,
-        LyricsDisplay::Right,
-    ];
+impl SidebarComponent {
+    /// All sidebar components in the default display order.
+    pub const ALL: &[SidebarComponent] =
+        &[SidebarComponent::Lyrics, SidebarComponent::SimilarSongs];
 
     /// Returns a human-readable label for display in UI.
     pub fn as_str(&self) -> &'static str {
         match self {
-            LyricsDisplay::Off => "off",
-            LyricsDisplay::Inline => "inline",
-            LyricsDisplay::Left => "left",
-            LyricsDisplay::Right => "right",
+            SidebarComponent::Lyrics => "lyrics",
+            SidebarComponent::SimilarSongs => "similar songs",
         }
     }
+}
 
-    /// Returns `true` if lyrics should be shown in a sidebar.
-    pub fn is_sidebar(self) -> bool {
-        matches!(self, LyricsDisplay::Left | LyricsDisplay::Right)
+impl EnumerableEnum for SidebarComponent {
+    const ALL: &'static [SidebarComponent] = SidebarComponent::ALL;
+    fn as_str(&self) -> &'static str {
+        SidebarComponent::as_str(self)
     }
+}
+
+/// Which side the current-track sidebar sits on. The sidebar's *existence* is
+/// controlled by `SidebarSettings::enabled`; this only records its side.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarPosition {
+    /// Sidebar on the left of the library.
+    Left,
+    /// Sidebar on the right of the library.
+    #[default]
+    Right,
+}
+
+impl SidebarPosition {
+    /// All positions in cycle order.
+    pub const ALL: &[SidebarPosition] = &[SidebarPosition::Left, SidebarPosition::Right];
+
+    /// Returns a human-readable label for display in UI.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SidebarPosition::Left => "left",
+            SidebarPosition::Right => "right",
+        }
+    }
+}
+
+impl EnumerableEnum for SidebarPosition {
+    const ALL: &'static [SidebarPosition] = SidebarPosition::ALL;
+    fn as_str(&self) -> &'static str {
+        SidebarPosition::as_str(self)
+    }
+}
+
+/// Settings for the current-track sidebar.
+///
+/// The sidebar's existence is controlled by [`Self::enabled`]; [`SidebarPosition`]
+/// only records which side it sits on.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SidebarSettings {
+    /// Whether the sidebar is visible.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Which side the sidebar sits on.
+    #[serde(default)]
+    pub position: SidebarPosition,
+    /// The ordered list of components shown in the sidebar, top to bottom.
+    /// An empty list renders a placeholder. Defaults to `[Lyrics, SimilarSongs]`.
+    #[serde(default = "default_sidebar_components")]
+    pub components: Vec<SidebarComponent>,
+    /// The number of similar songs to request from the server (clamped to
+    /// 1–100 by the settings UI).
+    #[serde(default = "default_similar_songs_count")]
+    pub similar_songs_count: usize,
+    /// The proportional height of each component, in the same order as
+    /// `components`. Values are fractions of the sidebar height summing to 1.
+    /// Defaults to equal shares (100/N for N components). When the component
+    /// list changes, `heights` is rebalanced to equal shares.
+    #[serde(default = "default_sidebar_heights")]
+    pub heights: Vec<f32>,
+}
+
+impl Default for SidebarSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            position: SidebarPosition::default(),
+            components: default_sidebar_components(),
+            similar_songs_count: default_similar_songs_count(),
+            heights: default_sidebar_heights(),
+        }
+    }
+}
+
+impl SidebarSettings {
+    /// Rebalances `heights` to equal shares for the current component list.
+    /// Call whenever `components` changes (config load, settings edit).
+    pub fn rebalance_heights(&mut self) {
+        let count = self.components.len();
+        if count == 0 {
+            self.heights.clear();
+            return;
+        }
+        let share = 1.0 / count as f32;
+        self.heights = vec![share; count];
+        // Clamp accumulated rounding error so the fractions sum to exactly 1.
+        let last = self.heights.len() - 1;
+        let sum: f32 = self.heights.iter().sum();
+        self.heights[last] += 1.0 - sum;
+    }
+}
+
+fn default_sidebar_components() -> Vec<SidebarComponent> {
+    vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+}
+
+fn default_similar_songs_count() -> usize {
+    20
+}
+
+fn default_sidebar_heights() -> Vec<f32> {
+    vec![0.5, 0.5]
 }
 
 /// Layout configuration for the library and player UI.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Layout {
-    /// How lyrics are displayed in the UI.
-    #[serde(default)]
-    pub lyrics_display: LyricsDisplay,
     /// How album art is displayed in the library view.
     #[serde(default)]
     pub album_art_style: AlbumArtStyle,
@@ -108,14 +193,17 @@ pub struct Layout {
     /// Scroll multiplier for mouse wheel scrolling.
     #[serde(default = "default_scroll_multiplier")]
     pub scroll_multiplier: f32,
+    /// Settings for the current-track sidebar.
+    #[serde(default)]
+    pub sidebar: SidebarSettings,
 }
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            lyrics_display: LyricsDisplay::default(),
             album_art_style: AlbumArtStyle::default(),
             album_spacing: default_album_spacing(),
             scroll_multiplier: default_scroll_multiplier(),
+            sidebar: SidebarSettings::default(),
         }
     }
 }
@@ -211,76 +299,116 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lyrics_display_roundtrip() {
-        for variant in LyricsDisplay::ALL {
-            let layout = Layout {
-                lyrics_display: *variant,
+    fn sidebar_settings_defaults() {
+        let settings = SidebarSettings::default();
+        assert!(settings.enabled);
+        assert_eq!(
+            settings.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+        );
+        assert_eq!(settings.similar_songs_count, 20);
+    }
+
+    #[test]
+    fn sidebar_component_serializes_snake_case() {
+        // Bare enums can't be serialized standalone by toml; verify the
+        // snake_case names through the full Layout roundtrip.
+        let layout = Layout {
+            sidebar: SidebarSettings {
+                enabled: true,
+                components: vec![SidebarComponent::SimilarSongs, SidebarComponent::Lyrics],
+                similar_songs_count: 20,
+                heights: vec![0.5, 0.5],
                 ..Default::default()
-            };
-            let toml_str = toml::to_string(&layout).unwrap();
-            let parsed: Layout = toml::from_str(&toml_str).unwrap();
-            assert_eq!(
-                layout.lyrics_display, parsed.lyrics_display,
-                "roundtrip failed for {variant:?}"
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string(&layout).unwrap();
+        assert!(
+            toml_str.contains("components = [\"similar_songs\", \"lyrics\"]"),
+            "expected snake_case component names, got:\n{toml_str}"
+        );
+    }
+
+    #[test]
+    fn sidebar_config_roundtrip() {
+        let layout = Layout {
+            sidebar: SidebarSettings {
+                enabled: false,
+                components: vec![SidebarComponent::SimilarSongs],
+                similar_songs_count: 7,
+                heights: vec![1.0],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let toml_str = toml::to_string(&layout).unwrap();
+        let parsed: Layout = toml::from_str(&toml_str).unwrap();
+        assert_eq!(layout.sidebar, parsed.sidebar);
+        assert!(toml_str.contains("enabled = false"));
+        assert!(toml_str.contains("similar_songs_count = 7"));
+    }
+
+    #[test]
+    fn rebalance_heights_distributes_equal_shares() {
+        let mut settings = SidebarSettings {
+            components: vec![
+                SidebarComponent::Lyrics,
+                SidebarComponent::SimilarSongs,
+                SidebarComponent::SimilarSongs,
+            ],
+            ..Default::default()
+        };
+        settings.rebalance_heights();
+        assert_eq!(settings.heights.len(), 3);
+        let sum: f32 = settings.heights.iter().sum();
+        assert!(
+            (sum - 1.0).abs() < 1e-6,
+            "heights should sum to 1, got {sum}"
+        );
+        for h in &settings.heights {
+            assert!(
+                (h - 1.0 / 3.0).abs() < 1e-3,
+                "expected equal shares, got {h}"
             );
         }
     }
 
     #[test]
-    fn lyrics_display_default_is_inline() {
-        assert_eq!(LyricsDisplay::default(), LyricsDisplay::Inline);
-    }
-
-    #[test]
-    fn layout_default_has_inline_lyrics() {
-        let layout = Layout::default();
-        assert_eq!(layout.lyrics_display, LyricsDisplay::Inline);
-    }
-
-    #[test]
-    fn layout_with_old_show_inline_lyrics_field_parses() {
-        // Old configs with `show_inline_lyrics` should still parse. The old
-        // field is silently ignored (caught by serde's default on the new
-        // `lyrics_display` field), and `lyrics_display` defaults to `Inline`.
+    fn old_config_without_heights_parses() {
+        // Configs written before the `heights` field existed parse with the
+        // default equal shares.
         let toml_str = r#"
-show_inline_lyrics = false
+[sidebar]
+enabled = true
+components = ["lyrics", "similar_songs"]
+similar_songs_count = 20
+"#;
+        let settings: SidebarSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.heights, vec![0.5, 0.5]);
+    }
+
+    #[test]
+    fn sidebar_position_defaults_to_right() {
+        assert_eq!(SidebarPosition::default(), SidebarPosition::Right);
+        let settings = SidebarSettings::default();
+        assert_eq!(settings.position, SidebarPosition::Right);
+    }
+
+    #[test]
+    fn old_config_parses_with_sidebar_defaults() {
+        // Old configs with only `lyrics_display` (no `sidebar` key) parse with
+        // the sidebar enabled and lyrics + similar songs in that order.
+        let toml_str = r#"
 "#;
         let layout: Layout = toml::from_str(toml_str).unwrap();
-        assert_eq!(layout.lyrics_display, LyricsDisplay::Inline);
-    }
-
-    #[test]
-    fn layout_with_lyrics_display_right_parses() {
-        let toml_str = r#"
-lyrics_display = "right"
-"#;
-        let layout: Layout = toml::from_str(toml_str).unwrap();
-        assert_eq!(layout.lyrics_display, LyricsDisplay::Right);
-    }
-
-    #[test]
-    fn layout_with_lyrics_display_off_parses() {
-        let toml_str = r#"
-lyrics_display = "off"
-"#;
-        let layout: Layout = toml::from_str(toml_str).unwrap();
-        assert_eq!(layout.lyrics_display, LyricsDisplay::Off);
-    }
-
-    #[test]
-    fn layout_with_lyrics_display_left_parses() {
-        let toml_str = r#"
-lyrics_display = "left"
-"#;
-        let layout: Layout = toml::from_str(toml_str).unwrap();
-        assert_eq!(layout.lyrics_display, LyricsDisplay::Left);
-    }
-
-    #[test]
-    fn lyrics_display_is_sidebar() {
-        assert!(!LyricsDisplay::Off.is_sidebar());
-        assert!(!LyricsDisplay::Inline.is_sidebar());
-        assert!(LyricsDisplay::Left.is_sidebar());
-        assert!(LyricsDisplay::Right.is_sidebar());
+        assert!(
+            layout.sidebar.enabled,
+            "old configs should default to the sidebar being enabled"
+        );
+        assert_eq!(
+            layout.sidebar.components,
+            vec![SidebarComponent::Lyrics, SidebarComponent::SimilarSongs]
+        );
     }
 }

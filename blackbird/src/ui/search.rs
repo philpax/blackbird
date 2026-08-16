@@ -5,14 +5,14 @@ use blackbird_core::{
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
 use crate::keys::Action;
 
-use super::{StyleExt, string_to_color};
+use super::{ToColor, string_to_color};
 
 pub enum SearchAction {
     ToggleSearch,
@@ -226,12 +226,13 @@ pub fn draw(
     search: &mut SearchState,
     style: &shared_style::Style,
     logic: &bc::Logic,
+    hovered_index: Option<usize>,
     area: Rect,
 ) {
     let block = Block::default()
         .title(" Search ")
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(style.track_name_playing_color()));
+        .border_style(Style::default().fg(style.panels.border().to_color()));
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -246,11 +247,14 @@ pub fn draw(
 
     // Search input
     let input = Paragraph::new(Line::from(vec![
-        Span::styled("> ", Style::default().fg(style.track_name_playing_color())),
-        Span::styled(&search.query, Style::default().fg(style.text_color())),
+        Span::styled("> ", Style::default().fg(style.panels.border().to_color())),
+        Span::styled(
+            &search.query,
+            Style::default().fg(style.general.text().to_color()),
+        ),
         Span::styled(
             "\u{2588}",
-            Style::default().fg(style.track_name_playing_color()),
+            Style::default().fg(style.panels.border().to_color()),
         ),
     ]));
     frame.render_widget(input, chunks[0]);
@@ -262,15 +266,15 @@ pub fn draw(
         } else {
             "Enter at least 3 characters..."
         };
-        let hint_widget =
-            Paragraph::new(hint).style(Style::default().fg(style.track_duration_color()));
+        let hint_widget = Paragraph::new(hint)
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(hint_widget, chunks[1]);
         return;
     }
 
     if search.results.is_empty() {
         let no_results = Paragraph::new("No results found.")
-            .style(Style::default().fg(style.track_duration_color()));
+            .style(Style::default().fg(style.library.track_duration().to_color()));
         frame.render_widget(no_results, chunks[1]);
         return;
     }
@@ -279,10 +283,10 @@ pub fn draw(
     let app_state = state_arc.read().unwrap();
 
     // Pre-compute style colors to avoid borrow conflicts in closure.
-    let track_name_color = style.track_name_color();
-    let track_length_color = style.track_length_color();
-    let track_duration_color = style.track_duration_color();
-    let track_name_hovered_color = style.track_name_hovered_color();
+    let track_name_color = style.library.track_name().to_color();
+    let track_length_color = style.library.track_length().to_color();
+    let track_duration_color = style.library.track_duration().to_color();
+    let track_name_hovered_color = style.library.track_name_hovered().to_color();
 
     let items: Vec<ListItem> = search
         .results
@@ -290,12 +294,20 @@ pub fn draw(
         .enumerate()
         .map(|(i, track_id)| {
             let is_selected = i == search.selected_index;
+            let is_hovered = hovered_index == Some(i);
             let details = TrackDisplayDetails::from_track_id(track_id, &app_state);
 
             let line = if let Some(d) = details {
                 let artist = d.artist();
                 let dur_str = seconds_to_hms_string(d.track_duration.as_secs() as u32, false);
-
+                // Match the library: the selected row's track title gets the
+                // hovered colour (the per-span colours would otherwise override
+                // the row style).
+                let title_color = if is_selected {
+                    track_name_hovered_color
+                } else {
+                    track_name_color
+                };
                 Line::from(vec![
                     Span::styled(
                         artist.to_string(),
@@ -304,11 +316,21 @@ pub fn draw(
                     Span::raw(" - "),
                     Span::styled(
                         d.track_title.to_string(),
-                        Style::default().fg(track_name_color),
+                        Style::default()
+                            .fg(title_color)
+                            .add_modifier(if is_selected {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            }),
                     ),
                     Span::styled(
                         format!(" [{dur_str}]"),
-                        Style::default().fg(track_length_color),
+                        Style::default().fg(if is_selected {
+                            track_name_hovered_color
+                        } else {
+                            track_length_color
+                        }),
                     ),
                 ])
             } else {
@@ -318,13 +340,24 @@ pub fn draw(
                 ))
             };
 
-            let item_style = if is_selected {
-                Style::default().bg(track_name_hovered_color)
+            // Underline the hovered row (like the library), except when it is
+            // the keyboard-selected row.
+            let line = if is_hovered && !is_selected {
+                let spans: Vec<Span> = line
+                    .spans
+                    .into_iter()
+                    .map(|s| {
+                        let mut s = s;
+                        s.style = s.style.add_modifier(Modifier::UNDERLINED);
+                        s
+                    })
+                    .collect();
+                Line::from(spans)
             } else {
-                Style::default()
+                line
             };
 
-            ListItem::new(line).style(item_style)
+            ListItem::new(line)
         })
         .collect();
 
@@ -341,8 +374,8 @@ pub fn draw(
         frame,
         chunks[1],
         search.results.len(),
-        style.track_duration_color(),
-        style.track_name_playing_color(),
+        style.library.track_duration().to_color(),
+        style.library.track_name_playing().to_color(),
     );
 }
 
@@ -363,4 +396,14 @@ fn results_area(area: Rect) -> Rect {
         width: area.width.saturating_sub(2),
         height: end.saturating_sub(start),
     }
+}
+
+/// Computes which search result row the mouse is hovering over, if any.
+/// `scroll_line` is the viewport's first visible row (`SearchState.viewport.line`).
+pub fn hovered_result_index(
+    mouse: Option<(u16, u16)>,
+    area: Rect,
+    scroll_line: usize,
+) -> Option<usize> {
+    super::panel::hovered_row(mouse, results_area(area), scroll_line)
 }
