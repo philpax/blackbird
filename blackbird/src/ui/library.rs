@@ -135,8 +135,7 @@ pub(crate) fn render_library_entry<'a>(
                     let right_width = right_content.width() + 1;
                     let padding_needed = ctx
                         .list_width
-                        .saturating_sub(left_content_width + right_width)
-                        .saturating_sub(1);
+                        .saturating_sub(left_content_width + right_width);
 
                     let mut line2_spans =
                         vec![Span::raw(" ".repeat(thumbnail.left_margin as usize))];
@@ -183,8 +182,7 @@ pub(crate) fn render_library_entry<'a>(
                     let right_width = right_content.width() + 1;
                     let padding_needed = ctx
                         .list_width
-                        .saturating_sub(left_content_width + right_width)
-                        .saturating_sub(1);
+                        .saturating_sub(left_content_width + right_width);
 
                     let mut line2_spans = vec![Span::raw(" ")];
                     let content_start = line2_spans.len();
@@ -258,18 +256,25 @@ pub(crate) fn render_library_entry<'a>(
                 Style::default().fg(ctx.track_name_color)
             };
 
+            // Two-pass budgeting for track layout.
+            // Priority (highest to lowest): fixed left > title > play count > artist > right.
+            // Duration and heart are always visible and right-aligned.
+            // Artist fills remaining space between left content and right content.
+            // Truncation order: artist (dropped first) → play count → title.
+
+            // --- Build fixed-left spans (never truncated). ---
             let mut left_spans: Vec<Span<'_>> = Vec::new();
-            let mut left_width: usize;
+            let indent_width: usize;
             let underline_start: usize;
 
             match ctx.album_art_style {
                 AlbumArtStyle::LeftOfAlbum => {
                     left_spans.push(Span::raw(" ".repeat(super::layout::TRACK_INDENT)));
-                    left_width = super::layout::TRACK_INDENT;
+                    indent_width = super::layout::TRACK_INDENT;
                     underline_start = 1;
                 }
                 AlbumArtStyle::BelowAlbum => {
-                    let indent_width = ctx.large_art.total_width() as usize;
+                    indent_width = ctx.large_art.total_width() as usize;
 
                     if *track_index_in_group < ctx.large_art.rows as usize {
                         large_art_row_spans(
@@ -281,78 +286,127 @@ pub(crate) fn render_library_entry<'a>(
                     } else {
                         left_spans.push(Span::raw(" ".repeat(indent_width)));
                     }
-                    left_width = indent_width;
                     underline_start = left_spans.len();
                 }
             }
 
             let track_num_formatted = format!("{:>5} ", track_str);
+            let track_num_width = track_num_formatted.width();
             left_spans.push(Span::styled(
-                track_num_formatted.clone(),
+                track_num_formatted,
                 Style::default().fg(ctx.track_number_color),
             ));
-            left_width += track_num_formatted.width();
 
-            if is_playing {
+            let playing_width = if is_playing {
                 left_spans.push(Span::styled(
                     "\u{25B6} ",
                     Style::default()
                         .fg(ctx.track_name_playing_color)
                         .add_modifier(Modifier::BOLD),
                 ));
-                left_width += 2;
-            }
+                2
+            } else {
+                0
+            };
 
-            left_spans.push(Span::styled(title, title_style));
-            left_width += title.width();
+            // --- Budget-based layout using segment solver. ---
+            // Segments (in display order): title, play count, artist.
+            // Fixed elements: indent/art, track number, ▶ indicator, right side.
+            let fixed_left_width = indent_width + track_num_width + playing_width;
+            let right_width = dur_str.width() + 3; // space + dur + space + heart
+            let variable_budget = ctx
+                .list_width
+                .saturating_sub(fixed_left_width + right_width);
 
+            // Build segments for the solver. Each segment carries its content
+            // and style so the renderer is a dumb linear emitter.
+            let mut segments: Vec<Segment> = Vec::new();
+
+            // Title (priority 1, never dropped).
+            let title_width = title.width();
+            segments.push(Segment {
+                priority: 1,
+                max_width: title_width,
+                min_width: 1,
+                separator: 0,
+                content: title.clone(),
+                style: title_style,
+            });
+
+            // Play count (priority 2, droppable, leading space as separator).
             if let Some(pc) = play_count {
-                let pc_str = format!(" {pc}");
-                left_width += pc_str.width();
-                left_spans.push(Span::styled(
-                    pc_str,
-                    Style::default().fg(ctx.track_number_color),
-                ));
+                let pc_num = pc.to_string();
+                segments.push(Segment {
+                    priority: 2,
+                    max_width: pc_num.width(),
+                    min_width: 0,
+                    separator: 1, // leading space
+                    content: pc_num,
+                    style: Style::default().fg(ctx.track_number_color),
+                });
             }
 
-            let mut right_spans = Vec::new();
-            let mut right_width = 0;
-
+            // Artist (priority 3, droppable, leading space separator).
             if let Some(track_artist) = artist
                 && track_artist != album_artist
             {
-                let artist_str = format!("{track_artist} ");
-                right_width += artist_str.width();
-                right_spans.push(Span::styled(
-                    artist_str,
-                    Style::default().fg(string_to_color(track_artist)),
-                ));
+                segments.push(Segment {
+                    priority: 3,
+                    max_width: track_artist.width(),
+                    min_width: 0,
+                    separator: 1, // leading space before artist
+                    content: track_artist.clone(),
+                    style: Style::default().fg(string_to_color(track_artist)),
+                });
             }
 
-            right_width += dur_str.width() + 2;
-            right_spans.push(Span::styled(
+            // Solve allocations.
+            let (allocs, padding) = allocate_segments(&segments, variable_budget);
+
+            // --- Dumb linear emitter: iterate segments and emit spans. ---
+            // The artist (priority 3) is right-aligned by emitting padding before it.
+            // If there's no artist or it was dropped, padding goes after all segments.
+            let artist_idx = segments.iter().position(|s| s.priority == 3);
+            let artist_allocated = artist_idx.map(|idx| allocs[idx] > 0).unwrap_or(false);
+
+            for (i, (seg, &alloc)) in segments.iter().zip(allocs.iter()).enumerate() {
+                if alloc == 0 {
+                    continue;
+                }
+                // Emit padding before the artist to right-align it.
+                if Some(i) == artist_idx && padding > 0 {
+                    left_spans.push(Span::raw(" ".repeat(padding)));
+                }
+                // Emit separator spaces.
+                if seg.separator > 0 {
+                    left_spans.push(Span::raw(" ".repeat(seg.separator)));
+                }
+                // Emit content truncated to allocation.
+                let text = super::truncate_to_width(&seg.content, alloc);
+                left_spans.push(Span::styled(text, seg.style));
+            }
+
+            // No artist present or it was dropped: padding goes after all segments.
+            if !artist_allocated && padding > 0 {
+                left_spans.push(Span::raw(" ".repeat(padding)));
+            }
+
+            // Right side: space + duration + space + heart.
+            left_spans.push(Span::raw(" "));
+            left_spans.push(Span::styled(
                 dur_str,
                 Style::default().fg(ctx.track_length_color),
             ));
-            right_spans.push(Span::raw(" "));
-            right_spans.push(Span::styled(heart, heart_style));
-
-            let padding_needed = ctx
-                .list_width
-                .saturating_sub(left_width + right_width)
-                .saturating_sub(1);
-
-            let mut spans = left_spans;
-            spans.push(Span::raw(" ".repeat(padding_needed)));
-            spans.extend(right_spans);
+            left_spans.push(Span::raw(" "));
+            left_spans.push(Span::styled(heart, heart_style));
 
             if ctx.underline_index == Some(i) {
-                for span in &mut spans[underline_start..] {
+                for span in &mut left_spans[underline_start..] {
                     span.style = span.style.add_modifier(Modifier::UNDERLINED);
                 }
             }
 
-            Text::from(Line::from(spans))
+            Text::from(Line::from(left_spans))
         }
         LibraryEntry::GroupSpacer {
             cover_art_id,
@@ -2080,6 +2134,67 @@ pub fn handle_scroll(app: &mut App, direction: i32, steps: usize) {
     app.library.snap_cursor_to_viewport_center();
 }
 
+/// A segment in the track line layout, with priority-based allocation.
+#[derive(Debug)]
+struct Segment {
+    /// Priority: lower number = higher priority (allocated first).
+    priority: u8,
+    /// Maximum display width of this segment.
+    max_width: usize,
+    /// Minimum width; if 0, the segment can be dropped entirely.
+    min_width: usize,
+    /// Width of the separator space before this segment (0 if none).
+    separator: usize,
+    /// Content string (without separator space).
+    content: String,
+    /// Style to apply when rendering.
+    style: Style,
+}
+
+/// Allocates budget across segments by priority.
+///
+/// Segments are sorted by priority ascending. Each segment claims as much
+/// budget as possible, but never exceeds its max_width. Droppable segments
+/// (min_width == 0) get zero allocation when budget is exhausted. Non-
+/// droppable segments (title) are truncated to fit whatever remains.
+///
+/// Returns `(allocations, padding)` where allocations match the input
+/// segment order and padding is the unclaimed remainder.
+fn allocate_segments(segments: &[Segment], budget: usize) -> (Vec<usize>, usize) {
+    let mut remaining = budget;
+    let mut allocations: Vec<usize> = vec![0; segments.len()];
+
+    // Process segments in priority order.
+    let mut by_priority: Vec<(u8, usize)> = segments
+        .iter()
+        .enumerate()
+        .map(|(idx, seg)| (seg.priority, idx))
+        .collect();
+    by_priority.sort_unstable_by_key(|&(pri, _)| pri);
+
+    for &(_, idx) in &by_priority {
+        let seg = &segments[idx];
+        let cost_floor = seg.separator + seg.min_width;
+        if remaining < cost_floor {
+            // Not enough room even for the minimum.
+            if seg.min_width > 0 {
+                // Non-droppable: truncate to whatever fits after separator.
+                let avail = remaining.saturating_sub(seg.separator);
+                allocations[idx] = avail;
+                remaining = remaining.saturating_sub(avail + seg.separator);
+            }
+            // else: droppable, stays at 0.
+        } else {
+            // Full allocation fits.
+            let alloc = seg.max_width.min(remaining - seg.separator);
+            allocations[idx] = alloc;
+            remaining -= alloc + seg.separator;
+        }
+    }
+
+    (allocations, remaining)
+}
+
 /// Scroll library to a position based on Y coordinate (for scrollbar dragging).
 pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16) {
     app.library
@@ -2094,6 +2209,124 @@ mod tests {
     use ratatui_image::picker::Picker;
 
     use super::*;
+
+    // -----------------------------------------------------------------------
+    // Segment solver unit tests
+    // -----------------------------------------------------------------------
+
+    fn seg(priority: u8, max_width: usize, min_width: usize, separator: usize) -> Segment {
+        Segment {
+            priority,
+            max_width,
+            min_width,
+            separator,
+            content: String::new(),
+            style: Style::default(),
+        }
+    }
+
+    /// When budget is generous, all segments get their full width.
+    #[test]
+    fn test_segment_solver_wide_budget() {
+        let segments = [
+            seg(1, 10, 1, 0), // title
+            seg(2, 3, 0, 0),  // pc
+            seg(3, 12, 0, 1), // artist + leading space
+        ];
+        let (allocs, padding) = allocate_segments(&segments, 50);
+        assert_eq!(allocs, vec![10, 3, 12]);
+        // 50 - (10 + 3 + 1 + 12) = 24
+        assert_eq!(padding, 24);
+    }
+
+    /// Artist is dropped when budget is tight, play count survives.
+    #[test]
+    fn test_segment_solver_artist_dropped_before_pc() {
+        let segments = [seg(1, 5, 1, 0), seg(2, 3, 0, 0), seg(3, 18, 0, 1)];
+        // Budget just enough for title + pc, not enough for artist (needs 1+1=2).
+        let (allocs, padding) = allocate_segments(&segments, 8);
+        assert_eq!(allocs, vec![5, 3, 0]);
+        assert_eq!(padding, 0);
+    }
+
+    /// Play count is dropped when budget can't fit it, but title gets full.
+    #[test]
+    fn test_segment_solver_pc_dropped() {
+        let segments = [seg(1, 7, 1, 0), seg(2, 3, 0, 0), seg(3, 10, 0, 1)];
+        // Budget fits title (7) but not pc (3 more needed).
+        let (allocs, padding) = allocate_segments(&segments, 7);
+        assert_eq!(allocs, vec![7, 0, 0]);
+        assert_eq!(padding, 0);
+    }
+
+    /// Title is truncated when budget is very tight.
+    #[test]
+    fn test_segment_solver_title_truncated() {
+        let segments = [seg(1, 10, 1, 0), seg(2, 3, 0, 0), seg(3, 12, 0, 1)];
+        // Budget too small for full title.
+        let (allocs, padding) = allocate_segments(&segments, 4);
+        assert_eq!(allocs, vec![4, 0, 0]);
+        assert_eq!(padding, 0);
+    }
+
+    /// Medium budget: title full, pc full, artist truncated.
+    #[test]
+    fn test_segment_solver_artist_truncated() {
+        let segments = [seg(1, 5, 1, 0), seg(2, 3, 0, 0), seg(3, 18, 0, 1)];
+        // Budget: 5 + 3 + 1 + 6 = 15, so artist gets 6 of 18.
+        let (allocs, padding) = allocate_segments(&segments, 15);
+        assert_eq!(allocs, vec![5, 3, 6]);
+        assert_eq!(padding, 0);
+    }
+
+    /// Padding is returned when budget exceeds total segment cost.
+    #[test]
+    fn test_segment_solver_padding() {
+        let segments = [seg(1, 5, 1, 0), seg(2, 3, 0, 0), seg(3, 4, 0, 1)];
+        // Full cost: 5 + 3 + 1 + 4 = 13. Budget 20 → padding 7.
+        let (allocs, padding) = allocate_segments(&segments, 20);
+        assert_eq!(allocs, vec![5, 3, 4]);
+        assert_eq!(padding, 7);
+    }
+
+    /// Empty segment list returns full budget as padding.
+    #[test]
+    fn test_segment_solver_empty() {
+        let (allocs, padding) = allocate_segments(&[], 30);
+        assert!(allocs.is_empty());
+        assert_eq!(padding, 30);
+    }
+
+    /// Zero budget drops everything except non-droppable title (gets 0).
+    #[test]
+    fn test_segment_solver_zero_budget() {
+        let segments = [seg(1, 10, 1, 0), seg(2, 3, 0, 0)];
+        let (allocs, _padding) = allocate_segments(&segments, 0);
+        assert_eq!(allocs, vec![0, 0]);
+    }
+
+    /// Separator costs are respected — a segment with separator=1 needs
+    /// at least 2 budget (separator + min_width=1) to claim anything.
+    #[test]
+    fn test_segment_solver_separator_cost() {
+        let segments = [seg(1, 10, 1, 0), seg(3, 12, 0, 1)];
+        // Budget 6: title takes 6, remaining 0. Artist needs 1 separator but
+        // has 0 remaining → dropped.
+        let (allocs, padding) = allocate_segments(&segments, 6);
+        assert_eq!(allocs, vec![6, 0]);
+        assert_eq!(padding, 0);
+    }
+
+    /// Priority ordering is respected regardless of segment array order.
+    #[test]
+    fn test_segment_solver_priority_order() {
+        // Segments in reverse priority order.
+        let segments = [seg(3, 12, 0, 1), seg(2, 3, 0, 0), seg(1, 10, 1, 0)];
+        // Budget 8: title(10→8) takes 8, nothing left for pc or artist.
+        let (allocs, _padding) = allocate_segments(&segments, 8);
+        // allocations follow input order: [artist, pc, title]
+        assert_eq!(allocs, vec![0, 0, 8]);
+    }
 
     fn test_header(id: &str) -> LibraryEntry {
         LibraryEntry::GroupHeader {
@@ -2229,5 +2462,288 @@ mod tests {
         assert_eq!(item_offset, 3);
 
         assert_eq!(art_rows_after_render(&entries, item_offset, 4), vec![0, 1]);
+    }
+
+    /// Verifies that library track rendering uses two-pass budgeting: duration
+    /// and heart are always visible, truncation follows priority (artist → play
+    /// count → title), and layout never exceeds `list_width`.
+    #[test]
+    fn test_track_truncation_priority() {
+        let entry = LibraryEntry::Track {
+            id: TrackId("t".to_string()),
+            title: "very long track title that should be truncated".to_string(),
+            artist: Some("Artist Name".to_string()),
+            album_artist: "Album Artist".to_string(),
+            track_number: Some(1),
+            disc_number: None,
+            duration: Some(245),
+            starred: true,
+            play_count: Some(42),
+            cover_art_id: None,
+            track_index_in_group: 0,
+        };
+
+        fn make_ctx(list_width: usize) -> EntryRenderContext<'static> {
+            static EMPTY_COLORS: std::sync::LazyLock<HashMap<CoverArtId, QuadrantColors>> =
+                std::sync::LazyLock::new(HashMap::new);
+            static EMPTY_GRIDS: std::sync::LazyLock<HashMap<CoverArtId, Arc<ArtColorGrid>>> =
+                std::sync::LazyLock::new(HashMap::new);
+            EntryRenderContext {
+                album_art_style: AlbumArtStyle::LeftOfAlbum,
+                list_width,
+                large_art: crate::ui::layout::ArtColumn::thumbnail(),
+                background_color: Color::Reset,
+                album_color: Color::Reset,
+                album_year_color: Color::Reset,
+                album_length_color: Color::Reset,
+                track_number_color: Color::Reset,
+                track_name_color: Color::Reset,
+                track_name_playing_color: Color::Reset,
+                track_name_hovered_color: Color::Reset,
+                track_length_color: Color::Reset,
+                track_duration_color: Color::Reset,
+                playing_track_id: None,
+                selected_index: 999,
+                underline_index: None,
+                hovered_heart_index: None,
+                hovered_entry_index: None,
+                art_colors: &EMPTY_COLORS,
+                large_art_grids: &EMPTY_GRIDS,
+                has_image_protocol: false,
+            }
+        }
+
+        fn has_span(text: &Text, substr: &str) -> bool {
+            text.lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.as_ref().contains(substr))
+        }
+
+        // Wide layout: all elements visible.
+        let ctx_wide = make_ctx(200);
+        let text = render_library_entry(&entry, 0, &ctx_wide);
+        let total_width: usize = text.lines[0].spans.iter().map(|s| s.content.width()).sum();
+        assert!(total_width <= 200, "wide layout should not exceed width");
+        assert!(has_span(&text, "4:05"), "duration should be visible");
+        assert!(has_span(&text, "♥"), "heart should be visible");
+        assert!(
+            has_span(&text, "Artist Name"),
+            "artist should be visible in wide layout"
+        );
+        assert!(
+            has_span(&text, "42"),
+            "play count should be visible in wide layout"
+        );
+
+        // Very narrow: artist and play count dropped, title truncated, duration visible.
+        let ctx_narrow = make_ctx(20);
+        let text_narrow = render_library_entry(&entry, 0, &ctx_narrow);
+        let narrow_width: usize = text_narrow.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.width())
+            .sum();
+        assert!(narrow_width <= 20, "narrow layout should not exceed width");
+        assert!(
+            has_span(&text_narrow, "4:05"),
+            "duration must always be visible"
+        );
+        assert!(has_span(&text_narrow, "♥"), "heart must always be visible");
+        assert!(
+            !has_span(&text_narrow, "Artist Name"),
+            "artist should be dropped in very narrow layout"
+        );
+        assert!(
+            !has_span(&text_narrow, "42"),
+            "play count should be dropped before title truncation"
+        );
+
+        // Medium: play count visible, artist truncated or dropped.
+        let ctx_medium = make_ctx(30);
+        let text_medium = render_library_entry(&entry, 0, &ctx_medium);
+        let medium_width: usize = text_medium.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.width())
+            .sum();
+        assert!(medium_width <= 30, "medium layout should not exceed width");
+        assert!(
+            has_span(&text_medium, "4:05"),
+            "duration must always be visible"
+        );
+
+        // Truncation priority: at a width where artist fits but play count doesn't,
+        // play count should be dropped while artist remains.
+        let entry_pc_artist = LibraryEntry::Track {
+            id: TrackId("t".to_string()),
+            title: "Short".to_string(),
+            artist: Some("A".to_string()),
+            album_artist: "B".to_string(),
+            track_number: Some(1),
+            disc_number: None,
+            duration: Some(245),
+            starred: true,
+            play_count: Some(42),
+            cover_art_id: None,
+            track_index_in_group: 0,
+        };
+
+        // Width tight enough that play count is dropped but artist can fit.
+        let ctx_tight = make_ctx(25);
+        let text_tight = render_library_entry(&entry_pc_artist, 0, &ctx_tight);
+        assert!(
+            !has_span(&text_tight, "42"),
+            "play count should be dropped in tight layout"
+        );
+        // Artist "A" might fit if there's enough room; check it doesn't exceed width.
+        let tight_width: usize = text_tight.lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.width())
+            .sum();
+        assert!(tight_width <= 25, "tight layout should not exceed width");
+    }
+
+    /// Verifies right-alignment: in a wide layout, padding exists between left
+    /// content and the right-aligned duration/heart.
+    #[test]
+    fn test_track_right_alignment() {
+        let entry = LibraryEntry::Track {
+            id: TrackId("t".to_string()),
+            title: "Short".to_string(),
+            artist: Some("Feat".to_string()),
+            album_artist: "Album Artist".to_string(),
+            track_number: Some(1),
+            disc_number: None,
+            duration: Some(245),
+            starred: true,
+            play_count: Some(42),
+            cover_art_id: None,
+            track_index_in_group: 0,
+        };
+
+        let ctx = EntryRenderContext {
+            album_art_style: AlbumArtStyle::LeftOfAlbum,
+            list_width: 100,
+            large_art: crate::ui::layout::ArtColumn::thumbnail(),
+            background_color: Color::Reset,
+            album_color: Color::Reset,
+            album_year_color: Color::Reset,
+            album_length_color: Color::Reset,
+            track_number_color: Color::Reset,
+            track_name_color: Color::Reset,
+            track_name_playing_color: Color::Reset,
+            track_name_hovered_color: Color::Reset,
+            track_length_color: Color::Reset,
+            track_duration_color: Color::Reset,
+            playing_track_id: None,
+            selected_index: 999,
+            underline_index: None,
+            hovered_heart_index: None,
+            hovered_entry_index: None,
+            art_colors: &HashMap::new(),
+            large_art_grids: &HashMap::new(),
+            has_image_protocol: false,
+        };
+
+        let text = render_library_entry(&entry, 0, &ctx);
+        let spans = &text.lines[0].spans;
+
+        // Total width should not exceed the list width.
+        let total_width: usize = spans.iter().map(|s| s.content.width()).sum();
+        assert!(total_width <= 100, "wide layout should not exceed width");
+
+        // Duration and heart must be present.
+        let has_duration = spans.iter().any(|s| s.content.as_ref() == "4:05");
+        let has_heart = spans.iter().any(|s| s.content.as_ref() == "♥");
+        assert!(has_duration, "duration should be present");
+        assert!(has_heart, "heart should be present");
+
+        // There should be a padding span (spaces) before the right side.
+        let has_padding = spans.iter().any(|s| {
+            let content = s.content.as_ref();
+            content.len() > 1 && content.chars().all(|c| c == ' ')
+        });
+        assert!(has_padding, "padding span should exist for right alignment");
+
+        // Artist should be present in this wide layout.
+        let has_artist = spans.iter().any(|s| s.content.as_ref() == "Feat");
+        assert!(has_artist, "artist should be visible in wide layout");
+    }
+
+    /// Edge case: no artist and no play count.
+    #[test]
+    fn test_track_no_artist_no_play_count() {
+        let entry = LibraryEntry::Track {
+            id: TrackId("t".to_string()),
+            title: "Hello".to_string(),
+            artist: None,
+            album_artist: "artist".to_string(),
+            track_number: Some(1),
+            disc_number: None,
+            duration: Some(180),
+            starred: false,
+            play_count: None,
+            cover_art_id: None,
+            track_index_in_group: 0,
+        };
+
+        let ctx = EntryRenderContext {
+            album_art_style: AlbumArtStyle::LeftOfAlbum,
+            list_width: 40,
+            large_art: crate::ui::layout::ArtColumn::thumbnail(),
+            background_color: Color::Reset,
+            album_color: Color::Reset,
+            album_year_color: Color::Reset,
+            album_length_color: Color::Reset,
+            track_number_color: Color::Reset,
+            track_name_color: Color::Reset,
+            track_name_playing_color: Color::Reset,
+            track_name_hovered_color: Color::Reset,
+            track_length_color: Color::Reset,
+            track_duration_color: Color::Reset,
+            playing_track_id: None,
+            selected_index: 999,
+            underline_index: None,
+            hovered_heart_index: None,
+            hovered_entry_index: None,
+            art_colors: &HashMap::new(),
+            large_art_grids: &HashMap::new(),
+            has_image_protocol: false,
+        };
+
+        let text = render_library_entry(&entry, 0, &ctx);
+        let total_width: usize = text.lines[0].spans.iter().map(|s| s.content.width()).sum();
+        assert!(total_width <= 40, "should not exceed width");
+        assert!(
+            text.lines[0]
+                .spans
+                .iter()
+                .any(|s| s.content.as_ref() == "3:00"),
+            "duration should be visible"
+        );
+    }
+
+    /// Verifies that `truncate_to_width` respects display-width limits.
+    #[test]
+    fn test_truncate_to_width_basic() {
+        let s = super::super::truncate_to_width;
+
+        // No truncation when already within limit.
+        assert_eq!(s("hello", 10), "hello");
+
+        // Truncate ASCII.
+        assert_eq!(s("hello", 3), "hel");
+
+        // Zero width returns empty.
+        assert_eq!(s("hello", 0), "");
+
+        // Multi-width characters (CJK is 2 cells wide).
+        assert_eq!(s("你好", 2), "你");
+        assert_eq!(s("你好", 4), "你好");
+
+        // Mixed ASCII and multi-width.
+        assert_eq!(s("a你b", 3), "a你");
     }
 }

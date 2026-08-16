@@ -212,7 +212,7 @@ pub(crate) fn effective_bg(config: &crate::config::Config) -> Color {
 }
 
 /// Truncates `s` from the right so its display width is at most `max_width`.
-fn truncate_to_width(s: &str, max_width: usize) -> String {
+pub(crate) fn truncate_to_width(s: &str, max_width: usize) -> String {
     if s.width() <= max_width {
         return s.to_string();
     }
