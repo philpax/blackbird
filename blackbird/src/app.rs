@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use blackbird_core::{self as bc, PlaybackToLogicMessage};
+use blackbird_core::{self as bc, PlaybackToLogicMessage, util};
 use blackbird_shared::config::ConfigFile as _;
 use ratatui::layout::{Position, Rect};
 
@@ -637,6 +637,29 @@ impl App {
     pub fn adjust_volume(&mut self, delta: f32) {
         let vol = (self.logic.get_volume() + delta).clamp(0.0, 1.0);
         self.logic.set_volume(vol);
+    }
+
+    /// Returns the terminal title.  When a track is playing it includes the
+    /// artist, title, elapsed position and total duration; otherwise just
+    /// `"blackbird"`.
+    pub fn terminal_title(&self) -> String {
+        let Some(details) = self.logic.get_track_display_details() else {
+            return "blackbird".into();
+        };
+        let paused = self.logic.get_playback_state() == bc::PlaybackState::Paused;
+        let pos = util::seconds_to_hms_string(details.track_position.as_secs() as u32, false);
+        let dur = util::seconds_to_hms_string(details.track_duration.as_secs() as u32, false);
+        let mut title = format!(
+            "blackbird: {} - {} [{}/{}]",
+            details.artist(),
+            details.track_title,
+            pos,
+            dur
+        );
+        if paused {
+            title.push_str(" (paused)");
+        }
+        title
     }
 
     pub fn seek_relative(&mut self, seconds: i64) {

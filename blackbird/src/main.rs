@@ -22,7 +22,9 @@ use crossterm::{
         MouseEventKind,
     },
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
+    },
 };
 use ratatui::layout::{Position, Rect};
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -193,6 +195,9 @@ fn main() -> anyhow::Result<()> {
     app.cover_art_cache
         .set_picker(picker.map(correct_picker_font_size));
 
+    // Set the initial terminal title on startup.
+    execute!(terminal.backend_mut(), SetTitle(app.terminal_title()))?;
+
     let result = run_app(
         &mut terminal,
         &mut app,
@@ -309,6 +314,11 @@ fn run_app(
             app.cover_art_cache.begin_frame();
             app.begin_render();
             terminal.draw(|frame| ui::draw(frame, app))?;
+
+            // Update the terminal window title with the currently playing track.
+            // Placed after draw() and before the next event poll keeps the OSC
+            // escape sequence out of the input stream.
+            execute!(terminal.backend_mut(), SetTitle(app.terminal_title()))?;
         }
         let term_size = terminal.size()?;
         let size = Rect::new(0, 0, term_size.width, term_size.height);
