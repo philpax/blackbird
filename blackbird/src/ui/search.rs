@@ -1,7 +1,5 @@
 use blackbird_client_shared::style as shared_style;
-use blackbird_core::{
-    self as bc, TrackDisplayDetails, blackbird_state::TrackId, util::seconds_to_hms_string,
-};
+use blackbird_core::{self as bc, blackbird_state::TrackId};
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
@@ -12,7 +10,7 @@ use ratatui::{
 
 use crate::keys::Action;
 
-use super::{ToColor, string_to_color};
+use super::{ToColor, TrackIndicator};
 
 pub enum SearchAction {
     ToggleSearch,
@@ -282,12 +280,6 @@ pub fn draw(
     let state_arc = logic.get_state();
     let app_state = state_arc.read().unwrap();
 
-    // Pre-compute style colors to avoid borrow conflicts in closure.
-    let track_name_color = style.library.track_name().to_color();
-    let track_length_color = style.library.track_length().to_color();
-    let track_duration_color = style.library.track_duration().to_color();
-    let track_name_hovered_color = style.library.track_name_hovered().to_color();
-
     let items: Vec<ListItem> = search
         .results
         .iter()
@@ -295,50 +287,19 @@ pub fn draw(
         .map(|(i, track_id)| {
             let is_selected = i == search.selected_index;
             let is_hovered = hovered_index == Some(i);
-            let details = TrackDisplayDetails::from_track_id(track_id, &app_state);
-
-            let line = if let Some(d) = details {
-                let artist = d.artist();
-                let dur_str = seconds_to_hms_string(d.track_duration.as_secs() as u32, false);
-                // Match the library: the selected row's track title gets the
-                // hovered colour (the per-span colours would otherwise override
-                // the row style).
-                let title_color = if is_selected {
-                    track_name_hovered_color
+            let line = super::render_track_line(
+                track_id,
+                &app_state,
+                style,
+                is_selected,
+                if is_selected {
+                    TrackIndicator::Selected
                 } else {
-                    track_name_color
-                };
-                Line::from(vec![
-                    Span::styled(
-                        artist.to_string(),
-                        Style::default().fg(string_to_color(artist)),
-                    ),
-                    Span::raw(" - "),
-                    Span::styled(
-                        d.track_title.to_string(),
-                        Style::default()
-                            .fg(title_color)
-                            .add_modifier(if is_selected {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            }),
-                    ),
-                    Span::styled(
-                        format!(" [{dur_str}]"),
-                        Style::default().fg(if is_selected {
-                            track_name_hovered_color
-                        } else {
-                            track_length_color
-                        }),
-                    ),
-                ])
-            } else {
-                Line::from(Span::styled(
-                    format!("[{track_id}]"),
-                    Style::default().fg(track_duration_color),
-                ))
-            };
+                    TrackIndicator::None
+                },
+                false,
+                chunks[1].width.saturating_sub(1), // -1 for the scrollbar column
+            );
 
             // Underline the hovered row (like the library), except when it is
             // the keyboard-selected row.
