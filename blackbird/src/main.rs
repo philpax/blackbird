@@ -800,7 +800,8 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
             // Resolve a pending similar-songs click (sidebar or panel): a
             // fresh pick from outside the queue, so re-anchor on it.
             if let Some(track_id) = app.similar_songs.handle_mouse_up() {
-                app.logic.request_play_track(&track_id, bc::PlayPick::Anchor);
+                app.logic
+                    .request_play_track(&track_id, bc::PlayPick::Anchor);
             }
             // Resolve a pending queue click (sidebar component); the queue
             // sidebar plays it as in-queue navigation, preserving the order.

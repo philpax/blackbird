@@ -1,5 +1,5 @@
 use blackbird_client_shared::{self, style as shared_style};
-use blackbird_core::{self as bc, blackbird_state::TrackId, PlayPick};
+use blackbird_core::{self as bc, PlayPick, blackbird_state::TrackId};
 use ratatui::{
     Frame,
     layout::Rect,
