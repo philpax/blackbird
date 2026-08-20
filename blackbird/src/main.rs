@@ -797,14 +797,14 @@ fn handle_mouse_event(app: &mut App, mouse: &MouseEvent, size: Rect) {
                 app.config.save();
             }
             ui::library::handle_mouse_up(app);
-            // Resolve a pending similar-songs click (sidebar or panel).
+            // Resolve a pending similar-songs click (sidebar or panel): a
+            // fresh pick from outside the queue, so re-anchor on it.
             if let Some(track_id) = app.similar_songs.handle_mouse_up() {
-                app.logic.request_play_track(&track_id);
+                app.logic.request_play_track(&track_id, bc::PlayPick::Anchor);
             }
-            // Resolve a pending queue click (sidebar component).
-            if let Some(track_id) = app.queue_sidebar.handle_mouse_up(&app.logic) {
-                app.logic.request_play_track(&track_id);
-            }
+            // Resolve a pending queue click (sidebar component); the queue
+            // sidebar plays it as in-queue navigation, preserving the order.
+            app.queue_sidebar.handle_mouse_up(&app.logic);
             if app.focused_panel == FocusedPanel::Search
                 && let Some(sa) = app.search.handle_mouse_up(&app.logic)
             {

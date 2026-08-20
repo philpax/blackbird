@@ -155,7 +155,7 @@ impl SearchState {
         if let Some((_x, _y, index)) = pending
             && let Some(track_id) = self.results.get(index)
         {
-            logic.request_play_track(track_id);
+            logic.request_play_track(track_id, bc::PlayPick::Anchor);
             return Some(SearchAction::ToggleSearch);
         }
         None
@@ -182,7 +182,7 @@ impl SearchState {
             Action::Back => return Some(SearchAction::ToggleSearch),
             Action::Select => {
                 if let Some(track_id) = self.results.get(self.selected_index) {
-                    logic.request_play_track(track_id);
+                    logic.request_play_track(track_id, bc::PlayPick::Anchor);
                     return Some(SearchAction::ToggleSearch);
                 }
             }

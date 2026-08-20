@@ -1,5 +1,5 @@
 use blackbird_client_shared::{self, style as shared_style};
-use blackbird_core::{self as bc, blackbird_state::TrackId};
+use blackbird_core::{self as bc, blackbird_state::TrackId, PlayPick};
 use ratatui::{
     Frame,
     layout::Rect,
@@ -38,6 +38,30 @@ impl QueueState {
 
 /// Number of tracks to show before and after the current track in the queue window.
 pub(crate) const QUEUE_RADIUS: usize = 50;
+
+/// Resolve a visible index in the current queue window to its track id.
+///
+/// The window is `[before... | current | after...]` as returned by
+/// [`bc::Logic::get_queue_window`]. Returns `None` if `index` is out of range
+/// or the queue is empty.
+pub fn queue_window_track_at(logic: &bc::Logic, index: usize) -> Option<TrackId> {
+    let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
+    let total = before.len() + usize::from(current.is_some()) + after.len();
+    if index >= total {
+        return None;
+    }
+    let all: Vec<TrackId> = before.into_iter().chain(current).chain(after).collect();
+    all.into_iter().nth(index)
+}
+
+/// Navigate within the existing queue to the track at `index`, preserving the
+/// current ordering so next/previous still reach the surrounding tracks.
+/// No-op if `index` is out of range.
+pub fn play_queue_index(logic: &bc::Logic, index: usize) {
+    if let Some(track_id) = queue_window_track_at(logic, index) {
+        logic.request_play_track(&track_id, PlayPick::Navigate);
+    }
+}
 
 pub fn draw(
     frame: &mut Frame,
@@ -187,8 +211,7 @@ pub fn handle_mouse_click(
     let clicked_index = scroll_offset + row_in_list;
 
     if clicked_index < total_items {
-        let all_tracks: Vec<TrackId> = before.into_iter().chain(current).chain(after).collect();
-        logic.request_play_track(&all_tracks[clicked_index]);
+        play_queue_index(logic, clicked_index);
         queue_state.selected_index = None;
     }
 }
@@ -213,18 +236,8 @@ fn play_selected(queue_state: &mut QueueState, logic: &bc::Logic) {
     let Some(selected) = queue_state.selected_index else {
         return;
     };
-
-    let (before, current, after) = logic.get_queue_window(QUEUE_RADIUS);
-    if current.is_none() {
-        return;
-    }
-
-    let all_tracks: Vec<TrackId> = before.into_iter().chain(current).chain(after).collect();
-
-    if let Some(track_id) = all_tracks.get(selected) {
-        logic.request_play_track(track_id);
-        queue_state.selected_index = None;
-    }
+    play_queue_index(logic, selected);
+    queue_state.selected_index = None;
 }
 
 /// Move selection by `delta` (for scroll events).

@@ -1083,14 +1083,58 @@ impl Logic {
         self.tokio_thread.should_shutdown()
     }
 }
+
+/// How a [`Logic::request_play_track`] pick relates to the current queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlayPick {
+    /// A fresh pick from outside the queue (library, search, similar songs):
+    /// re-anchor the queue on this track and rotate the shuffle seed.
+    Anchor,
+    /// Navigation within the existing queue (queue sidebar / queue panel):
+    /// preserve `ordered_tracks` and move to the track's current position.
+    Navigate,
+}
+
 impl Logic {
-    pub fn request_play_track(&self, track_id: &TrackId) {
-        // Public API used by UI: keep current playing until new track is ready.
+    /// Play `track_id`, optionally re-anchoring the queue on it.
+    ///
+    /// `pick` selects how the request relates to the current queue:
+    ///
+    /// - [`PlayPick::Anchor`] — a fresh pick from outside the queue (library,
+    ///   search, similar songs). The queue is recomputed around this track and,
+    ///   for shuffle modes, the seed is rotated so the surrounding order is
+    ///   reshuffled rather than continuing the previous permutation.
+    ///
+    /// - [`PlayPick::Navigate`] — navigation within the existing queue (queue
+    ///   sidebar component / full queue panel). Preserves `ordered_tracks` and
+    ///   only moves `current_index` to the track's current position, so
+    ///   next/previous still reach the tracks around it. Picking another track
+    ///   in shuffle mode this way does not strand the previously-playing track.
+    ///   Falls back to [`PlayPick::Anchor`] if the track is not in the current
+    ///   ordering (e.g. the queue changed between press and release).
+    pub fn request_play_track(&self, track_id: &TrackId, pick: PlayPick) {
+        if pick == PlayPick::Navigate {
+            let pos = self
+                .read_state()
+                .queue
+                .ordered_tracks
+                .iter()
+                .position(|t| t == track_id);
+            if let Some(pos) = pos {
+                self.write_state().queue.current_index = pos;
+                self.schedule_play_track(track_id);
+                return;
+            }
+            // Not in the current ordering; fall through to a fresh anchor.
+        }
+
+        // Anchor: keep current playing until the new track is ready, then
+        // re-anchor the queue on it.
         self.schedule_play_track(track_id);
 
-        // A purposeful pick from the UI rotates the shuffle seed for the
-        // current mode, so the rest of the queue around the new anchor is
-        // reshuffled rather than continuing the previous permutation.
+        // A purposeful fresh pick rotates the shuffle seed for the current
+        // mode, so the rest of the queue around the new anchor is reshuffled
+        // rather than continuing the previous permutation.
         let mode = self.read_state().playback_mode;
         self.write_state().queue.bump_shuffle_seed_for_mode(mode);
 

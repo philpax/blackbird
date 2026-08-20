@@ -292,7 +292,7 @@ impl SimilarSongsState {
             Action::PageDown => move_selection_by(self, layout::PAGE_SCROLL_SIZE as i32),
             Action::Select => {
                 if let Some(track_id) = self.results.get(self.selected_index) {
-                    logic.request_play_track(track_id);
+                    logic.request_play_track(track_id, bc::PlayPick::Anchor);
                 }
             }
             Action::PlayPause => logic.toggle_current(),
@@ -413,28 +413,20 @@ impl QueueSidebarState {
     }
 
     /// Resolves a pending click by looking up the track at the clicked window
-    /// index. Returns the track id to play, or `None` when the click was
-    /// cancelled by a drag or the index no longer maps to a track (the queue
-    /// can change between press and release).
-    pub fn handle_mouse_up(&mut self, logic: &bc::Logic) -> Option<TrackId> {
+    /// index and navigating to it within the existing queue. The click is
+    /// cancelled by a drag, or silently dropped if the index no longer maps to
+    /// a track (the queue can change between press and release).
+    pub fn handle_mouse_up(&mut self, logic: &bc::Logic) {
         let pending = self.click_pending.take();
         let outcome = self.viewport.end_drag();
         if outcome != super::scroll::EndDragOutcome::Idle {
-            return None;
+            return;
         }
-        let (_x, _y, index) = pending?;
-        let (before, current, after) = logic.get_queue_window(crate::ui::queue::QUEUE_RADIUS);
-        let total_items = before.len() + usize::from(current.is_some()) + after.len();
-        if index >= total_items {
-            return None;
-        }
-        if index < before.len() {
-            Some(before[index].clone())
-        } else if index == before.len() {
-            current
-        } else {
-            Some(after[index - before.len() - 1].clone())
-        }
+        let (_x, _y, index) = match pending {
+            Some(p) => p,
+            None => return,
+        };
+        super::queue::play_queue_index(logic, index);
     }
 
     /// Handle a mouse-wheel scroll.
@@ -496,14 +488,7 @@ impl QueueSidebarState {
                 self.ensure_selection_visible();
             }
             Action::Select => {
-                let all_tracks: Vec<&TrackId> = before
-                    .iter()
-                    .chain(current.iter())
-                    .chain(after.iter())
-                    .collect();
-                if let Some(track_id) = all_tracks.get(self.selected_index) {
-                    logic.request_play_track(track_id);
-                }
+                super::queue::play_queue_index(logic, self.selected_index);
             }
             Action::PlayPause => logic.toggle_current(),
             Action::Next => logic.next(),

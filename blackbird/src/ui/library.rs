@@ -1884,7 +1884,7 @@ pub fn handle_key(app: &mut App, action: Action) {
             if let Some(LibraryEntry::Track { id, .. }) =
                 app.library.get_library_entry(&app.logic, selected)
             {
-                app.logic.request_play_track(&id);
+                app.logic.request_play_track(&id, bc::PlayPick::Anchor);
             }
         }
         _ => {}
@@ -2105,7 +2105,7 @@ pub fn handle_mouse_up(app: &mut App) {
             app.library.get_library_entry(&app.logic, index)
     {
         app.library.selected_index = index;
-        app.logic.request_play_track(&id);
+        app.logic.request_play_track(&id, bc::PlayPick::Anchor);
     }
 
     match app.library.viewport.end_drag() {
