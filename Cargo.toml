@@ -67,6 +67,39 @@ ratatui-image = { git = "https://github.com/philpax/ratatui-image", branch = "de
 [profile.dev.package.image]
 opt-level = 3
 
+# Loading the library (decoding the cache, then collating, grouping, and
+# indexing ~20k tracks) is dominated by these crates, and takes over a second
+# at startup when they're unoptimized.
+[profile.dev.package.icu_collator]
+opt-level = 3
+
+[profile.dev.package.icu_collections]
+opt-level = 3
+
+[profile.dev.package.icu_normalizer]
+opt-level = 3
+
+[profile.dev.package.icu_properties]
+opt-level = 3
+
+[profile.dev.package.icu_provider]
+opt-level = 3
+
+[profile.dev.package.zerovec]
+opt-level = 3
+
+[profile.dev.package.zerotrie]
+opt-level = 3
+
+[profile.dev.package.potential_utf]
+opt-level = 3
+
+[profile.dev.package.serde_json]
+opt-level = 3
+
+[profile.dev.package.smol_str]
+opt-level = 3
+
 [profile.release.package.image]
 opt-level = 3
 
