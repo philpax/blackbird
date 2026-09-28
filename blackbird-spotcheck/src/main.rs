@@ -79,6 +79,12 @@ async fn main() -> anyhow::Result<()> {
     })
     .await?;
     tracing::info!("Found {} albums in Subsonic", fetched.albums.len());
+    if !fetched.orphaned_track_ids.is_empty() {
+        tracing::warn!(
+            "Skipping {} tracks without a known album",
+            fetched.orphaned_track_ids.len()
+        );
+    }
 
     // Create a more efficient lookup structure
     // 1. Exact matches for fast lookup

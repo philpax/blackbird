@@ -14,7 +14,7 @@ impl std::fmt::Display for AlbumId {
 }
 
 /// An album, as `blackbird` cares about it
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Album {
     /// The album ID
     pub id: AlbumId,

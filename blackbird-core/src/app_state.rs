@@ -147,6 +147,10 @@ pub struct AppState {
     /// library load/reload. Empty for servers that don't support the
     /// `getOpenSubsonicExtensions` endpoint.
     pub open_subsonic_extensions: Vec<OpenSubsonicExtension>,
+
+    /// Why the server couldn't be reached, if it couldn't. The library may
+    /// still be shown from the cache, but tracks can't be played.
+    pub server_unreachable: Option<String>,
 }
 
 impl Default for AppState {
@@ -166,6 +170,7 @@ impl Default for AppState {
             scrobble_state: ScrobbleState::default(),
             error: None,
             open_subsonic_extensions: Vec::new(),
+            server_unreachable: None,
         }
     }
 }
@@ -186,6 +191,15 @@ pub struct ScrobbleState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AppStateError {
     InitialFetchFailed {
+        error: String,
+    },
+    /// The library was shown from the cache, but re-fetching it from the
+    /// server failed, so it may be out of date.
+    LibraryRefreshFailed {
+        error: String,
+    },
+    /// A track couldn't be played because the server is unreachable.
+    PlaybackUnavailable {
         error: String,
     },
     CoverArtFetchFailed {
@@ -240,6 +254,8 @@ impl AppStateError {
     pub fn display_name(&self) -> &'static str {
         match self {
             AppStateError::InitialFetchFailed { .. } => "Failed to complete initial data fetch",
+            AppStateError::LibraryRefreshFailed { .. } => "Failed to refresh library",
+            AppStateError::PlaybackUnavailable { .. } => "Failed to play track",
             AppStateError::CoverArtFetchFailed { .. } => "Failed to fetch cover art",
             AppStateError::LoadTrackFailed { .. } => "Failed to load track",
             AppStateError::DecodeTrackFailed { .. } => "Failed to decode track",
@@ -258,6 +274,12 @@ impl AppStateError {
     pub fn display_message(&self, state: &AppState) -> String {
         match self {
             AppStateError::InitialFetchFailed { error } => error.clone(),
+            AppStateError::LibraryRefreshFailed { error } => {
+                format!("Showing the cached library, which may be out of date: {error}")
+            }
+            AppStateError::PlaybackUnavailable { error } => {
+                format!("The server is unreachable: {error}")
+            }
             AppStateError::CoverArtFetchFailed {
                 cover_art_id,
                 error,

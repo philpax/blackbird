@@ -382,7 +382,8 @@ impl App {
         // Process library population.
         while let Ok(()) = self.library_populated_rx.try_recv() {
             changed = true;
-            self.library.mark_dirty();
+            self.library.rebuild_keeping_selection(&self.logic);
+            self.search.refresh(&self.logic);
             if self.library.needs_scroll_to_playing
                 && let Some(track_id) = self.logic.get_playing_track_id()
             {

@@ -5,7 +5,7 @@ use crate::{AlbumId, bs};
 
 /// A track ID
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct TrackId(pub String);
+pub struct TrackId(pub SmolStr);
 impl std::fmt::Display for TrackId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
@@ -13,7 +13,7 @@ impl std::fmt::Display for TrackId {
 }
 
 /// A track, as `blackbird` cares about it
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     /// The track ID
     pub id: TrackId,
@@ -43,7 +43,7 @@ pub struct Track {
 impl From<bs::Child> for Track {
     fn from(child: bs::Child) -> Self {
         Track {
-            id: TrackId(child.id),
+            id: TrackId(child.id.into()),
             title: child.title.into(),
             artist: child
                 .artist

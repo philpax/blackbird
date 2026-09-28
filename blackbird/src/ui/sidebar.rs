@@ -174,7 +174,7 @@ impl SimilarSongsState {
             .similar
             .iter()
             .filter(|child| !child.is_dir)
-            .map(|child| TrackId(child.id.clone()))
+            .map(|child| TrackId(child.id.as_str().into()))
             .collect();
         self.clamp_selection();
         self.viewport.cancel_inertia();
@@ -1139,6 +1139,7 @@ mod tests {
             sort_order: bc::SortOrder::default(),
             playback_mode: bc::PlaybackMode::default(),
             last_playback: None,
+            library_cache_dir: None,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             similar_songs_loaded_tx,
@@ -1261,7 +1262,7 @@ mod tests {
 
     fn data(track_id: &str, children: Vec<bc::bs::Child>) -> bc::SimilarSongsData {
         bc::SimilarSongsData {
-            track_id: TrackId(track_id.to_string()),
+            track_id: TrackId(track_id.into()),
             similar: children,
         }
     }
@@ -1270,7 +1271,7 @@ mod tests {
     #[test]
     fn similar_songs_state_track_keying() {
         let mut state = SimilarSongsState::new();
-        state.on_fetch_started(&TrackId("current".to_string()));
+        state.on_fetch_started(&TrackId("current".into()));
         state.on_loaded(&data("current", vec![child("a", false)]));
         assert_eq!(
             state.track_id.as_ref().map(|t| t.0.as_str()),
@@ -1288,7 +1289,7 @@ mod tests {
     #[test]
     fn similar_songs_state_filters_directories() {
         let mut state = SimilarSongsState::new();
-        state.on_fetch_started(&TrackId("t".to_string()));
+        state.on_fetch_started(&TrackId("t".into()));
         state.on_loaded(&data("t", vec![child("song", false), child("dir", true)]));
         assert_eq!(state.results.len(), 1);
         assert_eq!(state.results[0].0, "song");

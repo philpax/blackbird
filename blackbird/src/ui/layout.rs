@@ -790,6 +790,7 @@ pub(crate) mod tests {
             sort_order: bc::SortOrder::default(),
             playback_mode: bc::PlaybackMode::default(),
             last_playback: None,
+            library_cache_dir: None,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             similar_songs_loaded_tx,
@@ -928,7 +929,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.focused_panel = FocusedPanel::Settings;
         app.inline_lyrics_mode = true;
-        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".to_string()));
+        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".into()));
         let layout = layout_for(&app, Rect::new(0, 0, 120, 24));
         let inline = layout
             .inline_lyrics
@@ -991,7 +992,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.focused_panel = FocusedPanel::Settings;
         app.inline_lyrics_mode = true;
-        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".to_string()));
+        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".into()));
         assert_visible_components(
             &mut app,
             &[
@@ -1080,7 +1081,7 @@ pub(crate) mod tests {
         app.focused_panel = FocusedPanel::Library;
         app.config.layout.base.sidebar.enabled = true;
         app.inline_lyrics_mode = true;
-        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".to_string()));
+        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".into()));
         assert_visible_components(
             &mut app,
             &[
@@ -1149,7 +1150,7 @@ pub(crate) mod tests {
         let mut app = test_app();
         app.focused_panel = FocusedPanel::Settings;
         app.inline_lyrics_mode = true;
-        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".to_string()));
+        inject_synced_lyrics(&mut app, &bc::blackbird_state::TrackId("t1".into()));
         let size = Rect::new(0, 0, 120, 24);
         let layout = layout_for(&app, size);
         let settings_rect = layout.settings.expect("settings rect");

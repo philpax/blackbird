@@ -172,6 +172,31 @@ impl PlaybackThread {
         }
     }
 
+    /// Creates a stand-in playback thread that discards everything sent to
+    /// it, so that tests don't open the audio device. Has the same signature
+    /// as [`Self::new`].
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        _volume: f32,
+        _apply_replaygain: bool,
+        _replaygain_preamp_db: f32,
+        _playback_to_logic_tx: tokio::sync::broadcast::Sender<PlaybackToLogicMessage>,
+    ) -> Self {
+        let (logic_to_playback_tx, logic_to_playback_rx) =
+            std::sync::mpsc::channel::<LogicToPlaybackMessage>();
+        let playback_thread_handle = std::thread::spawn(move || {
+            while let Ok(message) = logic_to_playback_rx.recv() {
+                if matches!(message, LogicToPlaybackMessage::Shutdown) {
+                    break;
+                }
+            }
+        });
+        Self {
+            logic_to_playback_tx: Some(PlaybackThreadSendHandle(logic_to_playback_tx)),
+            _playback_thread_handle: Some(playback_thread_handle),
+        }
+    }
+
     pub fn send(&self, message: LogicToPlaybackMessage) {
         if let Some(tx) = &self.logic_to_playback_tx {
             tx.send(message);

@@ -518,6 +518,7 @@ mod tests {
             sort_order: bc::SortOrder::default(),
             playback_mode: bc::PlaybackMode::default(),
             last_playback: None,
+            library_cache_dir: None,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             similar_songs_loaded_tx,

@@ -64,6 +64,26 @@ impl SearchState {
         self.viewport.cancel_inertia();
     }
 
+    /// Re-runs the search after the library changed, keeping the selected
+    /// result selected if it is still among the results.
+    pub fn refresh(&mut self, logic: &bc::Logic) {
+        if self.query.len() < 3 {
+            return;
+        }
+        let selected = self.results.get(self.selected_index).cloned();
+        self.results = {
+            let state = logic.get_state();
+            let mut state = state.write().unwrap();
+            state.library.search(&self.query)
+        };
+        self.selected_index = selected
+            .and_then(|selected| self.results.iter().position(|id| *id == selected))
+            .unwrap_or(self.selected_index)
+            .min(self.results.len().saturating_sub(1));
+        self.click_pending = None;
+        self.ensure_selection_visible();
+    }
+
     /// Adjust the viewport so `selected_index` is in the visible window.
     fn ensure_selection_visible(&mut self) {
         let visible_height = self.viewport.visible_height;

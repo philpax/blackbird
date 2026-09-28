@@ -72,6 +72,7 @@ fn main() -> anyhow::Result<()> {
         sort_order: config.last_playback.sort_order,
         playback_mode: config.last_playback.playback_mode,
         last_playback: config.last_playback.as_track_and_position(),
+        library_cache_dir: Some(blackbird_shared::paths::cache_dir().join("library")),
         cover_art_loaded_tx,
         lyrics_loaded_tx,
         similar_songs_loaded_tx,

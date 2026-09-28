@@ -559,6 +559,16 @@ pub enum LibraryEntry {
 }
 
 impl LibraryEntry {
+    /// Returns the track ID of the entry, if it is a track.
+    pub fn track_id(&self) -> Option<&TrackId> {
+        match self {
+            LibraryEntry::Track { id, .. } => Some(id),
+            LibraryEntry::GroupHeader { .. }
+            | LibraryEntry::GroupSpacer { .. }
+            | LibraryEntry::AlbumGap => None,
+        }
+    }
+
     pub fn height(&self) -> usize {
         match self {
             LibraryEntry::GroupHeader { .. } => 2,
@@ -706,12 +716,9 @@ impl LibraryState {
 
     /// Returns the track ID of the currently selected entry, if it is a track.
     pub fn selected_track_id(&self) -> Option<&TrackId> {
-        match self.cached_flat_library.get(self.selected_index)? {
-            LibraryEntry::Track { id, .. } => Some(id),
-            LibraryEntry::GroupHeader { .. }
-            | LibraryEntry::GroupSpacer { .. }
-            | LibraryEntry::AlbumGap => None,
-        }
+        self.cached_flat_library
+            .get(self.selected_index)?
+            .track_id()
     }
 
     /// Returns the cached flat library, rebuilding if needed.
@@ -941,6 +948,76 @@ impl LibraryState {
             }
             self.snap_cursor_to_viewport_center();
         }
+    }
+
+    /// Rebuilds the flat library after the library itself was replaced (e.g.
+    /// by a refresh from the server), keeping the selected track on the same
+    /// screen row if it still exists. Selection is otherwise by index, which
+    /// would silently land on a different track once entries move.
+    pub fn rebuild_keeping_selection(&mut self, logic: &bc::Logic) {
+        /// How many tracks around the selection to try as anchors if the
+        /// selected track itself was removed.
+        const MAX_ANCHORS: usize = 64;
+
+        // The selected track, then its neighbours, nearest first (alternating
+        // after and before), so that removing the selected track moves the
+        // selection to the nearest survivor. If the selection isn't on a
+        // track, this starts from the tracks around it.
+        let anchors: Vec<TrackId> = {
+            let entries = &self.cached_flat_library;
+            let selected = self.selected_index.min(entries.len());
+            let mut anchors = Vec::with_capacity(MAX_ANCHORS);
+            // The neighbours after the selection start past the selected
+            // track, which is tried first; a selected non-track entry is
+            // skipped over by `filter_map` anyway.
+            let after_start = match entries.get(selected).and_then(LibraryEntry::track_id) {
+                Some(track_id) => {
+                    anchors.push(track_id.clone());
+                    selected + 1
+                }
+                None => selected,
+            };
+            let mut after = entries[after_start.min(entries.len())..]
+                .iter()
+                .filter_map(LibraryEntry::track_id);
+            let mut before = entries[..selected]
+                .iter()
+                .rev()
+                .filter_map(LibraryEntry::track_id);
+            while anchors.len() < MAX_ANCHORS {
+                let (next_after, next_before) = (after.next(), before.next());
+                if next_after.is_none() && next_before.is_none() {
+                    break;
+                }
+                anchors.extend(next_after.into_iter().chain(next_before).cloned());
+            }
+            anchors
+        };
+        let row = self.line_of_entry(self.selected_index) as isize - self.viewport.line as isize;
+
+        self.rebuild_flat_library(logic);
+        self.flat_library_dirty = false;
+
+        let new_index = anchors.iter().find_map(|anchor| {
+            self.cached_flat_library
+                .iter()
+                .position(|entry| entry.track_id() == Some(anchor))
+        });
+        let Some(index) = new_index else {
+            self.selected_index = self
+                .selected_index
+                .min(self.cached_flat_library.len().saturating_sub(1));
+            return;
+        };
+        self.selected_index = index;
+        let total_lines = total_entry_lines(&self.cached_flat_library);
+        let line = (self.line_of_entry(index) as isize - row).max(0) as usize;
+        self.viewport.line = line.min(self.viewport.max_line(total_lines));
+    }
+
+    /// Returns the line at which the entry at `index` starts.
+    fn line_of_entry(&self, index: usize) -> usize {
+        total_entry_lines(&self.cached_flat_library[..index.min(self.cached_flat_library.len())])
     }
 
     /// Ensures the current selection is on a track, not a group header.
@@ -2201,8 +2278,150 @@ pub fn scroll_to_y(app: &mut App, total_lines: usize, library_area: Rect, y: u16
 mod tests {
     use ratatui::{Terminal, backend::TestBackend, layout::Position};
     use ratatui_image::picker::Picker;
+    use smol_str::format_smolstr;
 
     use super::*;
+    use blackbird_core::blackbird_state::{Album, AlbumId, RawLibrary, Track};
+
+    use crate::ui::layout::tests::test_app;
+
+    // -----------------------------------------------------------------------
+    // Keeping the selection across library replacements
+    // -----------------------------------------------------------------------
+
+    /// Replaces the app's library with the given albums, each a name and its
+    /// track IDs.
+    fn set_library(app: &crate::app::App, albums: &[(&str, &[&str])]) {
+        let mut raw = RawLibrary::default();
+        for (name, track_ids) in albums {
+            let album_id = AlbumId((*name).into());
+            raw.albums.insert(
+                album_id.clone(),
+                Album {
+                    id: album_id.clone(),
+                    name: (*name).into(),
+                    artist: "Artist".into(),
+                    artist_id: None,
+                    cover_art_id: None,
+                    track_count: track_ids.len() as u32,
+                    duration: 0,
+                    year: None,
+                    _genre: None,
+                    starred: false,
+                    created: "2024-01-01T00:00:00Z".into(),
+                },
+            );
+            for (i, id) in track_ids.iter().enumerate() {
+                raw.tracks.insert(
+                    TrackId((*id).into()),
+                    Track {
+                        id: TrackId((*id).into()),
+                        title: format!("Track {id}").into(),
+                        artist: None,
+                        track: Some(i as u32 + 1),
+                        year: None,
+                        _genre: None,
+                        duration: Some(180),
+                        disc_number: None,
+                        album_id: Some(album_id.clone()),
+                        starred: false,
+                        play_count: None,
+                        replay_gain: None,
+                    },
+                );
+            }
+        }
+        app.logic.get_state().write().unwrap().library.replace(
+            raw.build(),
+            bc::SortOrder::Alphabetical,
+            None,
+        );
+    }
+
+    fn select_track(app: &mut crate::app::App, track_id: &str) {
+        app.library.rebuild_keeping_selection(&app.logic);
+        app.library.selected_index = app
+            .library
+            .flat_library()
+            .iter()
+            .position(|entry| entry.track_id() == Some(&TrackId(track_id.into())))
+            .unwrap();
+    }
+
+    fn selected(app: &crate::app::App) -> Option<String> {
+        app.library.selected_track_id().map(|id| id.0.to_string())
+    }
+
+    #[test]
+    fn replacement_keeps_the_selected_track_on_the_same_row() {
+        let mut app = test_app();
+        app.library.viewport.visible_height = 10;
+        let b_ids: Vec<String> = (1..=40).map(|i| format!("b{i}")).collect();
+        let b: Vec<&str> = b_ids.iter().map(String::as_str).collect();
+        set_library(&app, &[("B", &b)]);
+        select_track(&mut app, "b20");
+        // Scroll so that the selection is a few rows down the screen.
+        app.library.viewport.line = app.library.line_of_entry(app.library.selected_index) - 3;
+        let row = app.library.line_of_entry(app.library.selected_index) as isize
+            - app.library.viewport.line as isize;
+
+        // An album is added before the selection.
+        set_library(&app, &[("A", &["a1", "a2"]), ("B", &b)]);
+        app.library.rebuild_keeping_selection(&app.logic);
+
+        assert_eq!(selected(&app).as_deref(), Some("b20"));
+        let new_row = app.library.line_of_entry(app.library.selected_index) as isize
+            - app.library.viewport.line as isize;
+        assert_eq!(new_row, row);
+    }
+
+    #[test]
+    fn replacement_moves_the_selection_to_the_nearest_surviving_track() {
+        let mut app = test_app();
+        set_library(&app, &[("A", &["a1", "a2", "a3"]), ("B", &["b1"])]);
+        select_track(&mut app, "a2");
+
+        set_library(&app, &[("A", &["a1", "a3"]), ("B", &["b1"])]);
+        app.library.rebuild_keeping_selection(&app.logic);
+        assert_eq!(selected(&app).as_deref(), Some("a3"));
+
+        // With nothing after it, the track before it is next nearest.
+        select_track(&mut app, "b1");
+        set_library(&app, &[("A", &["a1", "a3"])]);
+        app.library.rebuild_keeping_selection(&app.logic);
+        assert_eq!(selected(&app).as_deref(), Some("a3"));
+    }
+
+    #[test]
+    fn replacement_with_an_empty_library_clamps_the_selection() {
+        let mut app = test_app();
+        set_library(&app, &[("A", &["a1", "a2"])]);
+        select_track(&mut app, "a2");
+
+        set_library(&app, &[]);
+        app.library.rebuild_keeping_selection(&app.logic);
+        assert_eq!(app.library.selected_index, 0);
+        assert_eq!(selected(&app), None);
+    }
+
+    #[test]
+    fn search_refresh_keeps_the_selected_result() {
+        let mut app = test_app();
+        set_library(&app, &[("A", &["a1", "a2", "a3"])]);
+        app.search.query = "track".into();
+        app.search.update(&app.logic);
+        app.search.selected_index = 2;
+        assert_eq!(app.search.results[2], TrackId("a3".into()));
+
+        // A track before the selected result is removed.
+        set_library(&app, &[("A", &["a2", "a3"])]);
+        app.search.refresh(&app.logic);
+        assert_eq!(
+            app.search.results,
+            [TrackId("a2".into()), TrackId("a3".into())]
+        );
+        assert_eq!(app.search.selected_index, 1);
+    }
 
     // -----------------------------------------------------------------------
     // Segment solver unit tests
@@ -2337,7 +2556,7 @@ mod tests {
 
     fn test_track(id: &str, index: usize) -> LibraryEntry {
         LibraryEntry::Track {
-            id: TrackId(format!("{id}-{index}")),
+            id: TrackId(format_smolstr!("{id}-{index}")),
             title: "track".to_string(),
             artist: None,
             album_artist: "artist".to_string(),
@@ -2464,7 +2683,7 @@ mod tests {
     #[test]
     fn test_track_truncation_priority() {
         let entry = LibraryEntry::Track {
-            id: TrackId("t".to_string()),
+            id: TrackId("t".into()),
             title: "very long track title that should be truncated".to_string(),
             artist: Some("Artist Name".to_string()),
             album_artist: "Album Artist".to_string(),
@@ -2570,7 +2789,7 @@ mod tests {
         // Truncation priority: at a width where artist fits but play count doesn't,
         // play count should be dropped while artist remains.
         let entry_pc_artist = LibraryEntry::Track {
-            id: TrackId("t".to_string()),
+            id: TrackId("t".into()),
             title: "Short".to_string(),
             artist: Some("A".to_string()),
             album_artist: "B".to_string(),
@@ -2604,7 +2823,7 @@ mod tests {
     #[test]
     fn test_track_right_alignment() {
         let entry = LibraryEntry::Track {
-            id: TrackId("t".to_string()),
+            id: TrackId("t".into()),
             title: "Short".to_string(),
             artist: Some("Feat".to_string()),
             album_artist: "Album Artist".to_string(),
@@ -2670,7 +2889,7 @@ mod tests {
     #[test]
     fn test_track_no_artist_no_play_count() {
         let entry = LibraryEntry::Track {
-            id: TrackId("t".to_string()),
+            id: TrackId("t".into()),
             title: "Hello".to_string(),
             artist: None,
             album_artist: "artist".to_string(),

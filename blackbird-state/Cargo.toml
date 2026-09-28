@@ -5,7 +5,12 @@ edition = "2024"
 
 [dependencies]
 blackbird-subsonic = { path = "../blackbird-subsonic" }
+futures = { workspace = true }
+rustc-hash = { workspace = true }
 icu_collator = { workspace = true }
 
 serde = { workspace = true }
 smol_str = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

@@ -6,7 +6,11 @@ pub use blackbird_subsonic as bs;
 use smol_str::SmolStr;
 
 use std::{
-    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    path::PathBuf,
+    sync::{
+        Arc, RwLock, RwLockReadGuard, RwLockWriteGuard,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -32,6 +36,12 @@ pub use app_state::{
 mod library;
 pub use library::Library;
 
+mod initial_fetch;
+use initial_fetch::{Generation, InitialFetch};
+
+mod library_cache;
+use library_cache::LibraryCache;
+
 pub struct Logic {
     // N.B. `playback_thread` must be declared before `tokio_thread` so that it
     // drops first. `TokioThread` drop blocks while spawned tasks (which hold
@@ -51,6 +61,16 @@ pub struct Logic {
     /// `PlaybackThread` once the server connection succeeds. `update()` moves
     /// it into `self.playback_thread` on the main thread.
     playback_thread_slot: Arc<std::sync::Mutex<Option<PlaybackThread>>>,
+    /// Set by the async `initial_fetch` task whenever it replaces the library.
+    /// A restored track may start loading before the queue exists, and a
+    /// refreshed library may change the queue, so `update()` re-establishes
+    /// what depends on the queue on the main thread.
+    library_replaced: Arc<AtomicBool>,
+    /// Bumped whenever the server settings change, so that a stale
+    /// `initial_fetch` run stops touching the state.
+    library_generation: Arc<AtomicU64>,
+    /// Where the library cache is kept, if caching is enabled.
+    library_cache_dir: Option<PathBuf>,
 
     logic_request_tx: LogicRequestHandle,
     logic_request_rx: std::sync::mpsc::Receiver<LogicRequestMessage>,
@@ -213,6 +233,9 @@ pub struct LogicArgs {
     pub sort_order: SortOrder,
     pub playback_mode: PlaybackMode,
     pub last_playback: Option<(TrackId, Duration)>,
+    /// The directory to keep the library cache in, or `None` to always fetch
+    /// the library from the server before showing it.
+    pub library_cache_dir: Option<PathBuf>,
     pub cover_art_loaded_tx: std::sync::mpsc::Sender<CoverArt>,
     pub lyrics_loaded_tx: std::sync::mpsc::Sender<LyricsData>,
     pub similar_songs_loaded_tx: std::sync::mpsc::Sender<SimilarSongsData>,
@@ -233,6 +256,7 @@ impl Logic {
             sort_order,
             playback_mode,
             last_playback,
+            library_cache_dir,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             similar_songs_loaded_tx,
@@ -248,6 +272,9 @@ impl Logic {
             playback_mode,
             ..AppState::default()
         }));
+        let library_cache = library_cache_dir
+            .as_deref()
+            .map(|dir| LibraryCache::new(dir, &base_url, &username));
         let client = Arc::new(bs::Client::new(
             base_url,
             username,
@@ -278,6 +305,9 @@ impl Logic {
             playback_event_tx,
             playback_to_logic_rx,
             playback_thread_slot: Arc::new(std::sync::Mutex::new(None)),
+            library_replaced: Arc::new(AtomicBool::new(false)),
+            library_generation: Arc::new(AtomicU64::new(0)),
+            library_cache_dir,
 
             logic_request_tx: LogicRequestHandle(logic_request_tx),
             logic_request_rx,
@@ -295,7 +325,7 @@ impl Logic {
             client,
             transcode,
         };
-        logic.initial_fetch(last_playback);
+        logic.initial_fetch(library_cache, last_playback);
         logic
     }
 
@@ -310,6 +340,18 @@ impl Logic {
             && let Some(pt) = self.playback_thread_slot.lock().unwrap().take()
         {
             self.playback_thread = Some(pt);
+            changed = true;
+            self.load_pending_target();
+        }
+
+        if self.library_replaced.swap(false, Ordering::SeqCst) {
+            // The next track may differ in the new queue, so drop any
+            // gapless-queued track, as when the playback mode changes.
+            self.write_state().queue.next_track_appended = None;
+            self.send_to_playback(LogicToPlaybackMessage::ClearQueuedNextTracks);
+            if self.read_state().queue.current_target.is_some() {
+                self.ensure_cache_window();
+            }
             changed = true;
         }
 
@@ -611,9 +653,9 @@ impl Logic {
             let _ = track_updated_tx.send(());
 
             let operation = if starred {
-                client.star([track_id.0.clone()], [], []).await
+                client.star([track_id.0.to_string()], [], []).await
             } else {
-                client.unstar([track_id.0.clone()], [], []).await
+                client.unstar([track_id.0.to_string()], [], []).await
             };
 
             let Err(e) = operation else {
@@ -717,7 +759,7 @@ impl Logic {
         let lyrics_loaded_tx = self.lyrics_loaded_tx.clone();
 
         self.tokio_thread.spawn(async move {
-            match client.get_lyrics_by_song_id(&track_id.0).await {
+            match client.get_lyrics_by_song_id(track_id.0.as_str()).await {
                 Ok(mut lyrics_list) => {
                     // Get the first synced lyrics if available, otherwise first lyrics
                     let lyrics = {
@@ -790,11 +832,13 @@ impl Logic {
             let result = match endpoint {
                 SimilarEndpoint::SonicSimilarTracks => {
                     client
-                        .get_sonic_similar_tracks(&track_id.0, Some(count))
+                        .get_sonic_similar_tracks(track_id.0.as_str(), Some(count))
                         .await
                 }
                 SimilarEndpoint::SimilarSongs2 => {
-                    client.get_similar_songs2(&track_id.0, Some(count)).await
+                    client
+                        .get_similar_songs2(track_id.0.as_str(), Some(count))
+                        .await
                 }
             };
 
@@ -858,19 +902,6 @@ pub fn similar_endpoint_for(extensions: &[bs::OpenSubsonicExtension]) -> Similar
 /// place and surfaces `AppStateError::OpenSubsonicExtensionsFetchFailed`
 /// without propagating. This deliberately does not use `?` so a server that
 /// errors on `getOpenSubsonicExtensions` cannot fail a surrounding load.
-async fn fetch_open_subsonic_extensions(client: &bs::Client, state: &Arc<RwLock<AppState>>) {
-    match client.get_open_subsonic_extensions().await {
-        Ok(extensions) => {
-            state.write().unwrap().open_subsonic_extensions = extensions;
-        }
-        Err(e) => {
-            tracing::warn!("Failed to fetch OpenSubsonic extensions: {}", e);
-            state.write().unwrap().error = Some(AppStateError::OpenSubsonicExtensionsFetchFailed {
-                error: e.to_string(),
-            });
-        }
-    }
-}
 impl Logic {
     pub fn get_playing_track_and_position(&self) -> Option<TrackAndPosition> {
         self.read_state().current_track_and_position.clone()
@@ -1046,7 +1077,7 @@ impl Logic {
     pub fn get_next_track_cover_art_id(&self) -> Option<CoverArtId> {
         let st = self.read_state();
         let next_track_id = self.compute_next_track_id()?;
-        let &next_group_idx = st.library.track_to_group_index.get(&next_track_id)?;
+        let next_group_idx = st.library.group_index_of(&next_track_id)?;
         st.library.groups[next_group_idx].cover_art_id.clone()
     }
 
@@ -1062,7 +1093,7 @@ impl Logic {
         let Some(next_track_id) = self.compute_next_track_id() else {
             return vec![];
         };
-        let Some(&next_group_idx) = st.library.track_to_group_index.get(&next_track_id) else {
+        let Some(next_group_idx) = st.library.group_index_of(&next_track_id) else {
             return vec![];
         };
 
@@ -1251,7 +1282,7 @@ impl Logic {
 
                 async move {
                     if let Err(e) = client
-                        .scrobble(&track_id.0, Some(timestamp), Some(true))
+                        .scrobble(track_id.0.as_str(), Some(timestamp), Some(true))
                         .await
                     {
                         tracing::error!("Failed to scrobble track {}: {}", track_id.0, e);
@@ -1260,14 +1291,11 @@ impl Logic {
                     }
 
                     // Reload track from API to update play count
-                    match client.get_song(&track_id.0).await {
+                    match client.get_song(track_id.0.as_str()).await {
                         Ok(child) => {
                             let updated_track: Track = child.into();
                             if let Ok(mut state) = state.write() {
-                                state
-                                    .library
-                                    .track_map
-                                    .insert(track_id.clone(), updated_track);
+                                state.library.update_track(updated_track);
                                 tracing::debug!(
                                     "Updated track {} from API after scrobble",
                                     track_id.0
@@ -1301,6 +1329,18 @@ impl Logic {
         // Shut down the playback thread (closes the audio device).
         self.playback_thread = None;
 
+        // Stop any run of the initial fetch for the old server from touching
+        // the state from here on.
+        self.library_generation.fetch_add(1, Ordering::SeqCst);
+        // A playback thread for the old server may have been deposited but not
+        // yet picked up.
+        self.playback_thread_slot.lock().unwrap().take();
+
+        let library_cache = self
+            .library_cache_dir
+            .as_deref()
+            .map(|dir| LibraryCache::new(dir, &base_url, &username));
+
         // Create a new client with the new credentials.
         self.client = Arc::new(bs::Client::new(
             base_url,
@@ -1319,126 +1359,31 @@ impl Logic {
             st.started_loading_track = None;
             st.scrobble_state = Default::default();
             st.error = None;
+            st.server_unreachable = None;
         }
 
         // Re-fetch the library without restoring a track.
-        self.initial_fetch(None);
+        self.initial_fetch(library_cache, None);
     }
 
-    fn initial_fetch(&self, restore_track: Option<(TrackId, Duration)>) {
-        let client = self.client.clone();
-        let state = self.state.clone();
-        let library_populated_tx = self.library_populated_tx.clone();
-        let playback_event_tx = self.playback_event_tx.clone();
-        let playback_thread_slot = self.playback_thread_slot.clone();
-        let transcode = self.transcode;
-        self.tokio_thread.spawn(async move {
-            let future = {
-                let client = client.clone();
-                let state = state.clone();
-                let library_populated_tx = library_populated_tx.clone();
-                async move {
-                    client.ping().await?;
-
-                    // Fetch the server's OpenSubsonic extensions. Deliberately
-                    // NOT using `?`: a server that errors on
-                    // `getOpenSubsonicExtensions` must not turn into a failed
-                    // initial fetch — the extensions are an enhancement, and
-                    // the error is surfaced non-fatally instead.
-                    fetch_open_subsonic_extensions(&client, &state).await;
-
-                    let result = blackbird_state::fetch_all(&client, |batch_count, total_count| {
-                        tracing::info!("Fetched {batch_count} tracks, total {total_count} tracks");
-                    })
-                    .await?;
-
-                    let req_id;
-                    let volume;
-                    let apply_replaygain;
-                    let replaygain_preamp_db;
-                    {
-                        let mut st = state.write().unwrap();
-                        let sort_order = st.sort_order;
-                        st.library.populate(
-                            result.track_ids,
-                            result.track_map,
-                            result.groups,
-                            result.albums,
-                            sort_order,
-                        );
-
-                        // If restoring a track, recompute the queue with it as current
-                        // so that the queue index is correct.
-                        let restore_id = restore_track
-                            .as_ref()
-                            .filter(|(tid, _)| st.library.track_map.contains_key(tid))
-                            .map(|(tid, _)| tid);
-                        queue::recompute_queue_on_state(&mut st, restore_id);
-
-                        if let Some(tid) = restore_id {
-                            st.queue.current_target = Some(tid.clone());
-                            st.queue.request_counter = st.queue.request_counter.wrapping_add(1);
-                        }
-
-                        req_id = st.queue.request_counter;
-                        volume = st.volume;
-                        apply_replaygain = st.apply_replaygain;
-                        replaygain_preamp_db = st.replaygain_preamp_db;
-                    }
-
-                    // Server connection succeeded — start the playback thread
-                    // (opens the audio device). The main thread picks it up in
-                    // `update()`.
-                    let pt = PlaybackThread::new(
-                        volume,
-                        apply_replaygain,
-                        replaygain_preamp_db,
-                        playback_event_tx,
-                    );
-                    let playback_tx = pt.send_handle();
-                    *playback_thread_slot.lock().unwrap() = Some(pt);
-
-                    // Signal that library population is complete.
-                    let _ = library_populated_tx.send(());
-
-                    // Restore the last track in a paused state.
-                    if let Some((track_id, position)) = restore_track.filter(|(tid, _)| {
-                        state.read().unwrap().library.track_map.contains_key(tid)
-                    }) {
-                        tracing::info!(
-                            "Restoring last track {} at {:.1}s",
-                            track_id.0,
-                            position.as_secs_f64()
-                        );
-                        let response = client
-                            .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
-                            .await;
-                        queue::handle_load_response(
-                            response,
-                            state,
-                            playback_tx,
-                            track_id,
-                            req_id,
-                            queue::TrackLoadBehavior::Paused(position),
-                        );
-                    }
-
-                    bs::ClientResult::Ok(())
-                }
-            };
-
-            if let Err(error) = future.await {
-                state.write().unwrap().error = Some(AppStateError::InitialFetchFailed {
-                    error: error.to_string(),
-                });
-                // Notify clients so they leave the loading state and render
-                // the connection error instead of staying on a frozen loading
-                // screen. Nothing else sets `changed` during loading (no
-                // playback, no library events), so without this signal the
-                // error wouldn't appear until the user interacted.
-                let _ = library_populated_tx.send(());
-            }
-        })
+    fn initial_fetch(
+        &self,
+        cache: Option<LibraryCache>,
+        restore_track: Option<(TrackId, Duration)>,
+    ) {
+        let run = InitialFetch {
+            client: self.client.clone(),
+            state: self.state.clone(),
+            cache,
+            generation: Generation::current(&self.library_generation),
+            transcode: self.transcode,
+            library_populated_tx: self.library_populated_tx.clone(),
+            playback_event_tx: self.playback_event_tx.clone(),
+            new_playback_thread: PlaybackThread::new,
+            playback_thread_slot: self.playback_thread_slot.clone(),
+            library_replaced: self.library_replaced.clone(),
+        };
+        self.tokio_thread.spawn(run.run(restore_track));
     }
 
     /// Sends a message to the playback thread, if it is running.
@@ -1460,6 +1405,97 @@ impl Logic {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds a `Logic` whose initial fetch is stale from the start, so that
+    /// it never touches the state, against a server that accepts connections
+    /// but never responds (so that requests stay in flight). The listener
+    /// must be kept alive for the duration of the test.
+    fn quiet_logic() -> (Logic, std::net::TcpListener) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let (cover_art_loaded_tx, _) = std::sync::mpsc::channel::<CoverArt>();
+        let (lyrics_loaded_tx, _) = std::sync::mpsc::channel::<LyricsData>();
+        let (similar_songs_loaded_tx, _) = std::sync::mpsc::channel::<SimilarSongsData>();
+        let (library_populated_tx, _) = std::sync::mpsc::channel::<()>();
+        let (track_updated_tx, _) = std::sync::mpsc::channel::<()>();
+        let logic = Logic::new(LogicArgs {
+            base_url: format!("http://{}", listener.local_addr().unwrap()),
+            username: String::new(),
+            password: String::new(),
+            transcode: false,
+            volume: 0.0,
+            apply_replaygain: false,
+            replaygain_preamp_db: 0.0,
+            sort_order: SortOrder::default(),
+            playback_mode: PlaybackMode::default(),
+            last_playback: None,
+            library_cache_dir: None,
+            cover_art_loaded_tx,
+            lyrics_loaded_tx,
+            similar_songs_loaded_tx,
+            library_populated_tx,
+            track_updated_tx,
+        });
+        logic.library_generation.fetch_add(1, Ordering::SeqCst);
+        // Anything the initial fetch did before it went stale is undone; it
+        // can't write again once the generation has moved on.
+        *logic.write_state() = AppState::default();
+        (logic, listener)
+    }
+
+    #[test]
+    fn play_requested_before_the_playback_thread_is_loaded_once_it_arrives() {
+        let (mut logic, _listener) = quiet_logic();
+        let track_id = TrackId("t".into());
+        {
+            let mut st = logic.write_state();
+            st.started_loading_track = Some(std::time::Instant::now());
+            st.queue.current_target = Some(track_id.clone());
+            st.queue.current_target_request_id = Some(5);
+        }
+        let (playback_event_tx, _) = tokio::sync::broadcast::channel(16);
+        *logic.playback_thread_slot.lock().unwrap() =
+            Some(PlaybackThread::for_test(0.0, false, 0.0, playback_event_tx));
+
+        logic.update();
+
+        assert!(logic.playback_thread.is_some());
+        assert_eq!(
+            logic
+                .read_state()
+                .queue
+                .pending_audio_requests
+                .get(&track_id),
+            Some(&5)
+        );
+    }
+
+    #[test]
+    fn play_is_refused_while_the_server_is_unreachable() {
+        let (logic, _listener) = quiet_logic();
+        logic.write_state().server_unreachable = Some("connection refused".into());
+
+        logic.schedule_play_track(&TrackId("t".into()));
+
+        let st = logic.read_state();
+        assert!(matches!(
+            st.error,
+            Some(AppStateError::PlaybackUnavailable { .. })
+        ));
+        assert!(st.started_loading_track.is_none());
+        assert!(st.queue.current_target.is_none());
+    }
+
+    #[test]
+    fn library_replacement_drops_the_gapless_next_track() {
+        let (mut logic, _listener) = quiet_logic();
+        logic.write_state().queue.next_track_appended = Some(TrackId("next".into()));
+        logic.library_replaced.store(true, Ordering::SeqCst);
+
+        logic.update();
+
+        assert!(logic.read_state().queue.next_track_appended.is_none());
+        assert!(!logic.library_replaced.load(Ordering::SeqCst));
+    }
 
     fn extension(name: &str) -> bs::OpenSubsonicExtension {
         bs::OpenSubsonicExtension {
@@ -1637,6 +1673,7 @@ mod tests {
             sort_order: SortOrder::default(),
             playback_mode: PlaybackMode::default(),
             last_playback: None,
+            library_cache_dir: None,
             cover_art_loaded_tx,
             lyrics_loaded_tx,
             similar_songs_loaded_tx,

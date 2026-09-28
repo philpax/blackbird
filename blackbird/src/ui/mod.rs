@@ -1012,7 +1012,7 @@ mod render_tests {
         let state = AppState::default();
 
         let style = blackbird_client_shared::style::Style::default();
-        let track_id = TrackId("nonexistent".to_string());
+        let track_id = TrackId("nonexistent".into());
 
         // Fallback line when details unavailable.
         let line = render_track_line(

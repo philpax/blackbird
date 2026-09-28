@@ -579,7 +579,7 @@ mod tests {
         let buf = SamplesBuffer::new(nz!(1), sr, samples);
         let boxed: BoxedSource = Box::new(buf);
         LoadedTrack {
-            track_id: TrackId(track_id.to_string()),
+            track_id: TrackId(track_id.into()),
             inner: boxed.track_position(),
         }
     }

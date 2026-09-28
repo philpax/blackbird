@@ -211,6 +211,16 @@ impl Logic {
     }
 
     pub(super) fn schedule_play_track(&self, track_id: &TrackId) {
+        // The library can be browsed from the cache without a server, but
+        // nothing can be played; say so rather than loading forever.
+        {
+            let mut st = self.write_state();
+            if let Some(error) = st.server_unreachable.clone() {
+                st.error = Some(AppStateError::PlaybackUnavailable { error });
+                return;
+            }
+        }
+
         self.write_state().last_requested_track_for_ui_scroll = Some(track_id.clone());
 
         // Set target and show loading indicator.
@@ -257,6 +267,32 @@ impl Logic {
         self.ensure_cache_window();
     }
 
+    /// Loads the current target if it was requested before the playback
+    /// thread existed, which `load_track_internal` can't do. Called once the
+    /// playback thread is available.
+    pub(super) fn load_pending_target(&self) {
+        let pending = {
+            let st = self.read_state();
+            match (
+                st.started_loading_track,
+                &st.queue.current_target,
+                st.queue.current_target_request_id,
+            ) {
+                (Some(_), Some(track_id), Some(request_id))
+                    if !st.queue.pending_audio_requests.contains_key(track_id)
+                        && !st.queue.audio_cache.contains_key(track_id) =>
+                {
+                    Some((track_id.clone(), request_id))
+                }
+                _ => None,
+            }
+        };
+        if let Some((track_id, request_id)) = pending {
+            tracing::debug!("Loading {track_id}, requested before playback was available");
+            self.load_track_internal(track_id, request_id, TrackLoadBehavior::Play);
+        }
+    }
+
     pub(super) fn load_track_internal(
         &self,
         track_id: TrackId,
@@ -285,7 +321,11 @@ impl Logic {
                 request_id
             );
             let response = client
-                .stream(&track_id.0, transcode.then(|| "mp3".to_string()), None)
+                .stream(
+                    track_id.0.as_str(),
+                    transcode.then(|| "mp3".to_string()),
+                    None,
+                )
                 .await;
             handle_load_response(response, state, playback_tx, track_id, request_id, behavior);
         });
@@ -339,6 +379,13 @@ impl Logic {
     pub(super) fn ensure_cache_window(&self) {
         let window = {
             let st = self.read_state();
+            // An empty queue means that the library hasn't loaded yet (e.g. a
+            // restored track started before the library walk finished). Keep
+            // the cache as-is rather than evicting that track's audio; the
+            // window is established once the library is populated.
+            if st.queue.ordered_tracks.is_empty() {
+                return;
+            }
             compute_window_from_queue(&st.queue, 2)
         };
 
@@ -481,6 +528,8 @@ pub(crate) fn handle_load_response(
         }
         Err(e) => {
             let mut st = state.write().unwrap();
+            // Forget the request, so that the track can be requested again.
+            st.queue.pending_audio_requests.remove(&track_id);
             let is_current = st
                 .queue
                 .current_target_request_id
@@ -493,16 +542,45 @@ pub(crate) fn handle_load_response(
                     e.to_string()
                 );
                 st.error = Some(AppStateError::LoadTrackFailed {
-                    track_id,
+                    track_id: track_id.clone(),
                     error: e.to_string(),
                 });
-                st.queue.pending_skip_after_error = true;
+                match behavior {
+                    // A paused load is a restore of the last session's track.
+                    // Skipping ahead would start playing a track the user never
+                    // picked, so leave nothing loaded instead.
+                    TrackLoadBehavior::Paused(_) => {
+                        release_target(&mut st, &track_id, request_id);
+                    }
+                    TrackLoadBehavior::Play | TrackLoadBehavior::CacheOnly => {
+                        st.queue.pending_skip_after_error = true;
+                    }
+                }
             } else {
                 tracing::debug!(
                     "Load error for stale/non-current {track_id} (req_id={request_id}): {e}"
                 );
             }
         }
+    }
+}
+
+/// Releases the queue target `track_id`, claimed by `request_id`, unless
+/// something else has claimed the target since.
+pub(crate) fn release_target(st: &mut AppState, track_id: &TrackId, request_id: u64) {
+    if st.queue.current_target_request_id != Some(request_id)
+        || st.queue.current_target.as_ref() != Some(track_id)
+    {
+        return;
+    }
+    st.queue.current_target = None;
+    st.queue.current_target_request_id = None;
+
+    // If the queue was built around the track while it wasn't in the library
+    // (e.g. a stale cache), the track was prepended to the queue; rebuild the
+    // queue without it.
+    if st.library.has_loaded_all_tracks && st.library.group_index_of(track_id).is_none() {
+        recompute_queue_on_state(st, None);
     }
 }
 
@@ -559,7 +637,7 @@ fn compute_full_ordering(
             let Some(tid) = current_track else {
                 return vec![];
             };
-            let Some(&group_idx) = library.track_to_group_index.get(tid) else {
+            let Some(group_idx) = library.group_index_of(tid) else {
                 return vec![];
             };
             match library.groups.get(group_idx) {
@@ -615,10 +693,7 @@ fn compute_full_ordering(
 
 /// Returns the group index for the track at `idx` in `ordered_tracks`, if available.
 fn group_at(st: &AppState, idx: usize) -> Option<usize> {
-    st.library
-        .track_to_group_index
-        .get(&st.queue.ordered_tracks[idx])
-        .copied()
+    st.library.group_index_of(&st.queue.ordered_tracks[idx])
 }
 
 /// Scans from `from` in `direction` (+1 forward, -1 backward), wrapping around
@@ -723,14 +798,15 @@ mod tests {
     use std::sync::Arc;
 
     use blackbird_state::{AlbumId, Group, Track, TrackId};
-    use smol_str::SmolStr;
+    use rustc_hash::FxHashMap;
+    use smol_str::{SmolStr, format_smolstr};
 
     use super::*;
     use crate::{Library, SortOrder};
 
     fn make_track(idx: usize) -> Track {
         Track {
-            id: TrackId(format!("t{idx}")),
+            id: TrackId(format_smolstr!("t{idx}")),
             title: SmolStr::new(format!("Track {idx}")),
             artist: None,
             track: None,
@@ -762,7 +838,7 @@ mod tests {
     /// Creates a minimal library with `n` tracks spread across `group_count` groups.
     fn make_library(n: usize, group_count: usize) -> Library {
         let mut library = Library::default();
-        let mut track_map = HashMap::new();
+        let mut track_map = FxHashMap::default();
         let mut groups = Vec::new();
 
         let tracks_per_group = n / group_count.max(1);
@@ -786,10 +862,9 @@ mod tests {
         }
 
         library.populate(
-            vec![],
             track_map,
             groups,
-            HashMap::new(),
+            FxHashMap::default(),
             SortOrder::Alphabetical,
         );
         library
@@ -838,7 +913,7 @@ mod tests {
         let ordering =
             compute_full_ordering(&library, PlaybackMode::GroupRepeat, &queue, Some(&current));
         // Should contain only tracks from the same group.
-        let group_idx = library.track_to_group_index[&current];
+        let group_idx = library.group_index_of(&current).unwrap();
         assert_eq!(ordering, library.groups[group_idx].tracks);
     }
 
@@ -907,7 +982,7 @@ mod tests {
         let ordering =
             compute_full_ordering(&library, PlaybackMode::LikedGroupShuffle, &queue, None);
         for tid in &ordering {
-            let group_idx = library.track_to_group_index[tid];
+            let group_idx = library.group_index_of(tid).unwrap();
             assert!(library.groups[group_idx].starred);
         }
     }
@@ -1008,18 +1083,18 @@ mod tests {
     fn compute_window_from_queue_basic() {
         let mut queue = make_queue();
         queue.ordered_tracks = vec![
-            TrackId("a".to_string()),
-            TrackId("b".to_string()),
-            TrackId("c".to_string()),
-            TrackId("d".to_string()),
-            TrackId("e".to_string()),
+            TrackId("a".into()),
+            TrackId("b".into()),
+            TrackId("c".into()),
+            TrackId("d".into()),
+            TrackId("e".into()),
         ];
         queue.current_index = 2; // "c"
 
         let window = compute_window_from_queue(&queue, 2);
         // Should contain c (center), a, b (prev), d, e (next).
         assert_eq!(window.len(), 5);
-        assert_eq!(window[0], TrackId("c".to_string())); // center
+        assert_eq!(window[0], TrackId("c".into())); // center
     }
 
     #[test]
@@ -1156,5 +1231,103 @@ mod tests {
         // with the live preamp before clipping protection kicks in.
         assert!(approx_eq(info.factor, 10f32.powf(0.3)));
         assert!(approx_eq(info.inv_peak, 1.0 / 0.9));
+    }
+
+    /// Sets up a state where `track_id` is the current target of `request_id`.
+    fn state_targeting(track_id: &TrackId, request_id: u64) -> Arc<RwLock<AppState>> {
+        let mut st = AppState::default();
+        st.queue.current_target = Some(track_id.clone());
+        st.queue.current_target_request_id = Some(request_id);
+        st.queue
+            .pending_audio_requests
+            .insert(track_id.clone(), request_id);
+        Arc::new(RwLock::new(st))
+    }
+
+    fn load_error() -> ClientResult<Vec<u8>> {
+        Err(blackbird_subsonic::ClientError::SubsonicError {
+            code: 70,
+            message: Some("not found".into()),
+        })
+    }
+
+    #[test]
+    fn failed_paused_restore_clears_target_without_skipping() {
+        let track_id = TrackId("gone".into());
+        let state = state_targeting(&track_id, 7);
+        let (playback_tx, playback_rx) = PlaybackThreadSendHandle::for_test();
+
+        handle_load_response(
+            load_error(),
+            state.clone(),
+            playback_tx,
+            track_id,
+            7,
+            TrackLoadBehavior::Paused(Duration::from_secs(5)),
+        );
+
+        let st = state.read().unwrap();
+        assert!(!st.queue.pending_skip_after_error);
+        assert_eq!(st.queue.current_target, None);
+        assert_eq!(st.queue.current_target_request_id, None);
+        // The failed request is forgotten, so the track can be requested again.
+        assert!(st.queue.pending_audio_requests.is_empty());
+        assert!(matches!(
+            st.error,
+            Some(AppStateError::LoadTrackFailed { .. })
+        ));
+        assert!(playback_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn failed_play_schedules_skip() {
+        let track_id = TrackId("broken".into());
+        let state = state_targeting(&track_id, 3);
+        let (playback_tx, _playback_rx) = PlaybackThreadSendHandle::for_test();
+
+        handle_load_response(
+            load_error(),
+            state.clone(),
+            playback_tx,
+            track_id.clone(),
+            3,
+            TrackLoadBehavior::Play,
+        );
+
+        let st = state.read().unwrap();
+        assert!(st.queue.pending_skip_after_error);
+        assert_eq!(st.queue.current_target, Some(track_id));
+    }
+
+    #[test]
+    fn successful_paused_restore_loads_paused_at_position() {
+        let track_id = TrackId("restored".into());
+        let state = state_targeting(&track_id, 1);
+        let (playback_tx, playback_rx) = PlaybackThreadSendHandle::for_test();
+
+        handle_load_response(
+            Ok(vec![1, 2, 3]),
+            state.clone(),
+            playback_tx,
+            track_id.clone(),
+            1,
+            TrackLoadBehavior::Paused(Duration::from_secs(5)),
+        );
+
+        match playback_rx.try_recv() {
+            Ok(LogicToPlaybackMessage::LoadTrack { track, mode }) => {
+                assert_eq!(track.track_id, track_id);
+                assert!(matches!(mode, TrackLoadMode::Paused(p) if p == Duration::from_secs(5)));
+            }
+            other => panic!("expected a paused load, got {other:?}"),
+        }
+        assert!(
+            state
+                .read()
+                .unwrap()
+                .queue
+                .audio_cache
+                .contains_key(&track_id)
+        );
     }
 }

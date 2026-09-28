@@ -9,7 +9,9 @@ audio = ["dep:rodio"]
 
 [dependencies]
 rand = { workspace = true }
+rustc-hash = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 

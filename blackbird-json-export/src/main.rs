@@ -35,6 +35,12 @@ async fn main() -> anyhow::Result<()> {
         println!("Fetched {batch_count} tracks, total {total_count} tracks");
     })
     .await?;
+    if !fetched.orphaned_track_ids.is_empty() {
+        eprintln!(
+            "Skipping {} tracks without a known album",
+            fetched.orphaned_track_ids.len()
+        );
+    }
 
     let mut output = Output::new();
     for group in fetched.groups {
