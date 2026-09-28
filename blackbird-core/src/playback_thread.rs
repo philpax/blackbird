@@ -55,8 +55,25 @@ pub struct PlaybackThread {
 #[derive(Clone)]
 pub struct PlaybackThreadSendHandle(std::sync::mpsc::Sender<LogicToPlaybackMessage>);
 impl PlaybackThreadSendHandle {
+    /// Sends a message to the playback thread.
+    ///
+    /// The thread shuts down when its `PlaybackThread` is dropped (e.g. when
+    /// the server settings change), but tasks that were already running may
+    /// still hold a handle to it; their messages no longer have anywhere to
+    /// go, so they are dropped.
     pub fn send(&self, message: LogicToPlaybackMessage) {
-        self.0.send(message).unwrap();
+        if self.0.send(message).is_err() {
+            // The message isn't logged, as it may contain a whole track's audio.
+            tracing::debug!("Dropping a message for a playback thread that has shut down");
+        }
+    }
+
+    /// Creates a handle backed by a plain channel, so that tests can observe
+    /// what would be sent to the playback thread without starting it.
+    #[cfg(test)]
+    pub(crate) fn for_test() -> (Self, std::sync::mpsc::Receiver<LogicToPlaybackMessage>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        (Self(tx), rx)
     }
 }
 
@@ -344,5 +361,18 @@ impl PlaybackThread {
         unimplemented!(
             "Audio playback is disabled - blackbird-core was built without the 'audio' feature"
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sending_to_a_shut_down_playback_thread_drops_the_message() {
+        let (handle, receiver) = PlaybackThreadSendHandle::for_test();
+        // The playback thread owns the receiver, and drops it when it exits.
+        drop(receiver);
+        handle.send(LogicToPlaybackMessage::ClearQueuedNextTracks);
     }
 }
