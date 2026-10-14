@@ -449,3 +449,72 @@ pub fn draw_playback_mode_dropdown(frame: &mut Frame, app: &App, size: Rect) {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::layout::tests::test_app;
+    use blackbird_core::blackbird_state::TrackId;
+
+    /// Computes the transport area the same way the draw path does, then
+    /// clicks the cell at `group_offset` within the right-aligned button
+    /// group (`TRANSPORT_BTN_PREV`/`PLAY`/`STOP`/`NEXT`).
+    fn click_transport(app: &mut App, size: Rect, group_offset: u16) {
+        let main = crate::ui::layout::split_main(size);
+        let np = crate::ui::layout::split_now_playing(main.now_playing);
+        let x = np.transport.x + np.transport.width
+            - crate::ui::layout::TRANSPORT_BUTTON_GROUP_WIDTH
+            + group_offset;
+        let y = main.now_playing.y;
+        super::handle_mouse_click(app, main.now_playing, x, y);
+    }
+
+    /// Builds a queue and clears the stalled-fetch "server unreachable" flag
+    /// so the transport actions can schedule tracks for real.
+    fn queue_with(app: &mut App, tracks: &[&str], index: usize) {
+        let state = app.logic.get_state();
+        let mut st = state.write().unwrap();
+        st.server_unreachable = None;
+        st.queue.ordered_tracks = tracks.iter().map(|t| TrackId((*t).into())).collect();
+        st.queue.current_index = index;
+    }
+
+    #[test]
+    fn next_button_advances_to_following_track() {
+        let mut app = test_app();
+        queue_with(&mut app, &["t1", "t2"], 0);
+        let size = Rect::new(0, 0, 120, 24);
+        click_transport(&mut app, size, crate::ui::layout::TRANSPORT_BTN_NEXT);
+        let state = app.logic.get_state();
+        let st = state.read().unwrap();
+        assert_eq!(st.queue.current_index, 1);
+        assert_eq!(
+            st.queue.current_target.as_ref(),
+            Some(&TrackId("t2".into()))
+        );
+    }
+
+    #[test]
+    fn previous_button_goes_back_a_track() {
+        let mut app = test_app();
+        queue_with(&mut app, &["t1", "t2"], 1);
+        let size = Rect::new(0, 0, 120, 24);
+        click_transport(&mut app, size, crate::ui::layout::TRANSPORT_BTN_PREV);
+        let state = app.logic.get_state();
+        let st = state.read().unwrap();
+        assert_eq!(st.queue.current_index, 0);
+        assert_eq!(
+            st.queue.current_target.as_ref(),
+            Some(&TrackId("t1".into()))
+        );
+    }
+
+    #[test]
+    fn play_and_stop_buttons_dispatch_without_panicking() {
+        let mut app = test_app();
+        queue_with(&mut app, &["t1", "t2"], 0);
+        let size = Rect::new(0, 0, 120, 24);
+        click_transport(&mut app, size, crate::ui::layout::TRANSPORT_BTN_PLAY);
+        click_transport(&mut app, size, crate::ui::layout::TRANSPORT_BTN_STOP);
+    }
+}
