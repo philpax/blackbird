@@ -512,6 +512,9 @@ impl Logic {
 }
 impl Logic {
     pub fn play_current(&self) {
+        if self.resume_after_stop() {
+            return;
+        }
         self.send_to_playback(LogicToPlaybackMessage::Play);
     }
 
@@ -520,7 +523,25 @@ impl Logic {
     }
 
     pub fn toggle_current(&self) {
+        if self.resume_after_stop() {
+            return;
+        }
         self.send_to_playback(LogicToPlaybackMessage::TogglePlayback);
+    }
+
+    /// `stop()` drops the loaded track on the playback thread, so play or
+    /// toggle while stopped has nothing to unpause and stays silent.
+    /// Reschedule the queued current track so it plays again. Returns `true`
+    /// when a resume was scheduled.
+    fn resume_after_stop(&self) -> bool {
+        if self.get_playback_state() != PlaybackState::Stopped {
+            return false;
+        }
+        let Some(target) = self.read_state().queue.current_target.clone() else {
+            return false;
+        };
+        self.schedule_play_track(&target);
+        true
     }
 
     pub fn stop_current(&self) {
@@ -1483,6 +1504,96 @@ mod tests {
         ));
         assert!(st.started_loading_track.is_none());
         assert!(st.queue.current_target.is_none());
+    }
+
+    #[test]
+    fn toggle_after_stop_reschedules_the_current_target() {
+        let (mut logic, _listener) = quiet_logic();
+        let track_id = TrackId("t".into());
+        {
+            let mut st = logic.write_state();
+            st.server_unreachable = None;
+            st.playback_state = PlaybackState::Stopped;
+            st.current_track_and_position = Some(TrackAndPosition {
+                track_id: track_id.clone(),
+                position: Duration::ZERO,
+            });
+            st.queue.current_target = Some(track_id.clone());
+            st.queue.request_counter = 5;
+            st.queue.current_target_request_id = Some(5);
+        }
+        let (playback_event_tx, _) = tokio::sync::broadcast::channel(16);
+        *logic.playback_thread_slot.lock().unwrap() =
+            Some(PlaybackThread::for_test(0.0, false, 0.0, playback_event_tx));
+        logic.update();
+
+        logic.toggle_current();
+
+        let st = logic.read_state();
+        // A fresh load of the stopped track was scheduled rather than
+        // toggling the (empty) playback pipeline.
+        assert_eq!(st.queue.current_target.as_ref(), Some(&track_id));
+        assert_eq!(st.queue.current_target_request_id, Some(6));
+        assert!(st.started_loading_track.is_some());
+        assert_eq!(st.queue.pending_audio_requests.get(&track_id), Some(&6));
+    }
+
+    #[test]
+    fn play_after_stop_reschedules_the_current_target() {
+        let (mut logic, _listener) = quiet_logic();
+        let track_id = TrackId("t".into());
+        {
+            let mut st = logic.write_state();
+            st.server_unreachable = None;
+            st.playback_state = PlaybackState::Stopped;
+            st.current_track_and_position = Some(TrackAndPosition {
+                track_id: track_id.clone(),
+                position: Duration::ZERO,
+            });
+            st.queue.current_target = Some(track_id.clone());
+            st.queue.request_counter = 3;
+            st.queue.current_target_request_id = Some(3);
+        }
+        let (playback_event_tx, _) = tokio::sync::broadcast::channel(16);
+        *logic.playback_thread_slot.lock().unwrap() =
+            Some(PlaybackThread::for_test(0.0, false, 0.0, playback_event_tx));
+        logic.update();
+
+        logic.play_current();
+
+        let st = logic.read_state();
+        assert_eq!(st.queue.current_target_request_id, Some(4));
+        assert_eq!(st.queue.pending_audio_requests.get(&track_id), Some(&4));
+    }
+
+    #[test]
+    fn toggle_while_paused_does_not_reschedule() {
+        let (mut logic, _listener) = quiet_logic();
+        let track_id = TrackId("t".into());
+        {
+            let mut st = logic.write_state();
+            st.server_unreachable = None;
+            st.playback_state = PlaybackState::Paused;
+            st.current_track_and_position = Some(TrackAndPosition {
+                track_id: track_id.clone(),
+                position: Duration::from_secs(12),
+            });
+            st.queue.current_target = Some(track_id.clone());
+            st.queue.current_target_request_id = Some(7);
+        }
+        let (playback_event_tx, _) = tokio::sync::broadcast::channel(16);
+        *logic.playback_thread_slot.lock().unwrap() =
+            Some(PlaybackThread::for_test(0.0, false, 0.0, playback_event_tx));
+        logic.update();
+
+        logic.toggle_current();
+
+        // Paused keeps the loaded track, so toggle still goes to the
+        // playback thread and nothing new is scheduled.
+        let st = logic.read_state();
+        assert_eq!(st.queue.current_target_request_id, Some(7));
+        assert!(st.started_loading_track.is_none());
+        assert!(st.queue.pending_audio_requests.is_empty());
     }
 
     #[test]
