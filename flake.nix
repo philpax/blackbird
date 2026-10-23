@@ -65,7 +65,7 @@
             # Git dependencies are not covered by the crates.io hashes in the
             # lockfile, so their source hashes are pinned explicitly here.
             outputHashes = {
-              "rodio-0.22.2" = "sha256-8eUYtpNaawlaMMf908si+h9P7E5D9qsYuKW1+QCSwZw=";
+              "rodio-0.22.2" = "sha256-wYOeLrMA+orPDBbhFZRA9BX5pwUfS3XCKG0wyvnRLus=";
               "ratatui-image-11.0.6" = "sha256-0n+L0cEY3v2E7tFTSj4NbHL5EKtBfYuq1BkLa+6b+U0=";
             };
           };
