@@ -455,6 +455,7 @@ mod tests {
     use super::*;
     use crate::ui::layout::tests::test_app;
     use blackbird_core::blackbird_state::TrackId;
+    use std::time::Duration;
 
     /// Computes the transport area the same way the draw path does, then
     /// clicks the cell at `group_offset` within the right-aligned button
@@ -469,9 +470,12 @@ mod tests {
         super::handle_mouse_click(app, main.now_playing, x, y);
     }
 
-    /// Builds a queue and clears the stalled-fetch "server unreachable" flag
-    /// so the transport actions can schedule tracks for real.
+    /// Builds a queue after the initial fetch fails, so its failure cannot
+    /// reject or cancel a transport action's playback request.
     fn queue_with(app: &mut App, tracks: &[&str], index: usize) {
+        app.library_populated_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the initial fetch should report its failure");
         let state = app.logic.get_state();
         let mut st = state.write().unwrap();
         st.server_unreachable = None;
